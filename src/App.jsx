@@ -1,6 +1,4 @@
-
-
-App · JSX
+p · JSX
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock } from "lucide-react";
 import Papa from "papaparse";
