@@ -1,7 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard } from "lucide-react";
-import Papa from "papaparse";
 
+
+App · JSX
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock } from "lucide-react";
+import Papa from "papaparse";
+ 
 // ---- Default course data (Denham GC, Spring Meeting) — fully editable in-app now ----
 const DEFAULT_COURSE = {
   name: "Old Radleian Golfing Society",
@@ -18,39 +21,39 @@ const DEFAULT_COURSE = {
     { id: "Y", label: "Yellow", cr: 70.7, slope: 127 },
   ],
 };
-
+ 
 const DEFAULT_ORG_NAME = "Old Radleian Golfing Society";
 const STORAGE_KEY = "golf-live-scoreboard-v2";
 const LIBRARY_KEY = "golf-course-library-v1";
 const OUT = [1,2,3,4,5,6,7,8,9], IN = [10,11,12,13,14,15,16,17,18];
-
+ 
 function coursePar(course) {
   return course.holes.reduce((sum, h) => sum + Number(h.par || 0), 0);
 }
-
+ 
 function getTee(course, teeId) {
   return course.tees.find((t) => t.id === teeId) || course.tees[0];
 }
-
+ 
 function playingHandicap(course, index, teeId) {
   const t = getTee(course, teeId);
   if (!t) return 0;
   return Math.round(index * (t.slope / 113) + (t.cr - coursePar(course)));
 }
-
+ 
 function strokesOnHole(course, ph, holeIdx) {
   const si = course.holes[holeIdx].si;
   let s = ph >= si ? 1 : 0;
   if (ph > 18) s += (ph - 18) >= si ? 1 : 0;
   return s;
 }
-
+ 
 function holePoints(course, gross, holeIdx, ph) {
   if (gross == null || gross === "") return null;
   const net = Number(gross) - strokesOnHole(course, ph, holeIdx);
   return Math.max(0, 2 - (net - course.holes[holeIdx].par));
 }
-
+ 
 function totals(course, player) {
   const ph = playingHandicap(course, Number(player.index) || 0, player.tee);
   let pts = 0, thru = 0;
@@ -60,11 +63,11 @@ function totals(course, player) {
   });
   return { ph, pts, thru };
 }
-
+ 
 function emptyPlayer(course) {
   return { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.id || "W", scores: Array(18).fill("") };
 }
-
+ 
 // ---- Spreadsheet import via paste (no native file picker in this sandbox) ----
 // Accepts rows copied straight out of Excel / Numbers / Google Sheets, with
 // or without a header row, tab- or comma-separated: Name, Handicap Index, Tee.
@@ -75,7 +78,7 @@ function parsePastedPlayers(text, course) {
   const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
   let rows = parsed.data;
   if (rows.length === 0) return [];
-
+ 
   // If the second column of the first row isn't a plausible handicap number,
   // treat that row as a header and drop it.
   const first = rows[0];
@@ -83,7 +86,7 @@ function parsePastedPlayers(text, course) {
   if (first.length > 1 && secondCell !== "" && isNaN(Number(secondCell))) {
     rows = rows.slice(1);
   }
-
+ 
   return rows
     .map((cols) => {
       const name = (cols[0] || "").trim();
@@ -100,24 +103,28 @@ function parsePastedPlayers(text, course) {
     })
     .filter((p) => p.name);
 }
-
+ 
 function isValidCourse(c) {
   return !!c && Array.isArray(c.holes) && c.holes.length > 0 && Array.isArray(c.tees) && c.tees.length > 0;
 }
-
+ 
+const DEFAULT_PIN = "1234";
+ 
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#D6006D",
   headerColor: "#6E1E42",
+  pin: DEFAULT_PIN,
   course: DEFAULT_COURSE,
   players: [],
 };
-
+ 
 function sanitizeState(parsed) {
   return {
     orgName: typeof parsed.orgName === "string" && parsed.orgName ? parsed.orgName : DEFAULT_ORG_NAME,
     accentColor: typeof parsed.accentColor === "string" && parsed.accentColor ? parsed.accentColor : DEFAULT_STATE.accentColor,
     headerColor: typeof parsed.headerColor === "string" && parsed.headerColor ? parsed.headerColor : DEFAULT_STATE.headerColor,
+    pin: typeof parsed.pin === "string" && parsed.pin ? parsed.pin : DEFAULT_PIN,
     // A prior bug could have saved bad data (course overwritten with the
     // players array). Validate shape before trusting it, so a corrupted
     // save can't keep crashing every future load — it just resets to
@@ -126,7 +133,7 @@ function sanitizeState(parsed) {
     players: Array.isArray(parsed.players) ? parsed.players : [],
   };
 }
-
+ 
 export default function App() {
   const [mode, setMode] = useState("board"); // board | scorer
   // All persisted event state lives in one object now, saved with a single
@@ -134,16 +141,21 @@ export default function App() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, course, players } = state;
+  const { orgName, accentColor, headerColor, pin, course, players } = state;
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [activeId, setActiveId] = useState(null);
   const [showCourseSetup, setShowCourseSetup] = useState(false);
   const [library, setLibrary] = useState([]);
+  // Unlocking Scorer entry is per-browser-tab, not persisted — anyone who
+  // knows the PIN can enter it fresh each time they open the link, which
+  // is the point (keeps casual players from fumbling into edit mode).
+  const [scorerUnlocked, setScorerUnlocked] = useState(false);
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
   const pollRef = useRef(null);
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
-
+ 
   const load = useCallback(async () => {
     try {
       const res = await window.storage.get(STORAGE_KEY, true);
@@ -160,7 +172,7 @@ export default function App() {
       setLoading(false);
     }
   }, []);
-
+ 
   // patch is a partial update — e.g. save({ players: next }) or
   // save({ course: nextCourse }) — merged onto the latest state via the
   // functional setState form, so it's always correct even if several
@@ -174,7 +186,7 @@ export default function App() {
       return next;
     });
   }, []);
-
+ 
   // A named library of course setups, stored separately from the live
   // event data — this is what lets you come back next year, load last
   // year's course, and start a clean sheet of players.
@@ -188,7 +200,7 @@ export default function App() {
       }
     })();
   }, []);
-
+ 
   const saveCourseToLibrary = async (name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -202,13 +214,13 @@ export default function App() {
       // local list still reflects the save even if the write failed
     }
   };
-
+ 
   const loadCourseFromLibrary = (entry) => {
     // Loading a different course means a different meeting — start with
     // a clean player list rather than mixing last year's scores in.
     save({ course: entry.course, players: [] });
   };
-
+ 
   const deleteCourseFromLibrary = async (id) => {
     const next = library.filter((e) => e.id !== id);
     setLibrary(next);
@@ -218,33 +230,33 @@ export default function App() {
       // ignore
     }
   };
-
+ 
   useEffect(() => {
     load();
   }, [load]);
-
+ 
   useEffect(() => {
     if (mode !== "board") return;
     pollRef.current = setInterval(load, 5000);
     return () => clearInterval(pollRef.current);
   }, [mode, load]);
-
+ 
   const addPlayer = () => {
     const next = [...players, emptyPlayer(course)];
     save({ players: next });
     setActiveId(next[next.length - 1].id);
   };
-
+ 
   const importPlayers = (newPlayers) => {
     save({ players: [...players, ...newPlayers] });
   };
-
+ 
   const loadExample = () => save({ players: exampleSeed(course) });
-
+ 
   const updatePlayer = (id, patch) => {
     save({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
   };
-
+ 
   const updateScore = (id, holeIdx, val) => {
     const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
     save({
@@ -255,25 +267,35 @@ export default function App() {
       ),
     });
   };
-
+ 
   const removePlayer = (id) => save({ players: players.filter((p) => p.id !== id) });
-
+ 
   const clearAllPlayers = () => save({ players: [] });
-
+ 
   const updateCourse = (patch) => save({ course: { ...course, ...patch } });
-
+ 
   const updateOrgName = (name) => save({ orgName: name });
-
+ 
   const updateAccentColor = (color) => save({ accentColor: color });
-
+ 
   const updateHeaderColor = (color) => save({ headerColor: color });
-
+ 
+  const updatePin = (newPin) => save({ pin: newPin });
+ 
+  const handleScorerTap = () => {
+    if (scorerUnlocked) {
+      setMode("scorer");
+    } else {
+      setShowPinPrompt(true);
+    }
+  };
+ 
   const ranked = [...players]
     .map((p) => ({ ...p, ...totals(course, p) }))
     .sort((a, b) => b.pts - a.pts || b.thru - a.thru);
-
+ 
   const active = players.find((p) => p.id === activeId);
-
+ 
   return (
     <div style={{ background: "#F1EFE3", minHeight: "100vh", fontFamily: "'Iowan Old Style','Georgia',serif", color: "#1B1B1B" }}>
       <style>{`
@@ -281,7 +303,7 @@ export default function App() {
         .scoreInput::-webkit-outer-spin-button, .scoreInput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .scoreInput { -moz-appearance: textfield; }
       `}</style>
-
+ 
       {/* Header */}
       <div style={{ background: headerColor, color: "#F1EFE3", padding: "18px 16px 22px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -305,7 +327,7 @@ export default function App() {
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2 }}>
           Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}
         </div>
-
+ 
         <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
           <button
             onClick={() => { setMode("board"); setShowCourseSetup(false); }}
@@ -319,7 +341,7 @@ export default function App() {
             Leaderboard
           </button>
           <button
-            onClick={() => setMode("scorer")}
+            onClick={handleScorerTap}
             style={{
               flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "scorer" ? "#F1EFE3" : "transparent",
@@ -331,10 +353,16 @@ export default function App() {
           </button>
         </div>
       </div>
-
+ 
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
       ) : mode === "board" ? (
+        <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
+      ) : !scorerUnlocked ? (
+        // Guard: mode can only reach "scorer" via handleScorerTap, which
+        // requires scorerUnlocked — but if that state is ever false here
+        // (e.g. a stale render), fall back to the board rather than
+        // exposing the scorer screens.
         <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
       ) : showCourseSetup ? (
         <CourseSetup
@@ -344,6 +372,8 @@ export default function App() {
           onUpdateAccentColor={updateAccentColor}
           headerColor={headerColor}
           onUpdateHeaderColor={updateHeaderColor}
+          pin={pin}
+          onUpdatePin={updatePin}
           course={course}
           onUpdate={updateCourse}
           onBack={() => setShowCourseSetup(false)}
@@ -374,15 +404,90 @@ export default function App() {
           onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); }}
+        />
+      )}
+ 
+      {showPinPrompt && (
+        <PinPrompt
+          pin={pin}
+          accentColor={accentColor}
+          headerColor={headerColor}
+          onSuccess={() => {
+            setScorerUnlocked(true);
+            setShowPinPrompt(false);
+            setMode("scorer");
+          }}
+          onCancel={() => setShowPinPrompt(false)}
         />
       )}
     </div>
   );
 }
-
+ 
+function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
+  const [entry, setEntry] = useState("");
+  const [error, setError] = useState(false);
+ 
+  const submit = () => {
+    if (entry === pin) {
+      onSuccess();
+    } else {
+      setError(true);
+      setEntry("");
+    }
+  };
+ 
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(27,27,27,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{ background: "#FFFFFF", borderRadius: 12, padding: 22, width: "100%", maxWidth: 300, textAlign: "center" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>Scorer PIN</div>
+        <div style={{ fontSize: 12, color: "#8A8774", marginBottom: 14 }}>Enter the PIN to enter scores or edit the course.</div>
+        <input
+          autoFocus
+          type="password"
+          inputMode="numeric"
+          value={entry}
+          onChange={(e) => { setEntry(e.target.value); setError(false); }}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          className="mono"
+          style={{
+            width: "100%", fontSize: 20, textAlign: "center", letterSpacing: "0.3em", padding: "10px 0",
+            borderRadius: 8, border: error ? "1px solid #B5442E" : "1px solid #D8D4C0", marginBottom: 6,
+          }}
+        />
+        {error && <div style={{ fontSize: 11.5, color: "#B5442E", marginBottom: 8 }}>Incorrect PIN — try again.</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button
+            onClick={onCancel}
+            style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontWeight: 600, fontSize: 13 }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "none", background: accentColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}
+          >
+            Unlock
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+ 
 function Board({ course, ranked, headerColor, accentColor }) {
   const [openId, setOpenId] = useState(null);
-
+ 
   if (ranked.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
@@ -440,7 +545,7 @@ function Board({ course, ranked, headerColor, accentColor }) {
     </div>
   );
 }
-
+ 
 function HoleByHole({ course, player, headerColor }) {
   const row = (holes, label) => (
     <div style={{ marginBottom: 8 }}>
@@ -480,13 +585,13 @@ function HoleByHole({ course, player, headerColor }) {
     </div>
   );
 }
-
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onImport, onClearAll, headerColor, accentColor }) {
+ 
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onImport, onClearAll, headerColor, accentColor, onLock }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
-
+ 
   const doImport = () => {
     const newPlayers = parsePastedPlayers(pasteText, course);
     if (newPlayers.length === 0) {
@@ -498,22 +603,34 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
     setPasteText("");
     setPasteOpen(false);
   };
-
+ 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
-      <button
-        onClick={onOpenCourseSetup}
-        style={{
-          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
-          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
-          color: headerColor, fontSize: 12.5, fontWeight: 600,
-        }}
-      >
-        <Settings size={14} />
-        <span style={{ flex: 1, textAlign: "left" }}>{course.name} · {course.eventName}</span>
-        <ChevronRight size={15} color="#9B9885" />
-      </button>
-
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button
+          onClick={onOpenCourseSetup}
+          style={{
+            flex: 1, display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+            borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF",
+            color: headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          <Settings size={14} />
+          <span style={{ flex: 1, textAlign: "left" }}>{course.name} · {course.eventName}</span>
+          <ChevronRight size={15} color="#9B9885" />
+        </button>
+        <button
+          onClick={onLock}
+          title="Lock scorer mode"
+          style={{
+            width: 42, display: "flex", alignItems: "center", justifyContent: "center",
+            borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF",
+          }}
+        >
+          <Lock size={15} color="#8A8774" />
+        </button>
+      </div>
+ 
       {ranked.length > 0 && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
           {confirmClear ? (
@@ -632,12 +749,12 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
     </div>
   );
 }
-
+ 
 function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) {
   const { ph, pts } = totals(course, player);
   const inputRefs = useRef({});
   const timers = useRef({});
-
+ 
   // Auto-advance to the next hole once a score looks "finished" — instantly
   // for single-digit scores that can't extend to two digits (2-9), after a
   // brief pause for scores starting "1" (which might become 10-15), and
@@ -645,7 +762,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
   useEffect(() => {
     return () => Object.values(timers.current).forEach(clearTimeout);
   }, []);
-
+ 
   const focusNext = (idx) => {
     const next = inputRefs.current[idx + 1];
     if (next) {
@@ -653,7 +770,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       next.select?.();
     }
   };
-
+ 
   const handleChange = (idx, rawVal) => {
     onScore(idx, rawVal);
     if (timers.current[idx]) clearTimeout(timers.current[idx]);
@@ -662,7 +779,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
     const delay = isAmbiguousOne ? 700 : 150;
     timers.current[idx] = setTimeout(() => focusNext(idx), delay);
   };
-
+ 
   const handleKeyDown = (idx, e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -670,7 +787,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       focusNext(idx);
     }
   };
-
+ 
   const nine = (holes) => (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 10 }}>
       {holes.map((h) => {
@@ -703,13 +820,13 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       })}
     </div>
   );
-
+ 
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← All players
       </button>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <input
           placeholder="Player name"
@@ -741,7 +858,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
           Playing HCP {ph} · {pts} pts so far
         </div>
       </div>
-
+ 
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Out</div>
       {nine(OUT)}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
@@ -749,8 +866,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
     </div>
   );
 }
-
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary }) {
+ 
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary }) {
   const [saveName, setSaveName] = useState(course.name);
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const setHole = (idx, field, val) => {
@@ -758,22 +875,22 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
     onUpdate({ holes });
   };
-
+ 
   const setTee = (id, field, val) => {
     const tees = course.tees.map((t) => (t.id === id ? { ...t, [field]: val } : t));
     onUpdate({ tees });
   };
-
+ 
   const addTee = () => {
     const id = crypto.randomUUID().slice(0, 4);
     onUpdate({ tees: [...course.tees, { id, label: "New tee", cr: 72.0, slope: 125 }] });
   };
-
+ 
   const removeTee = (id) => {
     if (course.tees.length <= 1) return;
     onUpdate({ tees: course.tees.filter((t) => t.id !== id) });
   };
-
+ 
   const holeGrid = (holes, label) => (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>{label}</div>
@@ -803,13 +920,13 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
       </div>
     </div>
   );
-
+ 
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
           Society name <span style={{ textTransform: "none", letterSpacing: 0 }}>(stays fixed however you change the course below)</span>
@@ -845,8 +962,20 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             </span>
           </label>
         </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+            Scorer PIN <span style={{ textTransform: "none", letterSpacing: 0 }}>(required to enter Scorer entry)</span>
+          </div>
+          <input
+            value={pin}
+            onChange={(e) => onUpdatePin(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
+            inputMode="numeric"
+            className="mono"
+            style={{ width: 120, fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", letterSpacing: "0.15em" }}
+          />
+        </div>
       </div>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Course / venue name</div>
         <input
@@ -861,7 +990,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           style={{ width: "100%", fontSize: 14, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
       </div>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Tees
@@ -911,7 +1040,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           <Plus size={13} /> Add tee
         </button>
       </div>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
           <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>
@@ -924,7 +1053,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
         {holeGrid(OUT, "Out")}
         {holeGrid(IN, "In")}
       </div>
-
+ 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Saved courses
@@ -988,3 +1117,4 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
     </div>
   );
 }
+ 
