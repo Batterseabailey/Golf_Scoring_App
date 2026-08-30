@@ -239,6 +239,7 @@ export default function App() {
   const { orgName, accentColor, headerColor, pin, course, players, draw, localRules } = state;
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
+  const [syncError, setSyncError] = useState(false);
   const [activeId, setActiveId] = useState(null);
   const [showCourseSetup, setShowCourseSetup] = useState(false);
   const [showDrawSetup, setShowDrawSetup] = useState(false);
@@ -281,9 +282,9 @@ export default function App() {
     if (!code) return;
     setState((prev) => {
       const next = { ...prev, ...patch };
-      window.storage.set(storageKeyFor(code), JSON.stringify(next), true).catch(() => {
-        // ignore transient failures; local state still reflects the change
-      });
+      window.storage.set(storageKeyFor(code), JSON.stringify(next), true)
+        .then(() => setSyncError(false))
+        .catch(() => setSyncError(true));
       return next;
     });
   }, []);
@@ -484,6 +485,11 @@ export default function App() {
             Switch event
           </button>
         </div>
+        {syncError && (
+          <div style={{ fontSize: 11, color: "#F1EFE3", background: "rgba(181,68,46,0.85)", borderRadius: 6, padding: "4px 8px", marginTop: 8 }}>
+            Last change didn't save — check your connection and try again.
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
           <button
