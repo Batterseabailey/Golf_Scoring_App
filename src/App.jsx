@@ -434,10 +434,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    document.title = eventCode && orgName ? `${orgName} — Live Leaderboard` : "Live Leaderboard";
-  }, [eventCode, orgName]);
-
   const ranked = [...players]
     .map((p) => ({ ...p, ...totals(course, p) }))
     .sort((a, b) => b.pts - a.pts || b.thru - a.thru);
