@@ -1,4 +1,4 @@
-const { getStore } = require("@netlify/blobs");
+const { getStore, connectLambda } = require("@netlify/blobs");
 
 const headers = {
   "Content-Type": "application/json",
@@ -11,6 +11,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers, body: "" };
   }
+
+  // Required for Netlify Blobs to work in this ("Lambda compatibility")
+  // function style — without this, getStore() throws
+  // MissingBlobsEnvironmentError in production even though it can look
+  // fine in local dev, and every read/write silently fails.
+  connectLambda(event);
 
   try {
     const store = getStore("golf-app-data");
