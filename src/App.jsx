@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock } from "lucide-react";
 import Papa from "papaparse";
- 
+
 // ---- Default course data (Denham GC, Spring Meeting) — fully editable in-app now ----
 const DEFAULT_COURSE = {
-  name: "Old Radleian Golfing Society",
+  name: "Your Golf Club",
   eventName: "Spring Meeting",
   holes: [
     { par: 4, si: 17 }, { par: 4, si: 11 }, { par: 4, si: 3 }, { par: 4, si: 9 },
@@ -18,39 +18,55 @@ const DEFAULT_COURSE = {
     { id: "Y", label: "Yellow", cr: 70.7, slope: 127 },
   ],
 };
- 
-const DEFAULT_ORG_NAME = "Old Radleian Golfing Society";
-const STORAGE_KEY = "golf-live-scoreboard-v2";
+
+const DEFAULT_ORG_NAME = "Your Golf Society";
+const STORAGE_PREFIX = "golf-live-scoreboard-v2";
+
+function sanitizeCode(raw) {
+  return (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+}
+
+function storageKeyFor(code) {
+  return `${STORAGE_PREFIX}-${code}`;
+}
+
+function codeFromUrl() {
+  try {
+    return sanitizeCode(new URLSearchParams(window.location.search).get("code"));
+  } catch {
+    return "";
+  }
+}
 const LIBRARY_KEY = "golf-course-library-v1";
 const OUT = [1,2,3,4,5,6,7,8,9], IN = [10,11,12,13,14,15,16,17,18];
- 
+
 function coursePar(course) {
   return course.holes.reduce((sum, h) => sum + Number(h.par || 0), 0);
 }
- 
+
 function getTee(course, teeId) {
   return course.tees.find((t) => t.id === teeId) || course.tees[0];
 }
- 
+
 function playingHandicap(course, index, teeId) {
   const t = getTee(course, teeId);
   if (!t) return 0;
   return Math.round(index * (t.slope / 113) + (t.cr - coursePar(course)));
 }
- 
+
 function strokesOnHole(course, ph, holeIdx) {
   const si = course.holes[holeIdx].si;
   let s = ph >= si ? 1 : 0;
   if (ph > 18) s += (ph - 18) >= si ? 1 : 0;
   return s;
 }
- 
+
 function holePoints(course, gross, holeIdx, ph) {
   if (gross == null || gross === "") return null;
   const net = Number(gross) - strokesOnHole(course, ph, holeIdx);
   return Math.max(0, 2 - (net - course.holes[holeIdx].par));
 }
- 
+
 function totals(course, player) {
   const ph = playingHandicap(course, Number(player.index) || 0, player.tee);
   let pts = 0, thru = 0;
@@ -60,11 +76,11 @@ function totals(course, player) {
   });
   return { ph, pts, thru };
 }
- 
+
 function emptyPlayer(course) {
   return { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.id || "W", scores: Array(18).fill("") };
 }
- 
+
 // ---- Spreadsheet import via paste (no native file picker in this sandbox) ----
 // Accepts rows copied straight out of Excel / Numbers / Google Sheets, with
 // or without a header row, tab- or comma-separated: Name, Handicap Index, Tee.
@@ -75,7 +91,7 @@ function parsePastedPlayers(text, course) {
   const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
   let rows = parsed.data;
   if (rows.length === 0) return [];
- 
+
   // If the second column of the first row isn't a plausible handicap number,
   // treat that row as a header and drop it.
   const first = rows[0];
@@ -83,7 +99,7 @@ function parsePastedPlayers(text, course) {
   if (first.length > 1 && secondCell !== "" && isNaN(Number(secondCell))) {
     rows = rows.slice(1);
   }
- 
+
   return rows
     .map((cols) => {
       const name = (cols[0] || "").trim();
@@ -100,22 +116,24 @@ function parsePastedPlayers(text, course) {
     })
     .filter((p) => p.name);
 }
- 
+
 function isValidCourse(c) {
   return !!c && Array.isArray(c.holes) && c.holes.length > 0 && Array.isArray(c.tees) && c.tees.length > 0;
 }
- 
+
 const DEFAULT_PIN = "1234";
- 
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
-  accentColor: "#D6006D",
-  headerColor: "#6E1E42",
+  accentColor: "#3B6D8C",
+  headerColor: "#1F2A37",
   pin: DEFAULT_PIN,
   course: DEFAULT_COURSE,
   players: [],
+  draw: [],
+  localRules: "",
 };
- 
+
 function sanitizeState(parsed) {
   return {
     orgName: typeof parsed.orgName === "string" && parsed.orgName ? parsed.orgName : DEFAULT_ORG_NAME,
@@ -128,21 +146,103 @@ function sanitizeState(parsed) {
     // the default course instead, and self-heals on the next real save.
     course: isValidCourse(parsed.course) ? parsed.course : DEFAULT_COURSE,
     players: Array.isArray(parsed.players) ? parsed.players : [],
+    draw: Array.isArray(parsed.draw) ? parsed.draw : [],
+    localRules: typeof parsed.localRules === "string" ? parsed.localRules : "",
   };
 }
- 
+
+// ---- Draw import via paste: Time, then one or more player-name columns ----
+function parsePastedDraw(text) {
+  const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
+  let rows = parsed.data;
+  if (rows.length === 0) return [];
+
+  // If the first row's time column has no digits at all, it's a header
+  // row (e.g. "Time, Group") rather than an actual tee time — drop it.
+  if (!/\d/.test(rows[0][0] || "")) {
+    rows = rows.slice(1);
+  }
+
+  return rows
+    .map((cols) => {
+      const time = (cols[0] || "").trim();
+      const group = cols.slice(1).map((c) => (c || "").trim()).filter(Boolean).join(", ");
+      return { id: crypto.randomUUID(), time, group };
+    })
+    .filter((r) => r.time || r.group);
+}
+
+function CodeGate({ onSubmit }) {
+  const [value, setValue] = useState("");
+
+  const submit = () => {
+    if (value.trim()) onSubmit(value);
+  };
+
+  return (
+    <div
+      style={{
+        background: "#F1EFE3", minHeight: "100vh", fontFamily: "'Iowan Old Style','Georgia',serif",
+        color: "#1B1B1B", display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      }}
+    >
+      <style>{`.mono { font-family: 'Courier New', ui-monospace, monospace; }`}</style>
+      <div style={{ width: "100%", maxWidth: 320, textAlign: "center" }}>
+        <Flag size={26} color="#8A8774" style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 4 }}>Live Leaderboard</div>
+        <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 18 }}>
+          Enter the event code your scorer gave you.
+        </div>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value.toUpperCase())}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="e.g. LGS2026"
+          className="mono"
+          style={{
+            width: "100%", fontSize: 20, textAlign: "center", letterSpacing: "0.15em", padding: "12px 0",
+            borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, textTransform: "uppercase",
+            background: "#FFFFFF",
+          }}
+        />
+        <button
+          onClick={submit}
+          style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: "#1B2A4A", color: "#FFFFFF", fontWeight: 600, fontSize: 14 }}
+        >
+          Continue
+        </button>
+        <div style={{ fontSize: 11, color: "#9B9885", marginTop: 16 }}>
+          Setting up a new meeting? Just type a new code to start it —
+          your scorer PIN protects it from there.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [mode, setMode] = useState("board"); // board | scorer
+  // The event code is what actually separates one club/meeting's data from
+  // another — everyone who knows the same code shares the same live board;
+  // nobody else can see or reach it. It seeds from a ?code= URL param so a
+  // link can be pre-filled, but players can also just type it in.
+  const [eventCode, setEventCode] = useState(codeFromUrl);
+  const eventCodeRef = useRef(eventCode);
+  useEffect(() => { eventCodeRef.current = eventCode; }, [eventCode]);
+
+  const [mode, setMode] = useState("board"); // board | draw | scorer
   // All persisted event state lives in one object now, saved with a single
   // functional update (setState(prev => ({...prev, ...patch}))) — this
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, course, players } = state;
+  const { orgName, accentColor, headerColor, pin, course, players, draw, localRules } = state;
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [activeId, setActiveId] = useState(null);
   const [showCourseSetup, setShowCourseSetup] = useState(false);
+  const [showDrawSetup, setShowDrawSetup] = useState(false);
+  const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
   const [library, setLibrary] = useState([]);
   // Unlocking Scorer entry is per-browser-tab, not persisted — anyone who
   // knows the PIN can enter it fresh each time they open the link, which
@@ -152,10 +252,12 @@ export default function App() {
   const pollRef = useRef(null);
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
- 
+
   const load = useCallback(async () => {
+    const code = eventCodeRef.current;
+    if (!code) return;
     try {
-      const res = await window.storage.get(STORAGE_KEY, true);
+      const res = await window.storage.get(storageKeyFor(code), true);
       if (modeRef.current !== "board") return;
       setState(res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE);
       setLive(true);
@@ -169,21 +271,60 @@ export default function App() {
       setLoading(false);
     }
   }, []);
- 
+
   // patch is a partial update — e.g. save({ players: next }) or
   // save({ course: nextCourse }) — merged onto the latest state via the
   // functional setState form, so it's always correct even if several
   // saves fire close together.
   const save = useCallback((patch) => {
+    const code = eventCodeRef.current;
+    if (!code) return;
     setState((prev) => {
       const next = { ...prev, ...patch };
-      window.storage.set(STORAGE_KEY, JSON.stringify(next), true).catch(() => {
+      window.storage.set(storageKeyFor(code), JSON.stringify(next), true).catch(() => {
         // ignore transient failures; local state still reflects the change
       });
       return next;
     });
   }, []);
- 
+
+  // Switching event code means switching to a completely different data
+  // set — reset everything local before the new code's load() runs, so
+  // there's no flash of the previous event's players/course.
+  useEffect(() => {
+    if (!eventCode) return;
+    setLoading(true);
+    setState(DEFAULT_STATE);
+    setActiveId(null);
+    setShowCourseSetup(false);
+    setScorerUnlocked(false);
+    setMode("board");
+  }, [eventCode]);
+
+  const enterEventCode = (raw) => {
+    const code = sanitizeCode(raw);
+    if (!code) return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("code", code);
+      window.history.replaceState(null, "", url);
+    } catch {
+      // ignore — URL update is a nicety, not required for the app to work
+    }
+    setEventCode(code);
+  };
+
+  const switchEvent = () => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("code");
+      window.history.replaceState(null, "", url);
+    } catch {
+      // ignore
+    }
+    setEventCode("");
+  };
+
   // A named library of course setups, stored separately from the live
   // event data — this is what lets you come back next year, load last
   // year's course, and start a clean sheet of players.
@@ -197,7 +338,7 @@ export default function App() {
       }
     })();
   }, []);
- 
+
   const saveCourseToLibrary = async (name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -211,13 +352,13 @@ export default function App() {
       // local list still reflects the save even if the write failed
     }
   };
- 
+
   const loadCourseFromLibrary = (entry) => {
     // Loading a different course means a different meeting — start with
     // a clean player list rather than mixing last year's scores in.
     save({ course: entry.course, players: [] });
   };
- 
+
   const deleteCourseFromLibrary = async (id) => {
     const next = library.filter((e) => e.id !== id);
     setLibrary(next);
@@ -227,33 +368,34 @@ export default function App() {
       // ignore
     }
   };
- 
+
   useEffect(() => {
+    if (!eventCode) return;
     load();
-  }, [load]);
- 
+  }, [eventCode, load]);
+
   useEffect(() => {
     if (mode !== "board") return;
     pollRef.current = setInterval(load, 5000);
     return () => clearInterval(pollRef.current);
   }, [mode, load]);
- 
+
   const addPlayer = () => {
     const next = [...players, emptyPlayer(course)];
     save({ players: next });
     setActiveId(next[next.length - 1].id);
   };
- 
+
   const importPlayers = (newPlayers) => {
     save({ players: [...players, ...newPlayers] });
   };
- 
+
   const loadExample = () => save({ players: exampleSeed(course) });
- 
+
   const updatePlayer = (id, patch) => {
     save({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
   };
- 
+
   const updateScore = (id, holeIdx, val) => {
     const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
     save({
@@ -264,21 +406,25 @@ export default function App() {
       ),
     });
   };
- 
+
   const removePlayer = (id) => save({ players: players.filter((p) => p.id !== id) });
- 
+
   const clearAllPlayers = () => save({ players: [] });
- 
+
   const updateCourse = (patch) => save({ course: { ...course, ...patch } });
- 
+
   const updateOrgName = (name) => save({ orgName: name });
- 
+
   const updateAccentColor = (color) => save({ accentColor: color });
- 
+
   const updateHeaderColor = (color) => save({ headerColor: color });
- 
+
   const updatePin = (newPin) => save({ pin: newPin });
- 
+
+  const updateDraw = (newDraw) => save({ draw: newDraw });
+
+  const updateLocalRules = (text) => save({ localRules: text });
+
   const handleScorerTap = () => {
     if (scorerUnlocked) {
       setMode("scorer");
@@ -286,13 +432,21 @@ export default function App() {
       setShowPinPrompt(true);
     }
   };
- 
+
+  useEffect(() => {
+    document.title = eventCode && orgName ? `${orgName} — Live Leaderboard` : "Live Leaderboard";
+  }, [eventCode, orgName]);
+
   const ranked = [...players]
     .map((p) => ({ ...p, ...totals(course, p) }))
     .sort((a, b) => b.pts - a.pts || b.thru - a.thru);
- 
+
   const active = players.find((p) => p.id === activeId);
- 
+
+  if (!eventCode) {
+    return <CodeGate onSubmit={enterEventCode} />;
+  }
+
   return (
     <div style={{ background: "#F1EFE3", minHeight: "100vh", fontFamily: "'Iowan Old Style','Georgia',serif", color: "#1B1B1B" }}>
       <style>{`
@@ -300,7 +454,7 @@ export default function App() {
         .scoreInput::-webkit-outer-spin-button, .scoreInput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .scoreInput { -moz-appearance: textfield; }
       `}</style>
- 
+
       {/* Header */}
       <div style={{ background: headerColor, color: "#F1EFE3", padding: "18px 16px 22px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -321,10 +475,16 @@ export default function App() {
         <div style={{ fontSize: 13, opacity: 0.85, marginTop: 1 }}>
           {course.name}
         </div>
-        <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2 }}>
-          Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}
+        <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span>Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}</span>
+          <button
+            onClick={switchEvent}
+            style={{ background: "none", border: "none", color: "#F1EFE3", opacity: 0.7, fontSize: 11, textDecoration: "underline", padding: 0 }}
+          >
+            Switch event
+          </button>
         </div>
- 
+
         <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
           <button
             onClick={() => { setMode("board"); setShowCourseSetup(false); }}
@@ -332,10 +492,32 @@ export default function App() {
               flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "board" ? "#F1EFE3" : "transparent",
               color: mode === "board" ? headerColor : "#F1EFE3",
-              fontSize: 12.5, fontWeight: 600, letterSpacing: "0.03em",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
             }}
           >
             Leaderboard
+          </button>
+          <button
+            onClick={() => { setMode("draw"); setShowCourseSetup(false); }}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "draw" ? "#F1EFE3" : "transparent",
+              color: mode === "draw" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Draw
+          </button>
+          <button
+            onClick={() => { setMode("rules"); setShowCourseSetup(false); }}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "rules" ? "#F1EFE3" : "transparent",
+              color: mode === "rules" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Local rules
           </button>
           <button
             onClick={handleScorerTap}
@@ -343,24 +525,45 @@ export default function App() {
               flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "scorer" ? "#F1EFE3" : "transparent",
               color: mode === "scorer" ? headerColor : "#F1EFE3",
-              fontSize: 12.5, fontWeight: 600, letterSpacing: "0.03em",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
             }}
           >
             Scorer entry
           </button>
         </div>
       </div>
- 
+
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
       ) : mode === "board" ? (
         <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "draw" ? (
+        // Public, like the leaderboard — no PIN needed just to see the draw.
+        <DrawView draw={draw} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "rules" ? (
+        // Public too — anyone can read the local rules without a PIN.
+        <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
       ) : !scorerUnlocked ? (
         // Guard: mode can only reach "scorer" via handleScorerTap, which
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
         <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
+      ) : showDrawSetup ? (
+        <DrawSetup
+          draw={draw}
+          onUpdate={updateDraw}
+          onBack={() => setShowDrawSetup(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
+      ) : showLocalRulesSetup ? (
+        <LocalRulesSetup
+          text={localRules}
+          onUpdate={updateLocalRules}
+          onBack={() => setShowLocalRulesSetup(false)}
+          headerColor={headerColor}
+        />
       ) : showCourseSetup ? (
         <CourseSetup
           orgName={orgName}
@@ -397,14 +600,16 @@ export default function App() {
           onRemove={removePlayer}
           onLoadExample={loadExample}
           onOpenCourseSetup={() => setShowCourseSetup(true)}
+          onOpenDrawSetup={() => setShowDrawSetup(true)}
+          onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onImport={importPlayers}
           onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); }}
         />
       )}
- 
+
       {showPinPrompt && (
         <PinPrompt
           pin={pin}
@@ -421,11 +626,11 @@ export default function App() {
     </div>
   );
 }
- 
+
 function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
   const [entry, setEntry] = useState("");
   const [error, setError] = useState(false);
- 
+
   const submit = () => {
     if (entry === pin) {
       onSuccess();
@@ -434,7 +639,7 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
       setEntry("");
     }
   };
- 
+
   return (
     <div
       style={{
@@ -481,10 +686,10 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
     </div>
   );
 }
- 
+
 function Board({ course, ranked, headerColor, accentColor }) {
   const [openId, setOpenId] = useState(null);
- 
+
   if (ranked.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
@@ -542,7 +747,7 @@ function Board({ course, ranked, headerColor, accentColor }) {
     </div>
   );
 }
- 
+
 function HoleByHole({ course, player, headerColor }) {
   const row = (holes, label) => (
     <div style={{ marginBottom: 8 }}>
@@ -582,13 +787,174 @@ function HoleByHole({ course, player, headerColor }) {
     </div>
   );
 }
- 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onImport, onClearAll, headerColor, accentColor, onLock }) {
+
+function DrawView({ draw, headerColor, accentColor }) {
+  if (draw.length === 0) {
+    return (
+      <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
+        <Clipboard size={28} color={accentColor} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15 }}>The draw hasn't been posted yet.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added tee times.</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      {draw.map((entry) => (
+        <div
+          key={entry.id}
+          style={{
+            display: "flex", gap: 12, background: "#FFFFFF", borderRadius: 10,
+            padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
+          }}
+        >
+          <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 14, minWidth: 66 }}>
+            {entry.time}
+          </div>
+          <div style={{ fontSize: 14, flex: 1 }}>{entry.group}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DrawSetup({ draw, onUpdate, onBack, headerColor, accentColor }) {
+  const [pasteText, setPasteText] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const doImport = () => {
+    const parsed = parsePastedDraw(pasteText);
+    if (parsed.length === 0) {
+      setMsg("No rows found — make sure each line starts with a time.");
+      return;
+    }
+    onUpdate(parsed);
+    setMsg(`Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}.`);
+    setPasteText("");
+  };
+
+  const removeEntry = (id) => onUpdate(draw.filter((e) => e.id !== id));
+  const clearAll = () => { onUpdate([]); setMsg(""); };
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+          One tee time per line: Time, then each player in their own column (copy straight from your
+          spreadsheet). Pasting replaces the whole draw below.
+        </div>
+        <textarea
+          value={pasteText}
+          onChange={(e) => setPasteText(e.target.value)}
+          placeholder={"9:00\tSmith\tJones\tBrown\tWhite\n9:10\tOkonkwo\tPetrov"}
+          rows={6}
+          className="mono"
+          style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit" }}
+        />
+        <button
+          onClick={doImport}
+          style={{ width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}
+        >
+          Set draw
+        </button>
+        {msg && <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginTop: 8 }}>{msg}</div>}
+      </div>
+
+      {draw.length > 0 && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>Current draw</div>
+            <button onClick={clearAll} style={{ fontSize: 11, color: "#B5442E", background: "none", border: "none" }}>Clear all</button>
+          </div>
+          {draw.map((entry) => (
+            <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+              <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56 }}>{entry.time}</div>
+              <div style={{ flex: 1, fontSize: 12.5 }}>{entry.group}</div>
+              <button onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LocalRulesView({ text, headerColor, accentColor }) {
+  if (!text.trim()) {
+    return (
+      <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
+        <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15 }}>No local rules posted yet.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added them.</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "14px 16px 40px" }}>
+      <div
+        style={{
+          background: "#FFFFFF", borderRadius: 10, padding: "16px 18px", border: "1px solid #E4E0D0",
+          fontSize: 14, lineHeight: 1.6, color: "#1B1B1B", whiteSpace: "pre-wrap",
+        }}
+      >
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
+  const [draft, setDraft] = useState(text);
+  const [saved, setSaved] = useState(false);
+
+  const save = () => {
+    onUpdate(draft);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Local rules</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+          Type or paste anything players should know — out of bounds, temporary greens, dress code, whatever's relevant today.
+        </div>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={"e.g. Preferred lies on all fairways. OOB left of the 4th. Please replace all divots."}
+          rows={10}
+          style={{ width: "100%", fontSize: 13.5, padding: 10, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+        />
+        <button
+          onClick={save}
+          style={{ width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}
+        >
+          {saved ? "Saved" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onImport, onClearAll, headerColor, accentColor, onLock }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
- 
+
   const doImport = () => {
     const newPlayers = parsePastedPlayers(pasteText, course);
     if (newPlayers.length === 0) {
@@ -600,7 +966,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
     setPasteText("");
     setPasteOpen(false);
   };
- 
+
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -627,7 +993,33 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           <Lock size={15} color="#8A8774" />
         </button>
       </div>
- 
+
+      <button
+        onClick={onOpenDrawSetup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Clipboard size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Draw / tee times</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenLocalRulesSetup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Flag size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Local rules</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
       {ranked.length > 0 && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
           {confirmClear ? (
@@ -746,12 +1138,12 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
     </div>
   );
 }
- 
+
 function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) {
   const { ph, pts } = totals(course, player);
   const inputRefs = useRef({});
   const timers = useRef({});
- 
+
   // Auto-advance to the next hole once a score looks "finished" — instantly
   // for single-digit scores that can't extend to two digits (2-9), after a
   // brief pause for scores starting "1" (which might become 10-15), and
@@ -759,7 +1151,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
   useEffect(() => {
     return () => Object.values(timers.current).forEach(clearTimeout);
   }, []);
- 
+
   const focusNext = (idx) => {
     const next = inputRefs.current[idx + 1];
     if (next) {
@@ -767,7 +1159,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       next.select?.();
     }
   };
- 
+
   const handleChange = (idx, rawVal) => {
     onScore(idx, rawVal);
     if (timers.current[idx]) clearTimeout(timers.current[idx]);
@@ -776,7 +1168,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
     const delay = isAmbiguousOne ? 700 : 150;
     timers.current[idx] = setTimeout(() => focusNext(idx), delay);
   };
- 
+
   const handleKeyDown = (idx, e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -784,7 +1176,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       focusNext(idx);
     }
   };
- 
+
   const nine = (holes) => (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 10 }}>
       {holes.map((h) => {
@@ -817,13 +1209,13 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       })}
     </div>
   );
- 
+
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← All players
       </button>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <input
           placeholder="Player name"
@@ -855,7 +1247,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
           Playing HCP {ph} · {pts} pts so far
         </div>
       </div>
- 
+
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Out</div>
       {nine(OUT)}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
@@ -863,7 +1255,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
     </div>
   );
 }
- 
+
 function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary }) {
   const [saveName, setSaveName] = useState(course.name);
   const [confirmLoadId, setConfirmLoadId] = useState(null);
@@ -872,22 +1264,22 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
     onUpdate({ holes });
   };
- 
+
   const setTee = (id, field, val) => {
     const tees = course.tees.map((t) => (t.id === id ? { ...t, [field]: val } : t));
     onUpdate({ tees });
   };
- 
+
   const addTee = () => {
     const id = crypto.randomUUID().slice(0, 4);
     onUpdate({ tees: [...course.tees, { id, label: "New tee", cr: 72.0, slope: 125 }] });
   };
- 
+
   const removeTee = (id) => {
     if (course.tees.length <= 1) return;
     onUpdate({ tees: course.tees.filter((t) => t.id !== id) });
   };
- 
+
   const holeGrid = (holes, label) => (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>{label}</div>
@@ -917,13 +1309,13 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
       </div>
     </div>
   );
- 
+
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
           Society name <span style={{ textTransform: "none", letterSpacing: 0 }}>(stays fixed however you change the course below)</span>
@@ -972,7 +1364,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           />
         </div>
       </div>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Course / venue name</div>
         <input
@@ -987,7 +1379,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           style={{ width: "100%", fontSize: 14, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
       </div>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Tees
@@ -1037,7 +1429,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           <Plus size={13} /> Add tee
         </button>
       </div>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
           <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>
@@ -1050,7 +1442,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
         {holeGrid(OUT, "Out")}
         {holeGrid(IN, "In")}
       </div>
- 
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Saved courses
@@ -1114,4 +1506,3 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
     </div>
   );
 }
- 
