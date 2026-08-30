@@ -474,12 +474,14 @@ export default function App() {
         </div>
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span>Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}</span>
-          <button
-            onClick={switchEvent}
-            style={{ background: "none", border: "none", color: "#F1EFE3", opacity: 0.7, fontSize: 11, textDecoration: "underline", padding: 0 }}
-          >
-            Switch event
-          </button>
+          {scorerUnlocked && (
+            <button
+              onClick={switchEvent}
+              style={{ background: "none", border: "none", color: "#F1EFE3", opacity: 0.7, fontSize: 11, textDecoration: "underline", padding: 0 }}
+            >
+              Switch event
+            </button>
+          )}
         </div>
         {syncError && (
           <div style={{ fontSize: 11, color: "#F1EFE3", background: "rgba(181,68,46,0.85)", borderRadius: 6, padding: "4px 8px", marginTop: 8 }}>
