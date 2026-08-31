@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock } from "lucide-react";
+import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock, FileText, Upload } from "lucide-react";
 import Papa from "papaparse";
 
 // ---- Default course data (Denham GC, Spring Meeting) — fully editable in-app now ----
@@ -28,6 +28,28 @@ function sanitizeCode(raw) {
 
 function storageKeyFor(code) {
   return `${STORAGE_PREFIX}-${code}`;
+}
+
+// PDFs are stored individually under their own key (base64 data URL as the
+// value) rather than embedded in the main event blob — keeps the main
+// event load fast even with several documents, since each PDF is only
+// fetched when a player actually taps to open it.
+function docStorageKey(code, docId) {
+  return `${STORAGE_PREFIX}-${code}-doc-${docId}`;
+}
+
+const MAX_DOC_SIZE_MB = 4;
+
+// Data URLs can hit browser navigation restrictions; converting to an
+// object/blob URL first is the reliable way to actually open a PDF.
+function dataUrlToBlobUrl(dataUrl) {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = /data:(.*?);base64/.exec(header);
+  const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
 
 function codeFromUrl() {
@@ -123,32 +145,103 @@ function isValidCourse(c) {
 
 const DEFAULT_PIN = "1234";
 
+const MAX_ROUNDS = 3;
+
+function emptyRound(label, course) {
+  return {
+    id: crypto.randomUUID(),
+    label,
+    course: course || DEFAULT_COURSE,
+    players: [],
+    draw: [],
+    localRules: "",
+    startingHole: "1st",
+  };
+}
+
+function sanitizeRound(r, fallbackLabel) {
+  return {
+    id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
+    label: typeof r.label === "string" && r.label ? r.label : fallbackLabel,
+    course: isValidCourse(r.course) ? r.course : DEFAULT_COURSE,
+    players: Array.isArray(r.players) ? r.players : [],
+    draw: Array.isArray(r.draw) ? r.draw : [],
+    localRules: typeof r.localRules === "string" ? r.localRules : "",
+    startingHole: typeof r.startingHole === "string" && r.startingHole ? r.startingHole : "1st",
+  };
+}
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
   headerColor: "#1F2A37",
   pin: DEFAULT_PIN,
-  course: DEFAULT_COURSE,
-  players: [],
-  draw: [],
-  localRules: "",
+  rounds: [emptyRound("Day 1")],
+  activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
+  documents: [], // event-wide, not tied to any particular day
 };
 
 function sanitizeState(parsed) {
+  let rounds;
+  if (Array.isArray(parsed.rounds) && parsed.rounds.length > 0) {
+    rounds = parsed.rounds.slice(0, MAX_ROUNDS).map((r, i) => sanitizeRound(r, `Day ${i + 1}`));
+  } else if (isValidCourse(parsed.course) || Array.isArray(parsed.players)) {
+    // Migrating data saved before multi-round support existed — wrap the
+    // old flat course/players/draw/localRules/startingHole into a single
+    // "Day 1" round so nothing already live loses any data.
+    rounds = [
+      sanitizeRound(
+        {
+          course: parsed.course,
+          players: parsed.players,
+          draw: parsed.draw,
+          localRules: parsed.localRules,
+          startingHole: parsed.startingHole,
+        },
+        "Day 1"
+      ),
+    ];
+  } else {
+    rounds = [emptyRound("Day 1")];
+  }
+
+  const activeRoundId = rounds.some((r) => r.id === parsed.activeRoundId) ? parsed.activeRoundId : rounds[0].id;
+
   return {
     orgName: typeof parsed.orgName === "string" && parsed.orgName ? parsed.orgName : DEFAULT_ORG_NAME,
     accentColor: typeof parsed.accentColor === "string" && parsed.accentColor ? parsed.accentColor : DEFAULT_STATE.accentColor,
     headerColor: typeof parsed.headerColor === "string" && parsed.headerColor ? parsed.headerColor : DEFAULT_STATE.headerColor,
     pin: typeof parsed.pin === "string" && parsed.pin ? parsed.pin : DEFAULT_PIN,
-    // A prior bug could have saved bad data (course overwritten with the
-    // players array). Validate shape before trusting it, so a corrupted
-    // save can't keep crashing every future load — it just resets to
-    // the default course instead, and self-heals on the next real save.
-    course: isValidCourse(parsed.course) ? parsed.course : DEFAULT_COURSE,
-    players: Array.isArray(parsed.players) ? parsed.players : [],
-    draw: Array.isArray(parsed.draw) ? parsed.draw : [],
-    localRules: typeof parsed.localRules === "string" ? parsed.localRules : "",
+    rounds,
+    activeRoundId,
+    documents: Array.isArray(parsed.documents) ? parsed.documents : [],
   };
+}
+
+// ---- Combined standings across every round, matched by player name ----
+function combinedStandings(rounds) {
+  const byName = new Map();
+  rounds.forEach((round) => {
+    round.players.forEach((p) => {
+      const name = (p.name || "").trim();
+      if (!name) return;
+      const t = totals(round.course, p);
+      if (!byName.has(name)) byName.set(name, { name, perRound: {} });
+      byName.get(name).perRound[round.id] = t;
+    });
+  });
+  return [...byName.values()].map((row) => {
+    let total = 0;
+    let anyPlayed = false;
+    rounds.forEach((round) => {
+      const t = row.perRound[round.id];
+      if (t && t.thru > 0) {
+        total += t.pts;
+        anyPlayed = true;
+      }
+    });
+    return { ...row, total, anyPlayed };
+  }).sort((a, b) => b.total - a.total);
 }
 
 // ---- Draw import via paste: Time, then one or more player-name columns ----
@@ -166,10 +259,10 @@ function parsePastedDraw(text) {
   return rows
     .map((cols) => {
       const time = (cols[0] || "").trim();
-      const group = cols.slice(1).map((c) => (c || "").trim()).filter(Boolean).join(", ");
-      return { id: crypto.randomUUID(), time, group };
+      const players = cols.slice(1).map((c) => (c || "").trim()).filter(Boolean);
+      return { id: crypto.randomUUID(), time, players };
     })
-    .filter((r) => r.time || r.group);
+    .filter((r) => r.time || r.players.length > 0);
 }
 
 function CodeGate({ onSubmit }) {
@@ -236,7 +329,9 @@ export default function App() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, course, players, draw, localRules } = state;
+  const { orgName, accentColor, headerColor, pin, rounds, activeRoundId, documents } = state;
+  const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
+  const { course, players, draw, localRules, startingHole } = activeRound;
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [syncError, setSyncError] = useState(false);
@@ -244,6 +339,7 @@ export default function App() {
   const [showCourseSetup, setShowCourseSetup] = useState(false);
   const [showDrawSetup, setShowDrawSetup] = useState(false);
   const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
+  const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [library, setLibrary] = useState([]);
   // Unlocking Scorer entry is per-browser-tab, not persisted — anyone who
   // knows the PIN can enter it fresh each time they open the link, which
@@ -357,7 +453,7 @@ export default function App() {
   const loadCourseFromLibrary = (entry) => {
     // Loading a different course means a different meeting — start with
     // a clean player list rather than mixing last year's scores in.
-    save({ course: entry.course, players: [] });
+    updateRound({ course: entry.course, players: [] });
   };
 
   const deleteCourseFromLibrary = async (id) => {
@@ -381,25 +477,32 @@ export default function App() {
     return () => clearInterval(pollRef.current);
   }, [mode, load]);
 
+  // Every field that used to live at the top level (course, players, draw,
+  // localRules, startingHole) now belongs to a specific round — this merges
+  // a patch onto the currently active round and leaves the others untouched.
+  const updateRound = (patch) => {
+    save({ rounds: rounds.map((r) => (r.id === activeRoundId ? { ...r, ...patch } : r)) });
+  };
+
   const addPlayer = () => {
     const next = [...players, emptyPlayer(course)];
-    save({ players: next });
+    updateRound({ players: next });
     setActiveId(next[next.length - 1].id);
   };
 
   const importPlayers = (newPlayers) => {
-    save({ players: [...players, ...newPlayers] });
+    updateRound({ players: [...players, ...newPlayers] });
   };
 
-  const loadExample = () => save({ players: exampleSeed(course) });
+  const loadExample = () => updateRound({ players: exampleSeed(course) });
 
   const updatePlayer = (id, patch) => {
-    save({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
+    updateRound({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
   };
 
   const updateScore = (id, holeIdx, val) => {
     const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
-    save({
+    updateRound({
       players: players.map((p) =>
         p.id === id
           ? { ...p, scores: p.scores.map((s, i) => (i === holeIdx ? clean : s)) }
@@ -408,11 +511,24 @@ export default function App() {
     });
   };
 
-  const removePlayer = (id) => save({ players: players.filter((p) => p.id !== id) });
+  const removePlayer = (id) => updateRound({ players: players.filter((p) => p.id !== id) });
 
-  const clearAllPlayers = () => save({ players: [] });
+  const clearAllPlayers = () => updateRound({ players: [] });
 
-  const updateCourse = (patch) => save({ course: { ...course, ...patch } });
+  const copyPlayersFromRound = (sourceRoundId) => {
+    const source = rounds.find((r) => r.id === sourceRoundId);
+    if (!source) return;
+    const copied = source.players.map((p) => ({
+      id: crypto.randomUUID(),
+      name: p.name,
+      index: p.index,
+      tee: course.tees.some((t) => t.id === p.tee) ? p.tee : course.tees[0]?.id || "",
+      scores: Array(18).fill(""),
+    }));
+    updateRound({ players: copied });
+  };
+
+  const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
   const updateOrgName = (name) => save({ orgName: name });
 
@@ -422,9 +538,83 @@ export default function App() {
 
   const updatePin = (newPin) => save({ pin: newPin });
 
-  const updateDraw = (newDraw) => save({ draw: newDraw });
+  const updateDraw = (newDraw) => updateRound({ draw: newDraw });
 
-  const updateLocalRules = (text) => save({ localRules: text });
+  const updateLocalRules = (text) => updateRound({ localRules: text });
+
+  const updateStartingHole = (hole) => updateRound({ startingHole: hole });
+
+  const uploadDocument = async (file) => {
+    const code = eventCodeRef.current;
+    if (!code || !file) return { ok: false, error: "No event code." };
+    if (file.size > MAX_DOC_SIZE_MB * 1024 * 1024) {
+      return { ok: false, error: `That file is too large — please keep PDFs under ${MAX_DOC_SIZE_MB}MB.` };
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Couldn't read that file."));
+      reader.readAsDataURL(file);
+    });
+    const docId = crypto.randomUUID();
+    try {
+      await window.storage.set(docStorageKey(code, docId), dataUrl, true);
+    } catch {
+      return { ok: false, error: "Upload failed — check your connection and try again." };
+    }
+    const entry = { id: docId, name: file.name, sizeKB: Math.round(file.size / 1024) };
+    save({ documents: [...documents, entry] });
+    return { ok: true };
+  };
+
+  const removeDocument = async (docId) => {
+    const code = eventCodeRef.current;
+    save({ documents: documents.filter((d) => d.id !== docId) });
+    if (code) {
+      try {
+        await window.storage.delete(docStorageKey(code, docId), true);
+      } catch {
+        // metadata is already removed from the list either way; a leftover
+        // orphaned blob costs nothing and isn't reachable from the UI
+      }
+    }
+  };
+
+  const openDocument = (doc) => {
+    const code = eventCodeRef.current;
+    if (!code) return;
+    // Open the tab synchronously, inside the click itself — most browsers
+    // block window.open() called after an await, treating it as an
+    // unrequested popup rather than something the user just clicked.
+    const w = window.open();
+    (async () => {
+      try {
+        const res = await window.storage.get(docStorageKey(code, doc.id), true);
+        const blobUrl = dataUrlToBlobUrl(res.value);
+        if (w) w.location.href = blobUrl;
+      } catch {
+        if (w) w.close();
+      }
+    })();
+  };
+
+  const addRound = () => {
+    if (rounds.length >= MAX_ROUNDS) return;
+    const newRound = emptyRound(`Day ${rounds.length + 1}`, course);
+    save({ rounds: [...rounds, newRound], activeRoundId: newRound.id });
+  };
+
+  const renameRound = (roundId, label) => {
+    save({ rounds: rounds.map((r) => (r.id === roundId ? { ...r, label } : r)) });
+  };
+
+  const removeRound = (roundId) => {
+    if (rounds.length <= 1) return;
+    const next = rounds.filter((r) => r.id !== roundId);
+    save({ rounds: next, activeRoundId: activeRoundId === roundId ? next[0].id : activeRoundId });
+  };
+
+  const setActiveRound = (roundId) => save({ activeRoundId: roundId });
 
   const handleScorerTap = () => {
     if (scorerUnlocked) {
@@ -472,6 +662,21 @@ export default function App() {
         <div style={{ fontSize: 13, opacity: 0.85, marginTop: 1 }}>
           {course.name}
         </div>
+        {rounds.length > 1 && (
+          <select
+            value={activeRoundId}
+            onChange={(e) => setActiveRound(e.target.value)}
+            className="mono"
+            style={{
+              marginTop: 8, fontSize: 13, fontWeight: 700, padding: "6px 10px", borderRadius: 7,
+              border: "1px solid rgba(241,239,227,0.4)", background: "rgba(241,239,227,0.12)", color: "#F1EFE3",
+            }}
+          >
+            {rounds.map((r) => (
+              <option key={r.id} value={r.id} style={{ color: "#1B1B1B" }}>{r.label}</option>
+            ))}
+          </select>
+        )}
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span>Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}</span>
           {scorerUnlocked && (
@@ -489,11 +694,11 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
           <button
             onClick={() => { setMode("board"); setShowCourseSetup(false); }}
             style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "board" ? "#F1EFE3" : "transparent",
               color: mode === "board" ? headerColor : "#F1EFE3",
               fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
@@ -504,7 +709,7 @@ export default function App() {
           <button
             onClick={() => { setMode("draw"); setShowCourseSetup(false); }}
             style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "draw" ? "#F1EFE3" : "transparent",
               color: mode === "draw" ? headerColor : "#F1EFE3",
               fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
@@ -515,7 +720,7 @@ export default function App() {
           <button
             onClick={() => { setMode("rules"); setShowCourseSetup(false); }}
             style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "rules" ? "#F1EFE3" : "transparent",
               color: mode === "rules" ? headerColor : "#F1EFE3",
               fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
@@ -524,9 +729,20 @@ export default function App() {
             Local rules
           </button>
           <button
+            onClick={() => { setMode("docs"); setShowCourseSetup(false); }}
+            style={{
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "docs" ? "#F1EFE3" : "transparent",
+              color: mode === "docs" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Information
+          </button>
+          <button
             onClick={handleScorerTap}
             style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
               background: mode === "scorer" ? "#F1EFE3" : "transparent",
               color: mode === "scorer" ? headerColor : "#F1EFE3",
               fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
@@ -540,23 +756,29 @@ export default function App() {
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
       ) : mode === "board" ? (
-        <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
+        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
-        <DrawView draw={draw} headerColor={headerColor} accentColor={accentColor} />
+        <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "docs" ? (
+        // Public — a list of PDFs anyone can open, no PIN needed.
+        <DocumentsView documents={documents} onOpen={openDocument} headerColor={headerColor} accentColor={accentColor} />
       ) : !scorerUnlocked ? (
         // Guard: mode can only reach "scorer" via handleScorerTap, which
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board course={course} ranked={ranked} headerColor={headerColor} accentColor={accentColor} />
+        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
+          players={players}
           onUpdate={updateDraw}
+          startingHole={startingHole}
+          onUpdateStartingHole={updateStartingHole}
           onBack={() => setShowDrawSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -567,6 +789,16 @@ export default function App() {
           onUpdate={updateLocalRules}
           onBack={() => setShowLocalRulesSetup(false)}
           headerColor={headerColor}
+        />
+      ) : showDocumentsSetup ? (
+        <DocumentsSetup
+          documents={documents}
+          onUpload={uploadDocument}
+          onRemove={removeDocument}
+          onOpen={openDocument}
+          onBack={() => setShowDocumentsSetup(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
         />
       ) : showCourseSetup ? (
         <CourseSetup
@@ -585,6 +817,12 @@ export default function App() {
           onSaveToLibrary={saveCourseToLibrary}
           onLoadFromLibrary={loadCourseFromLibrary}
           onDeleteFromLibrary={deleteCourseFromLibrary}
+          rounds={rounds}
+          activeRoundId={activeRoundId}
+          onAddRound={addRound}
+          onRenameRound={renameRound}
+          onRemoveRound={removeRound}
+          onSetActiveRound={setActiveRound}
         />
       ) : active ? (
         <ScoreEntry
@@ -606,11 +844,15 @@ export default function App() {
           onOpenCourseSetup={() => setShowCourseSetup(true)}
           onOpenDrawSetup={() => setShowDrawSetup(true)}
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
+          onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
           onImport={importPlayers}
           onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); }}
+          rounds={rounds}
+          activeRoundId={activeRoundId}
+          onCopyPlayers={copyPlayersFromRound}
         />
       )}
 
@@ -691,63 +933,151 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
   );
 }
 
-function Board({ course, ranked, headerColor, accentColor }) {
+function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor }) {
   const [openId, setOpenId] = useState(null);
+  const [view, setView] = useState("day"); // day | overall
+  const multiRound = rounds && rounds.length > 1;
 
-  if (ranked.length === 0) {
-    return (
+  const dayBoard = (
+    ranked.length === 0 ? (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
         <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 15 }}>No scores posted yet.</div>
         <div style={{ fontSize: 12.5, marginTop: 4 }}>The board updates as the scorer enters holes.</div>
       </div>
-    );
-  }
-  return (
-    <div style={{ padding: "14px 12px 40px" }}>
-      {ranked.map((p, i) => {
-        const isOpen = openId === p.id;
-        return (
-          <div
-            key={p.id}
-            style={{
-              background: "#FFFFFF", borderRadius: 10, marginBottom: 8,
-              border: i === 0 && p.thru > 0 ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
-              boxShadow: i === 0 && p.thru > 0 ? `0 1px 6px ${accentColor}2e` : "none",
-              overflow: "hidden",
-            }}
-          >
-            <button
-              onClick={() => setOpenId(isOpen ? null : p.id)}
+    ) : (
+      <div>
+        {ranked.map((p, i) => {
+          const isOpen = openId === p.id;
+          return (
+            <div
+              key={p.id}
               style={{
-                width: "100%", display: "flex", alignItems: "center", gap: 12,
-                padding: "12px 14px", background: "none", border: "none", textAlign: "left",
+                background: "#FFFFFF", borderRadius: 10, marginBottom: 8,
+                border: i === 0 && p.thru > 0 ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
+                boxShadow: i === 0 && p.thru > 0 ? `0 1px 6px ${accentColor}2e` : "none",
+                overflow: "hidden",
               }}
             >
-              <div className="mono" style={{ width: 22, textAlign: "center", fontSize: 15, fontWeight: 700, color: i < 3 && p.thru > 0 ? headerColor : "#9B9885" }}>
+              <button
+                onClick={() => setOpenId(isOpen ? null : p.id)}
+                style={{
+                  width: "100%", display: "flex", alignItems: "center", gap: 12,
+                  padding: "12px 14px", background: "none", border: "none", textAlign: "left",
+                }}
+              >
+                <div className="mono" style={{ width: 22, textAlign: "center", fontSize: 15, fontWeight: 700, color: i < 3 && p.thru > 0 ? headerColor : "#9B9885" }}>
+                  {i + 1}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p.name || "Unnamed"}
+                  </div>
+                  <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
+                    HCP {p.ph} · thru {p.thru === 18 ? "F" : p.thru}
+                  </div>
+                </div>
+                <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: headerColor, minWidth: 30, textAlign: "right" }}>
+                  {p.thru > 0 ? p.pts : "–"}
+                </div>
+                <ChevronRight
+                  size={16}
+                  color="#9B9885"
+                  style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+                />
+              </button>
+              {isOpen && <HoleByHole course={course} player={p} headerColor={headerColor} />}
+            </div>
+          );
+        })}
+      </div>
+    )
+  );
+
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      {multiRound && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button
+            onClick={() => setView("day")}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: view === "day" ? headerColor : "transparent",
+              color: view === "day" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+            }}
+          >
+            This day
+          </button>
+          <button
+            onClick={() => setView("overall")}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: view === "overall" ? headerColor : "transparent",
+              color: view === "overall" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+            }}
+          >
+            Overall
+          </button>
+        </div>
+      )}
+      {view === "overall" && multiRound ? (
+        <OverallBoard rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
+      ) : (
+        dayBoard
+      )}
+    </div>
+  );
+}
+
+function OverallBoard({ rounds, headerColor, accentColor }) {
+  const standings = combinedStandings(rounds);
+
+  if (standings.length === 0) {
+    return (
+      <div style={{ padding: "40px 12px", textAlign: "center", color: "#6B6B5F" }}>
+        <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15 }}>No scores posted yet on any day.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
+        <thead>
+          <tr style={{ background: `${headerColor}12` }}>
+            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
+            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Player</th>
+            {rounds.map((r) => (
+              <th key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>
+                {r.label}
+              </th>
+            ))}
+            <th className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: headerColor, fontWeight: 700 }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {standings.map((row, i) => (
+            <tr key={row.name} style={{ borderTop: "1px solid #EFEDE0" }}>
+              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: i < 3 && row.anyPlayed ? headerColor : "#9B9885" }}>
                 {i + 1}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {p.name || "Unnamed"}
-                </div>
-                <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
-                  HCP {p.ph} · thru {p.thru === 18 ? "F" : p.thru}
-                </div>
-              </div>
-              <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: headerColor, minWidth: 30, textAlign: "right" }}>
-                {p.thru > 0 ? p.pts : "–"}
-              </div>
-              <ChevronRight
-                size={16}
-                color="#9B9885"
-                style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
-              />
-            </button>
-            {isOpen && <HoleByHole course={course} player={p} headerColor={headerColor} />}
-          </div>
-        );
-      })}
+              </td>
+              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600 }}>{row.name}</td>
+              {rounds.map((r) => {
+                const t = row.perRound[r.id];
+                return (
+                  <td key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>
+                    {t && t.thru > 0 ? t.pts : "–"}
+                  </td>
+                );
+              })}
+              <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 14, fontWeight: 700, color: headerColor }}>
+                {row.anyPlayed ? row.total : "–"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -792,7 +1122,7 @@ function HoleByHole({ course, player, headerColor }) {
   );
 }
 
-function DrawView({ draw, headerColor, accentColor }) {
+function DrawView({ draw, startingHole, headerColor, accentColor }) {
   if (draw.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
@@ -804,6 +1134,16 @@ function DrawView({ draw, headerColor, accentColor }) {
   }
   return (
     <div style={{ padding: "14px 12px 40px" }}>
+      {startingHole && startingHole.trim() && (
+        <div
+          style={{
+            background: `${headerColor}12`, border: `1px solid ${headerColor}`, borderRadius: 8,
+            padding: "8px 12px", marginBottom: 10, fontSize: 12.5, fontWeight: 600, color: headerColor, textAlign: "center",
+          }}
+        >
+          Starting from the {startingHole} tee
+        </div>
+      )}
       {draw.map((entry) => (
         <div
           key={entry.id}
@@ -815,14 +1155,17 @@ function DrawView({ draw, headerColor, accentColor }) {
           <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 14, minWidth: 66 }}>
             {entry.time}
           </div>
-          <div style={{ fontSize: 14, flex: 1 }}>{entry.group}</div>
+          <div style={{ fontSize: 14, flex: 1 }}>
+            {entry.players && entry.players.length > 0 ? entry.players.join(" & ") : entry.group || "—"}
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function DrawSetup({ draw, onUpdate, onBack, headerColor, accentColor }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor }) {
+  const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -847,45 +1190,279 @@ function DrawSetup({ draw, onUpdate, onBack, headerColor, accentColor }) {
       </button>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
-        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-          One tee time per line: Time, then each player in their own column (copy straight from your
-          spreadsheet). Pasting replaces the whole draw below.
-        </div>
-        <textarea
-          value={pasteText}
-          onChange={(e) => setPasteText(e.target.value)}
-          placeholder={"9:00\tSmith\tJones\tBrown\tWhite\n9:10\tOkonkwo\tPetrov"}
-          rows={6}
-          className="mono"
-          style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit" }}
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Starting tee (same for everyone)</div>
+        <input
+          value={startingHole}
+          onChange={(e) => onUpdateStartingHole(e.target.value)}
+          placeholder="e.g. 1st"
+          style={{ width: 140, fontSize: 14, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
-        <button
-          onClick={doImport}
-          style={{ width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}
-        >
-          Set draw
-        </button>
-        {msg && <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginTop: 8 }}>{msg}</div>}
       </div>
 
-      {draw.length > 0 && (
-        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>Current draw</div>
-            <button onClick={clearAll} style={{ fontSize: 11, color: "#B5442E", background: "none", border: "none" }}>Clear all</button>
-          </div>
-          {draw.map((entry) => (
-            <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
-              <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56 }}>{entry.time}</div>
-              <div style={{ flex: 1, fontSize: 12.5 }}>{entry.group}</div>
-              <button onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
-                <X size={13} />
-              </button>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button
+          onClick={() => setTab("build")}
+          style={{
+            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: tab === "build" ? headerColor : "transparent",
+            color: tab === "build" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          Build from players
+        </button>
+        <button
+          onClick={() => setTab("paste")}
+          style={{
+            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: tab === "paste" ? headerColor : "transparent",
+            color: tab === "paste" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          Paste
+        </button>
+      </div>
+
+      {tab === "build" ? (
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} />
+      ) : (
+        <>
+          <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
+            <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+              One tee time per line: Time, then each player in their own column (copy straight from your
+              spreadsheet). Pasting replaces the whole draw below.
             </div>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder={"9:00\tSmith\tJones\tBrown\tWhite\n9:10\tOkonkwo\tPetrov"}
+              rows={6}
+              className="mono"
+              style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit" }}
+            />
+            <button
+              onClick={doImport}
+              style={{ width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}
+            >
+              Set draw
+            </button>
+            {msg && <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginTop: 8 }}>{msg}</div>}
+          </div>
+
+          {draw.length > 0 && (
+            <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>Current draw</div>
+                <button onClick={clearAll} style={{ fontSize: 11, color: "#B5442E", background: "none", border: "none" }}>Clear all</button>
+              </div>
+              {draw.map((entry) => (
+                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+                  <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56 }}>{entry.time}</div>
+                  <div style={{ flex: 1, fontSize: 12.5 }}>
+                    {entry.players && entry.players.length > 0 ? entry.players.join(" & ") : entry.group || "—"}
+                  </div>
+                  <button onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function addMinutes(timeStr, minutesToAdd) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((timeStr || "").trim());
+  if (!m) return timeStr || "";
+  const total = (parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + minutesToAdd + 1440 * 10) % 1440;
+  const hh = String(Math.floor(total / 60)).padStart(2, "0");
+  const mm = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor }) {
+  // Local working copy — rows of up to 4 player slots each. Seeded from
+  // whatever draw already exists so re-opening this doesn't lose work.
+  const [rows, setRows] = useState(() => {
+    if (draw.length > 0) {
+      return draw.map((entry) => ({
+        id: entry.id,
+        time: entry.time || "",
+        slots: [0, 1, 2, 3].map((i) => (entry.players && entry.players[i]) || null),
+      }));
+    }
+    return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
+  });
+  const [selected, setSelected] = useState(null); // player name currently picked up
+  const [savedMsg, setSavedMsg] = useState(false);
+  const [startTime, setStartTime] = useState("09:00");
+  const [intervalMinutes, setIntervalMinutes] = useState(8);
+
+  const assignedNames = new Set(rows.flatMap((r) => r.slots.filter(Boolean)));
+  const pool = players.filter((p) => p.name && !assignedNames.has(p.name));
+
+  const pickUp = (name) => setSelected(selected === name ? null : name);
+
+  const placeInSlot = (rowId, slotIdx) => {
+    if (!selected) return;
+    setRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, slots: r.slots.map((s, i) => (i === slotIdx ? selected : s)) } : r))
+    );
+    setSelected(null);
+  };
+
+  const clearSlot = (rowId, slotIdx) => {
+    setRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, slots: r.slots.map((s, i) => (i === slotIdx ? null : s)) } : r))
+    );
+  };
+
+  const setTime = (rowId, time) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, time } : r)));
+
+  const addRow = () =>
+    setRows((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), time: addMinutes(startTime, intervalMinutes * prev.length), slots: [null, null, null, null] },
+    ]);
+
+  const fillAllTimes = () =>
+    setRows((prev) => prev.map((r, i) => ({ ...r, time: addMinutes(startTime, intervalMinutes * i) })));
+
+  const removeRow = (rowId) => setRows((prev) => prev.filter((r) => r.id !== rowId));
+
+  const saveDraw = () => {
+    const finalDraw = rows
+
+      .filter((r) => r.time.trim() || r.slots.some(Boolean))
+      .map((r) => ({ id: r.id, time: r.time.trim(), players: r.slots.filter(Boolean) }));
+    onUpdate(finalDraw);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 1500);
+  };
+
+  return (
+    <div>
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Tee time settings
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 11, color: "#8A8774" }}>Start time</span>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className="mono"
+              style={{ fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
+          </label>
+          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 11, color: "#8A8774" }}>Interval (mins)</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))}
+              className="mono"
+              style={{ fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
+          </label>
+          <button
+            onClick={fillAllTimes}
+            style={{ padding: "8px 12px", borderRadius: 6, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}
+          >
+            Fill times
+          </button>
+        </div>
+        <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 6 }}>
+          New rows auto-fill from these. "Fill times" renumbers every row's time in order.
+        </div>
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+          Tap a player below, then tap a slot to place them there. Tap a filled slot to send them back to the pool.
+        </div>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
+          Players {pool.length > 0 ? `(${pool.length} unplaced)` : "— all placed"}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {pool.length === 0 && (
+            <div style={{ fontSize: 12, color: "#9B9885" }}>
+              {players.length === 0 ? "Add players in Scorer entry first." : "Every player has been placed below."}
+            </div>
+          )}
+          {pool.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => pickUp(p.name)}
+              style={{
+                padding: "6px 11px", borderRadius: 20, fontSize: 12.5, fontWeight: 600,
+                border: selected === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
+                background: selected === p.name ? `${accentColor}14` : "#FFFFFF",
+                color: selected === p.name ? accentColor : "#1B1B1B",
+              }}
+            >
+              {p.name}
+            </button>
           ))}
         </div>
-      )}
+      </div>
+
+      {rows.map((row, rowIdx) => (
+        <div key={row.id} style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <input
+              value={row.time}
+              onChange={(e) => setTime(row.id, e.target.value)}
+              placeholder={`Time (e.g. 9:0${rowIdx})`}
+              className="mono"
+              style={{ flex: 1, fontSize: 13, fontWeight: 700, padding: "6px 9px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
+            <button onClick={() => removeRow(row.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+              <X size={15} />
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+            {row.slots.map((name, slotIdx) => (
+              <button
+                key={slotIdx}
+                onClick={() => (name ? clearSlot(row.id, slotIdx) : placeInSlot(row.id, slotIdx))}
+                style={{
+                  minHeight: 44, borderRadius: 7, fontSize: 11.5, fontWeight: 600, padding: "4px 4px",
+                  border: name ? `1px solid ${headerColor}` : selected ? `1px dashed ${accentColor}` : "1px dashed #D8D4C0",
+                  background: name ? `${headerColor}12` : "#FBFAF6",
+                  color: name ? headerColor : "#C2BEA9",
+                }}
+              >
+                {name || "—"}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <button
+        onClick={addRow}
+        style={{
+          width: "100%", padding: "10px 0", borderRadius: 10, border: `1px dashed ${headerColor}`,
+          background: "transparent", color: headerColor, fontWeight: 600, fontSize: 13, marginBottom: 12,
+        }}
+      >
+        + Add tee time
+      </button>
+
+      <button
+        onClick={saveDraw}
+        style={{ width: "100%", padding: "11px 0", borderRadius: 10, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
+      >
+        {savedMsg ? "Saved" : "Save draw"}
+      </button>
     </div>
   );
 }
@@ -953,7 +1530,118 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onImport, onClearAll, headerColor, accentColor, onLock }) {
+function DocumentsView({ documents, onOpen, headerColor, accentColor }) {
+  if (documents.length === 0) {
+    return (
+      <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
+        <FileText size={28} color={accentColor} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15 }}>No documents posted yet.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added something.</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      {documents.map((doc) => (
+        <button
+          key={doc.id}
+          onClick={() => onOpen(doc)}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+            background: "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
+          }}
+        >
+          <FileText size={20} color={headerColor} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {doc.name}
+            </div>
+            <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
+              {doc.sizeKB < 1024 ? `${doc.sizeKB} KB` : `${(doc.sizeKB / 1024).toFixed(1)} MB`}
+            </div>
+          </div>
+          <ChevronRight size={16} color="#9B9885" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerColor, accentColor }) {
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    setMsg("");
+    const result = await onUpload(file);
+    setUploading(false);
+    setMsg(result.ok ? `Uploaded "${file.name}".` : result.error || "Upload failed.");
+  };
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Add a PDF</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 10 }}>
+          Anything players should be able to read — a dinner table plan, a programme, rules of golf notes. Shared across every day, not tied to whichever day you're currently on. Max {MAX_DOC_SIZE_MB}MB per file.
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf"
+          onChange={handleFile}
+          style={{ display: "none" }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          style={{
+            width: "100%", padding: "10px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: "transparent", color: headerColor, fontWeight: 600, fontSize: 13,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            opacity: uploading ? 0.6 : 1,
+          }}
+        >
+          <Upload size={15} /> {uploading ? "Uploading…" : "Choose PDF"}
+        </button>
+        {msg && <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginTop: 8 }}>{msg}</div>}
+      </div>
+
+      {documents.length > 0 && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+            Posted documents
+          </div>
+          {documents.map((doc) => (
+            <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid #EFEDE0" }}>
+              <button
+                onClick={() => onOpen(doc)}
+                style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", textAlign: "left", padding: 0 }}
+              >
+                <FileText size={15} color={headerColor} />
+                <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</span>
+              </button>
+              <button onClick={() => onRemove(doc.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -1024,6 +1712,19 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
+      <button
+        onClick={onOpenDocumentsSetup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <FileText size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Information (PDFs)</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
       {ranked.length > 0 && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
           {confirmClear ? (
@@ -1086,6 +1787,22 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           </button>
         </div>
       ))}
+      {ranked.length === 0 && rounds && rounds.some((r) => r.id !== activeRoundId && r.players.length > 0) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          {rounds.filter((r) => r.id !== activeRoundId && r.players.length > 0).map((r) => (
+            <button
+              key={r.id}
+              onClick={() => onCopyPlayers(r.id)}
+              style={{
+                fontSize: 12, fontWeight: 600, color: headerColor, background: "#FFFFFF",
+                border: `1px solid ${headerColor}`, borderRadius: 8, padding: "8px 12px",
+              }}
+            >
+              Copy players from {r.label} ({r.players.length})
+            </button>
+          ))}
+        </div>
+      )}
       {pasteOpen ? (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${headerColor}`, marginBottom: 10 }}>
           <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
@@ -1260,9 +1977,10 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [saveName, setSaveName] = useState(course.name);
   const [confirmLoadId, setConfirmLoadId] = useState(null);
+  const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const setHole = (idx, field, val) => {
     const clean = val === "" ? "" : Math.max(1, Math.min(field === "par" ? 7 : 18, Number(val)));
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
@@ -1319,6 +2037,69 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Days
+        </div>
+        {rounds.map((r) => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+            <input
+              value={r.label}
+              onChange={(e) => onRenameRound(r.id, e.target.value)}
+              style={{
+                flex: 1, fontSize: 13, fontWeight: r.id === activeRoundId ? 700 : 500,
+                padding: "6px 8px", borderRadius: 6, border: "1px solid #D8D4C0",
+                background: r.id === activeRoundId ? `${headerColor}12` : "#FFFFFF",
+              }}
+            />
+            {r.id !== activeRoundId && (
+              <button
+                onClick={() => onSetActiveRound(r.id)}
+                style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, background: "none", border: `1px solid ${headerColor}`, borderRadius: 6, padding: "5px 9px" }}
+              >
+                Switch to
+              </button>
+            )}
+            {rounds.length > 1 && (
+              confirmRemoveRoundId === r.id ? (
+                <>
+                  <button
+                    onClick={() => { onRemoveRound(r.id); setConfirmRemoveRoundId(null); }}
+                    style={{ fontSize: 11, color: "#B5442E", background: "none", border: "none", fontWeight: 700 }}
+                  >
+                    Confirm
+                  </button>
+                  <button onClick={() => setConfirmRemoveRoundId(null)} style={{ fontSize: 11, color: "#9B9885", background: "none", border: "none" }}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => setConfirmRemoveRoundId(r.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+                  <X size={14} />
+                </button>
+              )
+            )}
+          </div>
+        ))}
+        {rounds.length < MAX_ROUNDS ? (
+          <button
+            onClick={onAddRound}
+            style={{
+              width: "100%", marginTop: 10, padding: "9px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+              background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            }}
+          >
+            <Plus size={13} /> Add another day
+          </button>
+        ) : (
+          <div style={{ fontSize: 11, color: "#9B9885", marginTop: 10 }}>Maximum of {MAX_ROUNDS} days.</div>
+        )}
+        <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 8 }}>
+          Everything below (course, tees, holes) applies to whichever day is bold above. Players are separate per day too — use "Copy from another day" in Scorer entry to reuse a roster.
+        </div>
+      </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
