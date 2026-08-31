@@ -76,6 +76,22 @@ function playingHandicap(course, index, teeId) {
   return Math.round(index * (t.slope / 113) + (t.cr - coursePar(course)));
 }
 
+// A club's handicap allowance (e.g. 95%) is applied as a percentage of the
+// already-calculated course handicap, not the raw index.
+function allowedHandicap(rawCH, allowancePct) {
+  return Math.round(rawCH * ((allowancePct ?? 100) / 100));
+}
+
+// Foursomes/alternate-shot combined handicap: each partner's own allowed
+// course handicap, averaged, with an exact half rounding UP (14.5 -> 15).
+function combinedHandicap(course, player, allowancePct) {
+  const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
+  const rawB = playingHandicap(course, Number(player.partnerIndex) || 0, player.partnerTee);
+  const allowedA = allowedHandicap(rawA, allowancePct);
+  const allowedB = allowedHandicap(rawB, allowancePct);
+  return Math.floor((allowedA + allowedB) / 2 + 0.5);
+}
+
 function strokesOnHole(course, ph, holeIdx) {
   const si = course.holes[holeIdx].si;
   let s = ph >= si ? 1 : 0;
@@ -89,18 +105,33 @@ function holePoints(course, gross, holeIdx, ph) {
   return Math.max(0, 2 - (net - course.holes[holeIdx].par));
 }
 
-function totals(course, player) {
-  const ph = playingHandicap(course, Number(player.index) || 0, player.tee);
-  let pts = 0, thru = 0;
+// isFoursomes: whether this round is alternate-shot — determines whether ph
+// comes from one player's allowed handicap or a combined pair handicap.
+// Always computes both Stableford points and net/medal figures — cheap to
+// do both, and it's the "scoring" mode that decides which one is shown.
+function totals(course, player, allowancePct = 100, isFoursomes = false) {
+  const ph = isFoursomes
+    ? combinedHandicap(course, player, allowancePct)
+    : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct);
+  let pts = 0, thru = 0, netTotal = 0, parSoFar = 0;
   player.scores.forEach((g, i) => {
+    if (g == null || g === "") return;
+    thru += 1;
+    const strokes = strokesOnHole(course, ph, i);
+    netTotal += Number(g) - strokes;
+    parSoFar += course.holes[i].par;
     const p = holePoints(course, g, i, ph);
-    if (p !== null) { pts += p; thru += 1; }
+    if (p !== null) pts += p;
   });
-  return { ph, pts, thru };
+  return { ph, pts, thru, netTotal, relToPar: netTotal - parSoFar };
 }
 
-function emptyPlayer(course) {
-  return { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.id || "W", scores: Array(18).fill("") };
+function emptyPlayer(course, isFoursomes = false) {
+  const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.id || "W", scores: Array(18).fill("") };
+  if (isFoursomes) {
+    return { ...base, partnerName: "", partnerIndex: "", partnerTee: course.tees[0]?.id || "W" };
+  }
+  return base;
 }
 
 // ---- Spreadsheet import via paste (no native file picker in this sandbox) ----
@@ -147,6 +178,11 @@ const DEFAULT_PIN = "1234";
 
 const MAX_ROUNDS = 3;
 
+function formatRelToPar(rel) {
+  if (rel === 0) return "E";
+  return rel > 0 ? `+${rel}` : `${rel}`;
+}
+
 function emptyRound(label, course) {
   return {
     id: crypto.randomUUID(),
@@ -156,6 +192,9 @@ function emptyRound(label, course) {
     draw: [],
     localRules: "",
     startingHole: "1st",
+    format: "individual", // individual | foursomes
+    scoring: "stableford", // stableford | medal
+    handicapAllowance: 100, // percentage of course handicap allowed
   };
 }
 
@@ -168,6 +207,9 @@ function sanitizeRound(r, fallbackLabel) {
     draw: Array.isArray(r.draw) ? r.draw : [],
     localRules: typeof r.localRules === "string" ? r.localRules : "",
     startingHole: typeof r.startingHole === "string" && r.startingHole ? r.startingHole : "1st",
+    format: r.format === "foursomes" ? "foursomes" : "individual",
+    scoring: r.scoring === "medal" ? "medal" : "stableford",
+    handicapAllowance: typeof r.handicapAllowance === "number" && r.handicapAllowance > 0 ? r.handicapAllowance : 100,
   };
 }
 
@@ -225,7 +267,7 @@ function combinedStandings(rounds) {
     round.players.forEach((p) => {
       const name = (p.name || "").trim();
       if (!name) return;
-      const t = totals(round.course, p);
+      const t = totals(round.course, p, round.handicapAllowance, round.format === "foursomes");
       if (!byName.has(name)) byName.set(name, { name, perRound: {} });
       byName.get(name).perRound[round.id] = t;
     });
@@ -331,7 +373,9 @@ export default function App() {
   const [state, setState] = useState(DEFAULT_STATE);
   const { orgName, accentColor, headerColor, pin, rounds, activeRoundId, documents } = state;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
-  const { course, players, draw, localRules, startingHole } = activeRound;
+  const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance } = activeRound;
+  const isFoursomes = format === "foursomes";
+  const isMedal = scoring === "medal";
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [syncError, setSyncError] = useState(false);
@@ -485,7 +529,7 @@ export default function App() {
   };
 
   const addPlayer = () => {
-    const next = [...players, emptyPlayer(course)];
+    const next = [...players, emptyPlayer(course, isFoursomes)];
     updateRound({ players: next });
     setActiveId(next[next.length - 1].id);
   };
@@ -518,13 +562,24 @@ export default function App() {
   const copyPlayersFromRound = (sourceRoundId) => {
     const source = rounds.find((r) => r.id === sourceRoundId);
     if (!source) return;
-    const copied = source.players.map((p) => ({
-      id: crypto.randomUUID(),
-      name: p.name,
-      index: p.index,
-      tee: course.tees.some((t) => t.id === p.tee) ? p.tee : course.tees[0]?.id || "",
-      scores: Array(18).fill(""),
-    }));
+    const copied = source.players.map((p) => {
+      const base = {
+        id: crypto.randomUUID(),
+        name: p.name,
+        index: p.index,
+        tee: course.tees.some((t) => t.id === p.tee) ? p.tee : course.tees[0]?.id || "",
+        scores: Array(18).fill(""),
+      };
+      if (isFoursomes) {
+        return {
+          ...base,
+          partnerName: p.partnerName || "",
+          partnerIndex: p.partnerIndex || "",
+          partnerTee: p.partnerTee && course.tees.some((t) => t.id === p.partnerTee) ? p.partnerTee : course.tees[0]?.id || "",
+        };
+      }
+      return base;
+    });
     updateRound({ players: copied });
   };
 
@@ -543,6 +598,10 @@ export default function App() {
   const updateLocalRules = (text) => updateRound({ localRules: text });
 
   const updateStartingHole = (hole) => updateRound({ startingHole: hole });
+
+  const updateFormat = (f) => updateRound({ format: f });
+
+  const updateScoring = (s) => updateRound({ scoring: s });
 
   const uploadDocument = async (file) => {
     const code = eventCodeRef.current;
@@ -625,8 +684,20 @@ export default function App() {
   };
 
   const ranked = [...players]
-    .map((p) => ({ ...p, ...totals(course, p) }))
-    .sort((a, b) => b.pts - a.pts || b.thru - a.thru);
+    .map((p) => ({
+      ...p,
+      displayName: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+      ...totals(course, p, handicapAllowance, isFoursomes),
+    }))
+    .sort((a, b) => {
+      if (isMedal) {
+        if (a.thru === 0 && b.thru === 0) return 0;
+        if (a.thru === 0) return 1;
+        if (b.thru === 0) return -1;
+        return a.relToPar - b.relToPar || b.thru - a.thru;
+      }
+      return b.pts - a.pts || b.thru - a.thru;
+    });
 
   const active = players.find((p) => p.id === activeId);
 
@@ -756,7 +827,7 @@ export default function App() {
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
       ) : mode === "board" ? (
-        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} />
+        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} isMedal={isMedal} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} />
@@ -771,7 +842,7 @@ export default function App() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} />
+        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} isMedal={isMedal} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -782,6 +853,12 @@ export default function App() {
           onBack={() => setShowDrawSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
+          format={format}
+          onUpdateFormat={updateFormat}
+          scoring={scoring}
+          onUpdateScoring={updateScoring}
+          handicapAllowance={handicapAllowance}
+          onUpdateHandicapAllowance={(pct) => updateRound({ handicapAllowance: pct })}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -832,6 +909,9 @@ export default function App() {
           onUpdate={(patch) => updatePlayer(active.id, patch)}
           onScore={(hole, val) => updateScore(active.id, hole, val)}
           headerColor={headerColor}
+          isFoursomes={format === "foursomes"}
+          isMedal={isMedal}
+          handicapAllowance={handicapAllowance}
         />
       ) : (
         <ScorerList
@@ -853,6 +933,7 @@ export default function App() {
           rounds={rounds}
           activeRoundId={activeRoundId}
           onCopyPlayers={copyPlayersFromRound}
+          isFoursomes={isFoursomes}
         />
       )}
 
@@ -933,7 +1014,7 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
   );
 }
 
-function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor }) {
+function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor, isMedal }) {
   const [openId, setOpenId] = useState(null);
   const [view, setView] = useState("day"); // day | overall
   const multiRound = rounds && rounds.length > 1;
@@ -971,14 +1052,14 @@ function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {p.name || "Unnamed"}
+                    {p.displayName || p.name || "Unnamed"}
                   </div>
                   <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
-                    HCP {p.ph} · thru {p.thru === 18 ? "F" : p.thru}
+                    HCP {p.ph} · thru {p.thru === 18 ? "F" : p.thru}{isMedal && p.thru > 0 ? ` · net ${p.netTotal}` : ""}
                   </div>
                 </div>
                 <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: headerColor, minWidth: 30, textAlign: "right" }}>
-                  {p.thru > 0 ? p.pts : "–"}
+                  {p.thru > 0 ? (isMedal ? formatRelToPar(p.relToPar) : p.pts) : "–"}
                 </div>
                 <ChevronRight
                   size={16}
@@ -986,7 +1067,7 @@ function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor
                   style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
                 />
               </button>
-              {isOpen && <HoleByHole course={course} player={p} headerColor={headerColor} />}
+              {isOpen && <HoleByHole course={course} player={p} headerColor={headerColor} isMedal={isMedal} />}
             </div>
           );
         })}
@@ -1082,7 +1163,7 @@ function OverallBoard({ rounds, headerColor, accentColor }) {
   );
 }
 
-function HoleByHole({ course, player, headerColor }) {
+function HoleByHole({ course, player, headerColor, isMedal }) {
   const row = (holes, label) => (
     <div style={{ marginBottom: 8 }}>
       <div style={{ fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>{label}</div>
@@ -1091,6 +1172,7 @@ function HoleByHole({ course, player, headerColor }) {
           const idx = h - 1;
           const gross = player.scores[idx];
           const pts = holePoints(course, gross, idx, player.ph);
+          const netVsPar = gross !== "" ? (Number(gross) - strokesOnHole(course, player.ph, idx)) - course.holes[idx].par : null;
           return (
             <div key={h} style={{ textAlign: "center" }}>
               <div className="mono" style={{ fontSize: 8.5, color: "#C2BEA9" }}>{h}</div>
@@ -1105,7 +1187,7 @@ function HoleByHole({ course, player, headerColor }) {
                 {gross !== "" ? gross : "–"}
               </div>
               <div className="mono" style={{ fontSize: 8.5, color: "#8A8774", marginTop: 2 }}>
-                {pts !== null ? `${pts}pt` : ""}
+                {isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (pts !== null ? `${pts}pt` : "")}
               </div>
             </div>
           );
@@ -1164,7 +1246,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor }) {
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1197,6 +1279,87 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           placeholder="e.g. 1st"
           style={{ width: 140, fontSize: 14, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Format
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button
+            onClick={() => onUpdateFormat("individual")}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: format === "individual" ? headerColor : "transparent",
+              color: format === "individual" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Individual
+          </button>
+          <button
+            onClick={() => onUpdateFormat("foursomes")}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: format === "foursomes" ? headerColor : "transparent",
+              color: format === "foursomes" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Foursomes
+          </button>
+        </div>
+        {format === "foursomes" && (
+          <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
+            Each roster entry becomes a pair. Combined handicap = (Player A's + Player B's course handicap) ÷ 2, exact halves rounded up.
+          </div>
+        )}
+
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Scoring
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button
+            onClick={() => onUpdateScoring("stableford")}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: scoring === "stableford" ? headerColor : "transparent",
+              color: scoring === "stableford" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Stableford
+          </button>
+          <button
+            onClick={() => onUpdateScoring("medal")}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: scoring === "medal" ? headerColor : "transparent",
+              color: scoring === "medal" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Medal
+          </button>
+        </div>
+        {scoring === "medal" && (
+          <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
+            Leaderboard sorts by lowest net score (relative to par), not points.
+          </div>
+        )}
+
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+          Handicap allowance <span style={{ textTransform: "none", letterSpacing: 0 }}>(% of course handicap — most comps use 100%)</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100}
+            value={handicapAllowance}
+            onChange={(e) => onUpdateHandicapAllowance(Math.max(1, Math.min(100, Number(e.target.value) || 100)))}
+            className="mono"
+            style={{ width: 80, fontSize: 14, fontWeight: 700, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+          />
+          <span style={{ fontSize: 13, color: "#6B6B5F" }}>%</span>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
@@ -1641,7 +1804,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers }) {
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -1753,7 +1916,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           )}
         </div>
       )}
-      {ranked.length === 0 && (
+      {ranked.length === 0 && !isFoursomes && (
         <button
           onClick={onLoadExample}
           style={{
@@ -1775,7 +1938,11 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         >
           <button onClick={() => onSelect(p.id)} style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, textAlign: "left", background: "none", border: "none", padding: 0 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name || "New player"}</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                {isFoursomes
+                  ? `${p.name || "Player A"} & ${p.partnerName || "Player B"}`
+                  : p.name || "New player"}
+              </div>
               <div className="mono" style={{ fontSize: 11, color: "#8A8774" }}>
                 {getTee(course, p.tee)?.label} tee · thru {p.thru}/18 · {p.thru > 0 ? `${p.pts} pts` : "not started"}
               </div>
@@ -1803,7 +1970,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           ))}
         </div>
       )}
-      {pasteOpen ? (
+      {!isFoursomes && (pasteOpen ? (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${headerColor}`, marginBottom: 10 }}>
           <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
             Paste rows copied from your spreadsheet — Name, Handicap Index, Tee (Tee optional, header row optional).
@@ -1842,7 +2009,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         >
           <Clipboard size={15} /> Import players (paste from spreadsheet)
         </button>
-      )}
+      ))}
       {importMsg && !pasteOpen && (
         <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginBottom: 8 }}>{importMsg}</div>
       )}
@@ -1854,14 +2021,19 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 4,
         }}
       >
-        <Users size={15} /> Add player
+        <Users size={15} /> {isFoursomes ? "Add pair" : "Add player"}
       </button>
     </div>
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) {
-  const { ph, pts } = totals(course, player);
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance }) {
+  const { ph, pts, netTotal, relToPar } = totals(course, player, handicapAllowance, isFoursomes);
+  const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
+  const allowedA = allowedHandicap(rawA, handicapAllowance);
+  const rawB = isFoursomes ? playingHandicap(course, Number(player.partnerIndex) || 0, player.partnerTee) : null;
+  const allowedB = isFoursomes ? allowedHandicap(rawB, handicapAllowance) : null;
+  const strokeHoles = course.holes.map((h, i) => strokesOnHole(course, ph, i)).map((s, i) => ({ hole: i + 1, strokes: s })).filter((h) => h.strokes > 0);
   const inputRefs = useRef({});
   const timers = useRef({});
 
@@ -1904,6 +2076,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
         const idx = h - 1;
         const val = player.scores[idx];
         const p = holePoints(course, val, idx, ph);
+        const netVsPar = val !== "" ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
         return (
           <div key={h} style={{ textAlign: "center" }}>
             <div className="mono" style={{ fontSize: 9.5, color: "#9B9885" }}>{h}</div>
@@ -1923,7 +2096,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
               }}
             />
             <div className="mono" style={{ fontSize: 9, color: headerColor, marginTop: 2, minHeight: 12 }}>
-              {p !== null ? `${p}pt` : ""}
+              {isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (p !== null ? `${p}pt` : "")}
             </div>
           </div>
         );
@@ -1938,35 +2111,129 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor }) 
       </button>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-        <input
-          placeholder="Player name"
-          value={player.name}
-          onChange={(e) => onUpdate({ name: e.target.value })}
-          style={{ width: "100%", fontSize: 16, fontWeight: 700, border: "none", outline: "none", fontFamily: "inherit", marginBottom: 8 }}
-        />
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            placeholder="Handicap index"
-            type="number"
-            inputMode="decimal"
-            value={player.index}
-            onChange={(e) => onUpdate({ index: e.target.value })}
-            className="mono"
-            style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
-          />
-          <select
-            value={player.tee}
-            onChange={(e) => onUpdate({ tee: e.target.value })}
-            style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
-          >
-            {course.tees.map((t) => (
-              <option key={t.id} value={t.id}>{t.label}</option>
-            ))}
-          </select>
-        </div>
+        {isFoursomes ? (
+          <>
+            <div style={{ fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>Player A</div>
+            <input
+              placeholder="Player A name"
+              value={player.name}
+              onChange={(e) => onUpdate({ name: e.target.value })}
+              style={{ width: "100%", fontSize: 15, fontWeight: 700, border: "none", outline: "none", fontFamily: "inherit", marginBottom: 6 }}
+            />
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input
+                placeholder="Handicap index"
+                type="number"
+                inputMode="decimal"
+                value={player.index}
+                onChange={(e) => onUpdate({ index: e.target.value })}
+                className="mono"
+                style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+              />
+              <select
+                value={player.tee}
+                onChange={(e) => onUpdate({ tee: e.target.value })}
+                style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+              >
+                {course.tees.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>Player B</div>
+            <input
+              placeholder="Player B name"
+              value={player.partnerName || ""}
+              onChange={(e) => onUpdate({ partnerName: e.target.value })}
+              style={{ width: "100%", fontSize: 15, fontWeight: 700, border: "none", outline: "none", fontFamily: "inherit", marginBottom: 6 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                placeholder="Handicap index"
+                type="number"
+                inputMode="decimal"
+                value={player.partnerIndex || ""}
+                onChange={(e) => onUpdate({ partnerIndex: e.target.value })}
+                className="mono"
+                style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+              />
+              <select
+                value={player.partnerTee || course.tees[0]?.id}
+                onChange={(e) => onUpdate({ partnerTee: e.target.value })}
+                style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+              >
+                {course.tees.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="mono" style={{ fontSize: 11.5, color: "#6B6B5F", marginTop: 10 }}>
+              {allowedA} + {allowedB} → ({allowedA}+{allowedB})/2 = <strong style={{ color: headerColor }}>{ph}</strong> combined
+              {handicapAllowance !== 100 ? ` (at ${handicapAllowance}% allowance)` : ""}
+            </div>
+          </>
+        ) : (
+          <>
+            <input
+              placeholder="Player name"
+              value={player.name}
+              onChange={(e) => onUpdate({ name: e.target.value })}
+              style={{ width: "100%", fontSize: 16, fontWeight: 700, border: "none", outline: "none", fontFamily: "inherit", marginBottom: 8 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                placeholder="Handicap index"
+                type="number"
+                inputMode="decimal"
+                value={player.index}
+                onChange={(e) => onUpdate({ index: e.target.value })}
+                className="mono"
+                style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+              />
+              <select
+                value={player.tee}
+                onChange={(e) => onUpdate({ tee: e.target.value })}
+                style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+              >
+                {course.tees.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            {handicapAllowance !== 100 && (
+              <div className="mono" style={{ fontSize: 11, color: "#6B6B5F", marginTop: 6 }}>
+                Course HCP {rawA} at {handicapAllowance}% → {ph}
+              </div>
+            )}
+          </>
+        )}
         <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 8 }}>
-          Playing HCP {ph} · {pts} pts so far
+          Playing HCP {ph} · {isMedal ? `net ${netTotal} (${formatRelToPar(relToPar)})` : `${pts} pts`} so far
         </div>
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
+          Shots received — {ph}
+        </div>
+        {strokeHoles.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#9B9885" }}>No strokes at this handicap.</div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {strokeHoles.map((h) => (
+              <div
+                key={h.hole}
+                className="mono"
+                style={{
+                  minWidth: 30, textAlign: "center", padding: "5px 6px", borderRadius: 6,
+                  background: `${headerColor}12`, color: headerColor, fontSize: 12, fontWeight: 700,
+                }}
+              >
+                {h.hole}{h.strokes > 1 ? `×${h.strokes}` : ""}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Out</div>
@@ -2149,6 +2416,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           />
         </div>
       </div>
+
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Course / venue name</div>
