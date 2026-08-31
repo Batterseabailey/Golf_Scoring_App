@@ -810,6 +810,23 @@ function AppInner() {
 
   const updateScoring = (s) => updateRound({ scoring: s });
 
+  // Belt-and-braces: updateDraw/updateFormat above resync pairs the moment
+  // you actively change something, but this catches everything else too —
+  // data that was already stale before this fix existed, a page reload,
+  // switching to a different day, etc. Runs a cheap comparison and only
+  // writes if the roster's pairing genuinely doesn't match the draw.
+  useEffect(() => {
+    if (loading || !isFoursomes || draw.length === 0) return;
+    const fresh = pairPlayersFromDraw(players, draw, course);
+    const sig = (list) => list.map((p) => `${p.name}|${p.partnerName || ""}`).sort().join(",");
+    if (sig(players) !== sig(fresh)) {
+      updateRound({ players: syncPairsFromDraw(players, draw) });
+    }
+    // Deliberately not depending on `players` — this should react to the
+    // draw/format changing (or a fresh load), not to every score edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFoursomes, draw, activeRoundId, loading]);
+
   const updateDrawStartTime = (t) => updateRound({ drawStartTime: t });
 
   const updateDrawInterval = (mins) => updateRound({ drawInterval: mins });
