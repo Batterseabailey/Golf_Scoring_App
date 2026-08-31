@@ -1662,14 +1662,19 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         </div>
       </div>
 
-      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+      <div
+        style={{
+          background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12,
+          position: "sticky", top: 0, zIndex: 20, boxShadow: "0 4px 10px rgba(0,0,0,0.08)",
+        }}
+      >
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
           Tap a player below, then tap a slot to place them there. Tap a filled slot to send them back to the pool.
         </div>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
           Players {pool.length > 0 ? `(${pool.length} unplaced)` : "— all placed"}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 140, overflowY: "auto" }}>
           {pool.length === 0 && (
             <div style={{ fontSize: 12, color: "#9B9885" }}>
               {players.length === 0 ? "Add players in Scorer entry first." : "Every player has been placed below."}
