@@ -183,6 +183,61 @@ function formatRelToPar(rel) {
   return rel > 0 ? `+${rel}` : `${rel}`;
 }
 
+// A 4-ball is two pairs playing each other — show it as "A & B v C & D"
+// rather than joining all four names the same way.
+function formatGroupNames(names) {
+  if (!names || names.length === 0) return "";
+  if (names.length === 4) {
+    return `${names[0]} & ${names[1]} v ${names[2]} & ${names[3]}`;
+  }
+  return names.join(" & ");
+}
+
+function findPlayerByName(rosterPlayers, name) {
+  const target = (name || "").trim().toLowerCase();
+  if (!target) return null;
+  return rosterPlayers.find((p) => (p.name || "").trim().toLowerCase() === target) || null;
+}
+
+function individualPH(course, rosterPlayer, allowancePct) {
+  if (!rosterPlayer) return null;
+  return allowedHandicap(playingHandicap(course, Number(rosterPlayer.index) || 0, rosterPlayer.tee), allowancePct);
+}
+
+function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
+  const a = findPlayerByName(rosterPlayers, nameA);
+  const b = findPlayerByName(rosterPlayers, nameB);
+  if (!a || !b) return null;
+  const allowedA = individualPH(course, a, allowancePct);
+  const allowedB = individualPH(course, b, allowancePct);
+  return Math.floor((allowedA + allowedB) / 2 + 0.5);
+}
+
+// Draw groups only ever store names (not full player records), so shots are
+// looked up against the current roster + course each time this renders —
+// meaning it's always correct for whichever course this day is set to,
+// with no separate step to keep it in sync.
+function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes) {
+  if (!names || names.length === 0) return "";
+  const withPh = (n) => {
+    const p = findPlayerByName(rosterPlayers, n);
+    const ph = individualPH(course, p, allowancePct);
+    return ph !== null ? `${n} (${ph})` : n;
+  };
+
+  if (names.length === 4) {
+    if (isFoursomes) {
+      const phA = pairPH(course, rosterPlayers, allowancePct, names[0], names[1]);
+      const phB = pairPH(course, rosterPlayers, allowancePct, names[2], names[3]);
+      const pairAStr = `${names[0]} & ${names[1]}${phA !== null ? ` (${phA})` : ""}`;
+      const pairBStr = `${names[2]} & ${names[3]}${phB !== null ? ` (${phB})` : ""}`;
+      return `${pairAStr} v ${pairBStr}`;
+    }
+    return `${withPh(names[0])} & ${withPh(names[1])} v ${withPh(names[2])} & ${withPh(names[3])}`;
+  }
+  return names.map(withPh).join(" & ");
+}
+
 function emptyRound(label, course) {
   return {
     id: crypto.randomUUID(),
@@ -830,7 +885,7 @@ export default function App() {
         <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} isMedal={isMedal} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
-        <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} />
+        <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -853,12 +908,15 @@ export default function App() {
           onBack={() => setShowDrawSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
+          course={course}
           format={format}
           onUpdateFormat={updateFormat}
           scoring={scoring}
           onUpdateScoring={updateScoring}
           handicapAllowance={handicapAllowance}
           onUpdateHandicapAllowance={(pct) => updateRound({ handicapAllowance: pct })}
+          library={library}
+          onLoadFromLibrary={loadCourseFromLibrary}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1204,7 +1262,7 @@ function HoleByHole({ course, player, headerColor, isMedal }) {
   );
 }
 
-function DrawView({ draw, startingHole, headerColor, accentColor }) {
+function DrawView({ draw, startingHole, headerColor, accentColor, course, players, handicapAllowance, isFoursomes }) {
   if (draw.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
@@ -1238,7 +1296,9 @@ function DrawView({ draw, startingHole, headerColor, accentColor }) {
             {entry.time}
           </div>
           <div style={{ fontSize: 14, flex: 1 }}>
-            {entry.players && entry.players.length > 0 ? entry.players.join(" & ") : entry.group || "—"}
+            {entry.players && entry.players.length > 0
+              ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, isFoursomes)
+              : entry.group || "—"}
           </div>
         </div>
       ))}
@@ -1246,10 +1306,11 @@ function DrawView({ draw, startingHole, headerColor, accentColor }) {
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
+  const [confirmLoadId, setConfirmLoadId] = useState(null);
 
   const doImport = () => {
     const parsed = parsePastedDraw(pasteText);
@@ -1270,6 +1331,56 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Course
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{course.name}</div>
+        {library.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: "#9B9885" }}>
+            No saved courses yet — save one from Course setup to switch quickly here.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 6 }}>Switch to a saved course:</div>
+            {library.map((entry) => (
+              <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+                <div style={{ flex: 1, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {entry.name}
+                </div>
+                {confirmLoadId === entry.id ? (
+                  <>
+                    <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Clears players?</span>
+                    <button
+                      onClick={() => { onLoadFromLibrary(entry); setConfirmLoadId(null); }}
+                      style={{ fontSize: 11.5, fontWeight: 700, color: headerColor, background: "none", border: "none", padding: "4px 6px" }}
+                    >
+                      Yes, switch
+                    </button>
+                    <button
+                      onClick={() => setConfirmLoadId(null)}
+                      style={{ fontSize: 11.5, color: "#9B9885", background: "none", border: "none", padding: "4px 6px" }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setConfirmLoadId(entry.id)}
+                    style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, background: "none", border: `1px solid ${headerColor}`, borderRadius: 6, padding: "4px 9px" }}
+                  >
+                    Switch
+                  </button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+        <div style={{ fontSize: 10, color: "#9B9885", marginTop: 8 }}>
+          Full course editing (tees, holes, par/SI) still lives in Course setup.
+        </div>
+      </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Starting tee (same for everyone)</div>
@@ -1386,7 +1497,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -1422,7 +1533,9 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                 <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
                   <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56 }}>{entry.time}</div>
                   <div style={{ flex: 1, fontSize: 12.5 }}>
-                    {entry.players && entry.players.length > 0 ? entry.players.join(" & ") : entry.group || "—"}
+                    {entry.players && entry.players.length > 0
+                      ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, format === "foursomes")
+                      : entry.group || "—"}
                   </div>
                   <button onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
                     <X size={13} />
@@ -1446,7 +1559,7 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => {
@@ -1465,7 +1578,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor }) {
   const [intervalMinutes, setIntervalMinutes] = useState(8);
 
   const assignedNames = new Set(rows.flatMap((r) => r.slots.filter(Boolean)));
-  const pool = players.filter((p) => p.name && !assignedNames.has(p.name));
+  const pool = players
+    .filter((p) => p.name && !assignedNames.has(p.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const pickUp = (name) => setSelected(selected === name ? null : name);
 
@@ -1607,6 +1722,11 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor }) {
               </button>
             ))}
           </div>
+          {row.slots.some(Boolean) && (
+            <div className="mono" style={{ fontSize: 10.5, color: "#8A8774", marginTop: 6 }}>
+              {formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes)}
+            </div>
+          )}
         </div>
       ))}
 
@@ -1810,6 +1930,11 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
 
+  // The roster here is for finding/editing a player, not for ranking — sort
+  // it alphabetically rather than reusing the score-based leaderboard order.
+  const alphaSorted = [...ranked].sort((a, b) =>
+    (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
+  );
   const doImport = () => {
     const newPlayers = parsePastedPlayers(pasteText, course);
     if (newPlayers.length === 0) {
@@ -1927,7 +2052,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
           Load example players (demo)
         </button>
       )}
-      {ranked.map((p) => (
+      {alphaSorted.map((p) => (
         <div
           key={p.id}
           style={{
