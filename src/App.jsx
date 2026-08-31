@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock, FileText, Upload } from "lucide-react";
 import Papa from "papaparse";
 
@@ -114,7 +114,8 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
     ? combinedHandicap(course, player, allowancePct)
     : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct);
   let pts = 0, thru = 0, netTotal = 0, parSoFar = 0;
-  player.scores.forEach((g, i) => {
+  const scores = Array.isArray(player.scores) ? player.scores : Array(18).fill("");
+  scores.forEach((g, i) => {
     if (g == null || g === "") return;
     thru += 1;
     const strokes = strokesOnHole(course, ph, i);
@@ -250,6 +251,8 @@ function emptyRound(label, course) {
     format: "individual", // individual | foursomes
     scoring: "stableford", // stableford | medal
     handicapAllowance: 100, // percentage of course handicap allowed
+    drawStartTime: "09:00",
+    drawInterval: 8,
   };
 }
 
@@ -265,6 +268,8 @@ function sanitizeRound(r, fallbackLabel) {
     format: r.format === "foursomes" ? "foursomes" : "individual",
     scoring: r.scoring === "medal" ? "medal" : "stableford",
     handicapAllowance: typeof r.handicapAllowance === "number" && r.handicapAllowance > 0 ? r.handicapAllowance : 100,
+    drawStartTime: typeof r.drawStartTime === "string" && r.drawStartTime ? r.drawStartTime : "09:00",
+    drawInterval: typeof r.drawInterval === "number" && r.drawInterval > 0 ? r.drawInterval : 8,
   };
 }
 
@@ -411,7 +416,47 @@ function CodeGate({ onSubmit }) {
   );
 }
 
-export default function App() {
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            background: "#F1EFE3", minHeight: "100vh", fontFamily: "'Iowan Old Style','Georgia',serif",
+            color: "#1B1B1B", display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }}
+        >
+          <div style={{ width: "100%", maxWidth: 340, textAlign: "center" }}>
+            <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>Something went wrong</div>
+            <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 16 }}>
+              This screen hit an unexpected error rather than just showing a blank page. Reloading usually fixes it —
+              your data is saved separately and won't be lost.
+            </div>
+            <button
+              onClick={() => window.location.reload()}
+              style={{ padding: "11px 20px", borderRadius: 8, border: "none", background: "#1B2A4A", color: "#FFFFFF", fontWeight: 600, fontSize: 14 }}
+            >
+              Reload
+            </button>
+            <div className="mono" style={{ fontSize: 10, color: "#9B9885", marginTop: 16, wordBreak: "break-word" }}>
+              {String(this.state.error && this.state.error.message)}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AppInner() {
   // The event code is what actually separates one club/meeting's data from
   // another — everyone who knows the same code shares the same live board;
   // nobody else can see or reach it. It seeds from a ?code= URL param so a
@@ -428,7 +473,7 @@ export default function App() {
   const [state, setState] = useState(DEFAULT_STATE);
   const { orgName, accentColor, headerColor, pin, rounds, activeRoundId, documents } = state;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
-  const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance } = activeRound;
+  const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
   const isMedal = scoring === "medal";
   const [loading, setLoading] = useState(true);
@@ -617,12 +662,38 @@ export default function App() {
   const copyPlayersFromRound = (sourceRoundId) => {
     const source = rounds.find((r) => r.id === sourceRoundId);
     if (!source) return;
+
+    const validTee = (teeId) => (teeId && course.tees.some((t) => t.id === teeId)) ? teeId : course.tees[0]?.id || "";
+
+    if (isFoursomes && source.format !== "foursomes") {
+      // Source players are individuals, but this day needs pairs — pair
+      // them up two-by-two (1st+2nd, 3rd+4th, ...) instead of creating a
+      // half-empty pair per person.
+      const copied = [];
+      for (let i = 0; i < source.players.length; i += 2) {
+        const a = source.players[i];
+        const b = source.players[i + 1];
+        copied.push({
+          id: crypto.randomUUID(),
+          name: a.name,
+          index: a.index,
+          tee: validTee(a.tee),
+          scores: Array(18).fill(""),
+          partnerName: b ? b.name : "",
+          partnerIndex: b ? b.index : "",
+          partnerTee: b ? validTee(b.tee) : course.tees[0]?.id || "",
+        });
+      }
+      updateRound({ players: copied });
+      return;
+    }
+
     const copied = source.players.map((p) => {
       const base = {
         id: crypto.randomUUID(),
         name: p.name,
         index: p.index,
-        tee: course.tees.some((t) => t.id === p.tee) ? p.tee : course.tees[0]?.id || "",
+        tee: validTee(p.tee),
         scores: Array(18).fill(""),
       };
       if (isFoursomes) {
@@ -630,7 +701,7 @@ export default function App() {
           ...base,
           partnerName: p.partnerName || "",
           partnerIndex: p.partnerIndex || "",
-          partnerTee: p.partnerTee && course.tees.some((t) => t.id === p.partnerTee) ? p.partnerTee : course.tees[0]?.id || "",
+          partnerTee: validTee(p.partnerTee),
         };
       }
       return base;
@@ -657,6 +728,10 @@ export default function App() {
   const updateFormat = (f) => updateRound({ format: f });
 
   const updateScoring = (s) => updateRound({ scoring: s });
+
+  const updateDrawStartTime = (t) => updateRound({ drawStartTime: t });
+
+  const updateDrawInterval = (mins) => updateRound({ drawInterval: mins });
 
   const uploadDocument = async (file) => {
     const code = eventCodeRef.current;
@@ -917,6 +992,10 @@ export default function App() {
           onUpdateHandicapAllowance={(pct) => updateRound({ handicapAllowance: pct })}
           library={library}
           onLoadFromLibrary={loadCourseFromLibrary}
+          drawStartTime={drawStartTime}
+          onUpdateDrawStartTime={updateDrawStartTime}
+          drawInterval={drawInterval}
+          onUpdateDrawInterval={updateDrawInterval}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1228,7 +1307,7 @@ function HoleByHole({ course, player, headerColor, isMedal }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4 }}>
         {holes.map((h) => {
           const idx = h - 1;
-          const gross = player.scores[idx];
+          const gross = Array.isArray(player.scores) ? player.scores[idx] : "";
           const pts = holePoints(course, gross, idx, player.ph);
           const netVsPar = gross !== "" ? (Number(gross) - strokesOnHole(course, player.ph, idx)) - course.holes[idx].par : null;
           return (
@@ -1306,7 +1385,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1497,7 +1576,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -1559,7 +1638,7 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => {
@@ -1574,8 +1653,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   });
   const [selected, setSelected] = useState(null); // player name currently picked up
   const [savedMsg, setSavedMsg] = useState(false);
-  const [startTime, setStartTime] = useState("09:00");
-  const [intervalMinutes, setIntervalMinutes] = useState(8);
+  // startTime/intervalMinutes are now saved as part of the round (passed in
+  // as props) rather than local state — previously these reset to defaults
+  // any time this screen was left and re-opened.
 
   const assignedNames = new Set(rows.flatMap((r) => r.slots.filter(Boolean)));
   const pool = players
@@ -1633,7 +1713,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             <input
               type="time"
               value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
+              onChange={(e) => onUpdateStartTime(e.target.value)}
               className="mono"
               style={{ fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
@@ -1645,7 +1725,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               inputMode="numeric"
               min={1}
               value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))}
+              onChange={(e) => onUpdateInterval(Math.max(1, Number(e.target.value) || 1))}
               className="mono"
               style={{ fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
@@ -2070,7 +2150,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 600 }}>
                 {isFoursomes
-                  ? `${p.name || "Player A"} & ${p.partnerName || "Player B"}`
+                  ? `${p.name || "New pair"}${p.partnerName ? ` & ${p.partnerName}` : " — add partner"}`
                   : p.name || "New player"}
               </div>
               <div className="mono" style={{ fontSize: 11, color: "#8A8774" }}>
@@ -2204,7 +2284,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 10 }}>
       {holes.map((h) => {
         const idx = h - 1;
-        const val = player.scores[idx];
+        const val = Array.isArray(player.scores) ? player.scores[idx] : "";
         const p = holePoints(course, val, idx, ph);
         const netVsPar = val !== "" ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
         return (
@@ -2687,5 +2767,13 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
         )}
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
