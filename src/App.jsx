@@ -194,10 +194,52 @@ function formatGroupNames(names) {
   return names.join(" & ");
 }
 
-function findPlayerByName(rosterPlayers, name) {
+// Searches BOTH the primary name and (for existing pairs) the partner name
+// — necessary because once someone is stored as a partner rather than a
+// primary roster entry, a plain name-only lookup can no longer see them,
+// which would silently lose their handicap on a later re-pairing.
+function findIndividualByName(rosterPlayers, name) {
   const target = (name || "").trim().toLowerCase();
   if (!target) return null;
-  return rosterPlayers.find((p) => (p.name || "").trim().toLowerCase() === target) || null;
+  for (const p of rosterPlayers) {
+    if ((p.name || "").trim().toLowerCase() === target) {
+      return { index: p.index, tee: p.tee };
+    }
+    if ((p.partnerName || "").trim().toLowerCase() === target) {
+      return { index: p.partnerIndex, tee: p.partnerTee };
+    }
+  }
+  return null;
+}
+
+// Builds Foursomes roster pairs straight from the draw's groupings — every
+// draw entry's names are taken two at a time (1st+2nd, 3rd+4th within that
+// group), pulling each person's existing handicap/tee from the current
+// roster by name. This replaces the whole roster with proper pairs.
+function pairPlayersFromDraw(players, draw, course) {
+  const validTee = (teeId) => (teeId && course.tees.some((t) => t.id === teeId)) ? teeId : course.tees[0]?.id || "";
+  const pairs = [];
+  draw.forEach((entry) => {
+    const names = entry.players || [];
+    for (let i = 0; i < names.length; i += 2) {
+      const nameA = names[i];
+      const nameB = names[i + 1];
+      if (!nameA) continue;
+      const pA = findIndividualByName(players, nameA);
+      const pB = nameB ? findIndividualByName(players, nameB) : null;
+      pairs.push({
+        id: crypto.randomUUID(),
+        name: nameA,
+        index: pA ? pA.index : "",
+        tee: validTee(pA && pA.tee),
+        scores: Array(18).fill(""),
+        partnerName: nameB || "",
+        partnerIndex: pB ? pB.index : "",
+        partnerTee: validTee(pB && pB.tee),
+      });
+    }
+  });
+  return pairs;
 }
 
 function individualPH(course, rosterPlayer, allowancePct) {
@@ -206,8 +248,8 @@ function individualPH(course, rosterPlayer, allowancePct) {
 }
 
 function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
-  const a = findPlayerByName(rosterPlayers, nameA);
-  const b = findPlayerByName(rosterPlayers, nameB);
+  const a = findIndividualByName(rosterPlayers, nameA);
+  const b = findIndividualByName(rosterPlayers, nameB);
   if (!a || !b) return null;
   const allowedA = individualPH(course, a, allowancePct);
   const allowedB = individualPH(course, b, allowancePct);
@@ -221,7 +263,7 @@ function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
 function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes) {
   if (!names || names.length === 0) return "";
   const withPh = (n) => {
-    const p = findPlayerByName(rosterPlayers, n);
+    const p = findIndividualByName(rosterPlayers, n);
     const ph = individualPH(course, p, allowancePct);
     return ph !== null ? `${n} (${ph})` : n;
   };
@@ -323,13 +365,23 @@ function sanitizeState(parsed) {
 // ---- Combined standings across every round, matched by player name ----
 function combinedStandings(rounds) {
   const byName = new Map();
+  const credit = (name, roundId, t) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    if (!byName.has(trimmed)) byName.set(trimmed, { name: trimmed, perRound: {} });
+    byName.get(trimmed).perRound[roundId] = t;
+  };
   rounds.forEach((round) => {
     round.players.forEach((p) => {
-      const name = (p.name || "").trim();
-      if (!name) return;
       const t = totals(round.course, p, round.handicapAllowance, round.format === "foursomes");
-      if (!byName.has(name)) byName.set(name, { name, perRound: {} });
-      byName.get(name).perRound[round.id] = t;
+      credit(p.name, round.id, t);
+      // On a Foursomes day, both partners earned this result together — the
+      // combined-across-days table only makes sense (and stays comparable
+      // to Individual/Medal days) if each person is credited individually,
+      // not just whichever name happens to be stored first in the pair.
+      if (round.format === "foursomes" && p.partnerName) {
+        credit(p.partnerName, round.id, t);
+      }
     });
   });
   return [...byName.values()].map((row) => {
@@ -709,6 +761,23 @@ function AppInner() {
     updateRound({ players: copied });
   };
 
+  // Merges a fresh set of pairs derived from the draw onto the current
+  // roster — a pair still grouped the same way keeps its existing scores
+  // and handicaps rather than being reset. Shared by both "the draw
+  // changed" and "format just switched to Foursomes" triggers, so pairs
+  // stay correct automatically in either case, with no manual step.
+  const syncPairsFromDraw = (currentPlayers, currentDraw) => {
+    const freshPairs = pairPlayersFromDraw(currentPlayers, currentDraw, course);
+    return freshPairs.map((np) => {
+      const existing = currentPlayers.find(
+        (p) => p.name === np.name && (p.partnerName || "") === (np.partnerName || "")
+      );
+      return existing
+        ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, scores: existing.scores }
+        : np;
+    });
+  };
+
   const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
   const updateOrgName = (name) => save({ orgName: name });
@@ -719,13 +788,25 @@ function AppInner() {
 
   const updatePin = (newPin) => save({ pin: newPin });
 
-  const updateDraw = (newDraw) => updateRound({ draw: newDraw });
+  const updateDraw = (newDraw) => {
+    if (!isFoursomes) {
+      updateRound({ draw: newDraw });
+      return;
+    }
+    updateRound({ draw: newDraw, players: syncPairsFromDraw(players, newDraw) });
+  };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
 
   const updateStartingHole = (hole) => updateRound({ startingHole: hole });
 
-  const updateFormat = (f) => updateRound({ format: f });
+  const updateFormat = (f) => {
+    if (f === "foursomes" && draw.length > 0) {
+      updateRound({ format: f, players: syncPairsFromDraw(players, draw) });
+      return;
+    }
+    updateRound({ format: f });
+  };
 
   const updateScoring = (s) => updateRound({ scoring: s });
 
