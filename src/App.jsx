@@ -2756,14 +2756,15 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
   const parRefs = useRef({});
   const siRefs = useRef({});
 
-  // Enter jumps to the next hole's box in the same column (Par → Par,
-  // SI → SI) and selects its existing value, so the next keystroke
-  // replaces it outright instead of needing a manual clear first.
+  // Enter follows the natural reading order down the card: Par → SI for
+  // the same hole, then on to the next hole's Par — rather than jumping
+  // straight down one column. Selects the destination's existing value so
+  // the next keystroke replaces it outright instead of needing a manual
+  // clear first.
   const handleHoleKeyDown = (e, field, idx) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    const refs = field === "par" ? parRefs : siRefs;
-    const next = refs.current[idx + 1];
+    const next = field === "par" ? siRefs.current[idx] : parRefs.current[idx + 1];
     if (next) {
       next.focus();
       next.select();
