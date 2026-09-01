@@ -288,23 +288,26 @@ function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
 // with no separate step to keep it in sync.
 function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes) {
   if (!names || names.length === 0) return "";
-  const withPh = (n) => {
+  // Each person's own raw handicap index, right after their name — lets a
+  // player instantly spot-check that what's on file for them is correct,
+  // as distinct from the calculated on-course playing handicap.
+  const withIndex = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
-    const ph = individualPH(course, p, allowancePct);
-    return ph !== null ? `${n} (${ph})` : n;
+    const idx = p && p.index !== "" && p.index != null ? p.index : null;
+    return idx !== null ? `${n} (${idx})` : n;
   };
 
   if (names.length === 4) {
     if (isFoursomes) {
       const phA = pairPH(course, rosterPlayers, allowancePct, names[0], names[1]);
       const phB = pairPH(course, rosterPlayers, allowancePct, names[2], names[3]);
-      const pairAStr = `${names[0]} & ${names[1]}${phA !== null ? ` (${phA})` : ""}`;
-      const pairBStr = `${names[2]} & ${names[3]}${phB !== null ? ` (${phB})` : ""}`;
+      const pairAStr = `${withIndex(names[0])} & ${withIndex(names[1])}${phA !== null ? ` (${phA})` : ""}`;
+      const pairBStr = `${withIndex(names[2])} & ${withIndex(names[3])}${phB !== null ? ` (${phB})` : ""}`;
       return `${pairAStr} v ${pairBStr}`;
     }
-    return `${withPh(names[0])} & ${withPh(names[1])} v ${withPh(names[2])} & ${withPh(names[3])}`;
+    return `${withIndex(names[0])} & ${withIndex(names[1])} v ${withIndex(names[2])} & ${withIndex(names[3])}`;
   }
-  return names.map(withPh).join(" & ");
+  return names.map(withIndex).join(" & ");
 }
 
 function emptyRound(label, course) {
