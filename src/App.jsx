@@ -1349,7 +1349,7 @@ function AppInner() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Flag size={20} color={accentColor} />
-            <span style={{ fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+            <span style={{ fontSize: 22, letterSpacing: "0.08em", textTransform: "uppercase", opacity: 0.75 }}>
               {orgName}
             </span>
           </div>
