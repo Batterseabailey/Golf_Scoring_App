@@ -805,9 +805,13 @@ function AppInner() {
   // a blank handicap for anyone who has one — never overwrites a value
   // someone's already deliberately entered. Used when a draw paste also
   // carries handicap figures alongside the names.
-  const importHandicapsFromDraw = (pairs) => {
-    if (!pairs || pairs.length === 0) return;
-    let next = [...players];
+  // Merges {name, index} handicap pairs onto a player list in memory —
+  // adds anyone missing, fills a blank index, never overwrites a value
+  // already entered. Doesn't write to state itself; the caller combines
+  // this with whatever else needs to happen in the same update.
+  const mergeHandicapsIntoPlayers = (currentPlayers, pairs) => {
+    if (!pairs || pairs.length === 0) return currentPlayers;
+    let next = [...currentPlayers];
     pairs.forEach(({ name, index }) => {
       const target = normalizeName(name);
       const existingIdx = next.findIndex((p) => normalizeName(p.name) === target);
@@ -817,7 +821,7 @@ function AppInner() {
         next[existingIdx] = { ...next[existingIdx], index };
       }
     });
-    updateRound({ players: next });
+    return next;
   };
 
   const importPlayers = (newPlayers) => {
@@ -926,12 +930,18 @@ function AppInner() {
 
   const updatePin = (newPin) => save({ pin: newPin });
 
-  const updateDraw = (newDraw) => {
+  const updateDraw = (newDraw, hcpPairs) => {
+    // Everything the draw paste can touch (roster handicaps, then pairing)
+    // gets computed here in one pass from the same starting snapshot of
+    // players, and written in a single update — doing this as two separate
+    // save() calls previously meant the second one could work from
+    // stale data and silently undo the first.
+    const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     if (!isFoursomes) {
-      updateRound({ draw: newDraw });
+      updateRound({ draw: newDraw, players: withHandicaps });
       return;
     }
-    updateRound({ draw: newDraw, players: syncPairsFromDraw(players, newDraw) });
+    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withHandicaps, newDraw, course) });
   };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
@@ -1218,7 +1228,6 @@ function AppInner() {
           onRenameRound={(label) => renameRound(activeRoundId, label)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
           onAddPlayerQuick={addPlayerQuick}
-          onImportHandicapsFromDraw={importHandicapsFromDraw}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1624,7 +1633,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick, onImportHandicapsFromDraw }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1636,11 +1645,8 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       setMsg("No rows found — make sure each line starts with a time.");
       return;
     }
-    onUpdate(parsed);
     const hcpPairs = extractHandicapsFromDrawPaste(pasteText);
-    if (hcpPairs.length > 0) {
-      onImportHandicapsFromDraw(hcpPairs);
-    }
+    onUpdate(parsed, hcpPairs);
     setMsg(
       `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
       (hcpPairs.length > 0 ? `, ${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"} added to the roster.` : ".")
