@@ -198,14 +198,21 @@ function formatGroupNames(names) {
 // — necessary because once someone is stored as a partner rather than a
 // primary roster entry, a plain name-only lookup can no longer see them,
 // which would silently lose their handicap on a later re-pairing.
+// Trims, lowercases, and collapses any run of whitespace to a single space
+// — makes name-matching forgiving of things like a stray double-space from
+// pasting, which would otherwise silently fail an exact-match lookup.
+function normalizeName(name) {
+  return (name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function findIndividualByName(rosterPlayers, name) {
-  const target = (name || "").trim().toLowerCase();
+  const target = normalizeName(name);
   if (!target) return null;
   for (const p of rosterPlayers) {
-    if ((p.name || "").trim().toLowerCase() === target) {
+    if (normalizeName(p.name) === target) {
       return { index: p.index, tee: p.tee };
     }
-    if ((p.partnerName || "").trim().toLowerCase() === target) {
+    if (normalizeName(p.partnerName) === target) {
       return { index: p.partnerIndex, tee: p.partnerTee };
     }
   }
@@ -252,7 +259,7 @@ function mergedPairsFromDraw(players, draw, course) {
   const freshPairs = pairPlayersFromDraw(players, draw, course);
   return freshPairs.map((np) => {
     const existing = players.find(
-      (p) => p.name === np.name && (p.partnerName || "") === (np.partnerName || "")
+      (p) => normalizeName(p.name) === normalizeName(np.name) && normalizeName(p.partnerName) === normalizeName(np.partnerName)
     );
     return existing
       ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, scores: existing.scores }
