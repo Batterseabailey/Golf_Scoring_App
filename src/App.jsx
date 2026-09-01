@@ -1978,6 +1978,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [selected, setSelected] = useState(null); // player name currently picked up
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
+  const [dragOverSlot, setDragOverSlot] = useState(null); // { rowId, slotIdx } | null — visual feedback for mouse drag-and-drop
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [newPlayerIndex, setNewPlayerIndex] = useState("");
@@ -2010,9 +2011,10 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   // (picked up from another slot) and the destination is occupied, the
   // two players swap; the pool naturally reabsorbs anyone displaced from
   // a pool-originated placement, since it's derived from who's assigned.
-  const placeOrSwap = (targetRowId, targetSlotIdx) => {
-    if (!selected) return;
-    const { name, from } = selected;
+  const placeOrSwap = (targetRowId, targetSlotIdx, explicitSelection) => {
+    const sel = explicitSelection || selected;
+    if (!sel) return;
+    const { name, from } = sel;
     if (from && from.rowId === targetRowId && from.slotIdx === targetSlotIdx) {
       setSelected(null);
       return;
@@ -2120,8 +2122,8 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         }}
       >
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-          Tap a player below, then tap a slot to place them there. Tap a filled slot to view or edit them —
-          from there you can also move them to a different slot.
+          On a computer, drag a player straight onto a slot. On a phone, tap a player below then tap a slot to
+          place them — tap a filled slot to view, edit, or move them elsewhere.
         </div>
         {selected && (
           <div
@@ -2148,12 +2150,15 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           {pool.map((p) => (
             <button
               key={p.id}
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ name: p.name, from: null }))}
               onClick={() => pickUp(p.name)}
               style={{
                 padding: "6px 11px", borderRadius: 20, fontSize: 12.5, fontWeight: 600,
                 border: selected && selected.name === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
                 background: selected && selected.name === p.name ? `${accentColor}14` : "#FFFFFF",
                 color: selected && selected.name === p.name ? accentColor : "#1B1B1B",
+                cursor: "grab",
               }}
             >
               {p.name}
@@ -2228,21 +2233,43 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
             {row.slots.map((name, slotIdx) => {
               const isMoveOrigin = selected && selected.from && selected.from.rowId === row.id && selected.from.slotIdx === slotIdx;
+              const isDragOver = dragOverSlot && dragOverSlot.rowId === row.id && dragOverSlot.slotIdx === slotIdx;
               return (
                 <button
                   key={slotIdx}
+                  draggable={!!name}
+                  onDragStart={(e) => {
+                    if (!name) return;
+                    e.dataTransfer.setData("text/plain", JSON.stringify({ name, from: { rowId: row.id, slotIdx } }));
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={(e) => { e.preventDefault(); setDragOverSlot({ rowId: row.id, slotIdx }); }}
+                  onDragLeave={() => setDragOverSlot((prev) => (prev && prev.rowId === row.id && prev.slotIdx === slotIdx ? null : prev))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverSlot(null);
+                    try {
+                      const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+                      placeOrSwap(row.id, slotIdx, data);
+                    } catch {
+                      // ignore a drop that isn't one of our own player chips
+                    }
+                  }}
                   onClick={() => tapSlot(row.id, slotIdx, name)}
                   style={{
                     minHeight: 44, borderRadius: 7, fontSize: 11.5, fontWeight: 600, padding: "4px 4px",
-                    border: isMoveOrigin
+                    border: isDragOver
+                      ? `2px dashed ${accentColor}`
+                      : isMoveOrigin
                       ? `2px solid ${accentColor}`
                       : name
                       ? `1px solid ${headerColor}`
                       : selected
                       ? `1px dashed ${accentColor}`
                       : "1px dashed #D8D4C0",
-                    background: isMoveOrigin ? `${accentColor}14` : name ? `${headerColor}12` : "#FBFAF6",
+                    background: isDragOver ? `${accentColor}22` : isMoveOrigin ? `${accentColor}14` : name ? `${headerColor}12` : "#FBFAF6",
                     color: isMoveOrigin ? accentColor : name ? headerColor : "#C2BEA9",
+                    cursor: name ? "grab" : "default",
                   }}
                 >
                   {name || "—"}
