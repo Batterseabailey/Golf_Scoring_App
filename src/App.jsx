@@ -334,7 +334,7 @@ function sanitizeRound(r, fallbackLabel) {
   return {
     id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
     label: typeof r.label === "string" && r.label ? r.label : fallbackLabel,
-    date: typeof r.date === "string" ? r.date : "",
+    date: typeof r.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : "",
     course: isValidCourse(r.course) ? r.course : DEFAULT_COURSE,
     players: Array.isArray(r.players) ? r.players : [],
     draw: Array.isArray(r.draw) ? r.draw : [],
@@ -513,6 +513,15 @@ function normalizeTeeIndicator(raw) {
 // three kinds of data together. Used by parsePastedDraw and the two
 // roster-import extractors below, so there's exactly one place that
 // understands the row shape rather than three separate, driftable copies.
+// A short, all-caps token that isn't a known tee word and isn't a number
+// is almost certainly a competition code someone's about to register, not
+// a person's name — real names are virtually never written in pure caps
+// this short. Recognizing it even before it's formally added in Admin
+// means paste order never matters.
+function looksLikeCompetitionCode(raw) {
+  return /^[A-Z]{2,6}$/.test((raw || "").trim());
+}
+
 function walkPastedDrawRows(text, knownAbbreviations) {
   const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
   let rows = parsed.data;
@@ -535,7 +544,7 @@ function walkPastedDrawRows(text, knownAbbreviations) {
         if (lastName) handicaps.push({ name: lastName, index: val });
       } else if (isTeeToken(val)) {
         if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val) });
-      } else if (abbrevSet.has(val.toUpperCase())) {
+      } else if (abbrevSet.has(val.toUpperCase()) || looksLikeCompetitionCode(val)) {
         if (lastName) comps.push({ name: lastName, abbreviation: val.toUpperCase() });
       } else {
         names.push(val);
@@ -1105,6 +1114,20 @@ function AppInner() {
     save({ competitions: competitions.filter((c) => c.id !== id) });
   };
 
+  // Auto-registers a placeholder entry for any abbreviation seen in a draw
+  // paste that isn't already in the Competitions list — so a code works
+  // the moment it appears, with no requirement to set it up first. Returns
+  // the list of genuinely new abbreviations, so the caller can tell the
+  // user what still needs a proper full name.
+  const ensureCompetitionsExist = (abbreviations) => {
+    const existing = new Set(competitions.map((c) => c.abbreviation.toUpperCase()));
+    const fresh = [...new Set(abbreviations.map((a) => a.toUpperCase()))].filter((a) => !existing.has(a));
+    if (fresh.length > 0) {
+      save({ competitions: [...competitions, ...fresh.map((abbreviation) => ({ id: crypto.randomUUID(), abbreviation, fullName: "" }))] });
+    }
+    return fresh;
+  };
+
   // Updates a player's handicap index everywhere they appear, across every
   // day of the event — matches by name, checking both the primary name and
   // (for Foursomes pairs) the partner name, since it's the same portable
@@ -1246,6 +1269,10 @@ function AppInner() {
   };
 
   const updateRoundDate = (roundId, date) => {
+    // A genuine YYYY-MM-DD only — guards against a stray extra keystroke
+    // producing something like a 5-digit year, which would otherwise sort
+    // to a bizarre position without any obvious error.
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
     const updated = rounds.map((r) => (r.id === roundId ? { ...r, date } : r));
     save({ rounds: sortRoundsByDate(updated) });
   };
@@ -1512,6 +1539,7 @@ function AppInner() {
           onUpdatePlayerIndex={updatePlayerIndexByName}
           onUpdatePlayerDetails={updatePlayerDetailsByName}
           competitions={competitions}
+          onEnsureCompetitionsExist={ensureCompetitionsExist}
           onAddPlayerQuick={addPlayerQuick}
         />
       ) : showLocalRulesSetup ? (
@@ -1972,7 +2000,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1988,15 +2016,19 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
     const hcpPairs = extractHandicapsFromDrawPaste(pasteText, abbrevs);
     const teePairs = extractTeesFromDrawPaste(pasteText, abbrevs);
     const compPairs = extractCompetitionsFromDrawPaste(pasteText, abbrevs);
+    const newAbbrevs = onEnsureCompetitionsExist(compPairs.map((c) => c.abbreviation));
     onUpdate(parsed, hcpPairs, teePairs, compPairs);
     const extras = [];
     if (hcpPairs.length > 0) extras.push(`${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"}`);
     if (teePairs.length > 0) extras.push(`${teePairs.length} tee${teePairs.length === 1 ? "" : "s"}`);
     if (compPairs.length > 0) extras.push(`${compPairs.length} competition tag${compPairs.length === 1 ? "" : "s"}`);
-    setMsg(
+    let message =
       `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
-      (extras.length > 0 ? `, ${extras.join(", ")} added to the roster.` : ".")
-    );
+      (extras.length > 0 ? `, ${extras.join(", ")} added to the roster.` : ".");
+    if (newAbbrevs.length > 0) {
+      message += ` New competition code${newAbbrevs.length === 1 ? "" : "s"} found: ${newAbbrevs.join(", ")} — give ${newAbbrevs.length === 1 ? "it" : "them"} a full name in Admin.`;
+    }
+    setMsg(message);
     setPasteText("");
   };
 
@@ -2025,6 +2057,8 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
         <input
           type="date"
           value={roundDate}
+          min="2020-01-01"
+          max="2035-12-31"
           onChange={(e) => onUpdateRoundDate(e.target.value)}
           className="mono"
           style={{ fontSize: 14, fontWeight: 600, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
