@@ -542,6 +542,7 @@ function AppInner() {
   // is the point (keeps casual players from fumbling into edit mode).
   const [scorerUnlocked, setScorerUnlocked] = useState(false);
   const [showPinPrompt, setShowPinPrompt] = useState(false);
+  const [showDaySwitcher, setShowDaySwitcher] = useState(false);
   const pollRef = useRef(null);
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -962,19 +963,18 @@ function AppInner() {
           {course.name}
         </div>
         {rounds.length > 1 && (
-          <select
-            value={activeRoundId}
-            onChange={(e) => setActiveRound(e.target.value)}
+          <button
+            onClick={() => setShowDaySwitcher(true)}
             className="mono"
             style={{
               marginTop: 8, fontSize: 13, fontWeight: 700, padding: "6px 10px", borderRadius: 7,
               border: "1px solid rgba(241,239,227,0.4)", background: "rgba(241,239,227,0.12)", color: "#F1EFE3",
+              display: "inline-flex", alignItems: "center", gap: 6,
             }}
           >
-            {rounds.map((r) => (
-              <option key={r.id} value={r.id} style={{ color: "#1B1B1B" }}>{r.label}</option>
-            ))}
-          </select>
+            {activeRound.label}
+            <ChevronRight size={13} style={{ transform: "rotate(90deg)" }} />
+          </button>
         )}
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span>Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}</span>
@@ -1055,7 +1055,7 @@ function AppInner() {
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
       ) : mode === "board" ? (
-        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} isMedal={isMedal} />
+        <Board rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
@@ -1070,7 +1070,7 @@ function AppInner() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board course={course} ranked={ranked} rounds={rounds} activeRoundId={activeRoundId} headerColor={headerColor} accentColor={accentColor} isMedal={isMedal} />
+        <Board rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1094,6 +1094,8 @@ function AppInner() {
           onUpdateDrawStartTime={updateDrawStartTime}
           drawInterval={drawInterval}
           onUpdateDrawInterval={updateDrawInterval}
+          roundLabel={activeRound.label}
+          onRenameRound={(label) => renameRound(activeRoundId, label)}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1185,6 +1187,16 @@ function AppInner() {
           onCancel={() => setShowPinPrompt(false)}
         />
       )}
+      {showDaySwitcher && (
+        <DaySwitcher
+          rounds={rounds}
+          activeRoundId={activeRoundId}
+          headerColor={headerColor}
+          accentColor={accentColor}
+          onSelect={(id) => { setActiveRound(id); setShowDaySwitcher(false); }}
+          onClose={() => setShowDaySwitcher(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1249,97 +1261,97 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
   );
 }
 
-function Board({ course, ranked, rounds, activeRoundId, headerColor, accentColor, isMedal }) {
-  const [openId, setOpenId] = useState(null);
-  const [view, setView] = useState("day"); // day | overall
-  const multiRound = rounds && rounds.length > 1;
-
-  const dayBoard = (
-    ranked.length === 0 ? (
-      <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
-        <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
-        <div style={{ fontSize: 15 }}>No scores posted yet.</div>
-        <div style={{ fontSize: 12.5, marginTop: 4 }}>The board updates as the scorer enters holes.</div>
-      </div>
-    ) : (
-      <div>
-        {ranked.map((p, i) => {
-          const isOpen = openId === p.id;
+function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect, onClose }) {
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(27,27,27,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#FFFFFF", borderRadius: 12, padding: 16, width: "100%", maxWidth: 320 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 10, padding: "0 4px" }}>
+          Switch day
+        </div>
+        {rounds.map((r) => {
+          const isActive = r.id === activeRoundId;
           return (
-            <div
-              key={p.id}
+            <button
+              key={r.id}
+              onClick={() => onSelect(r.id)}
               style={{
-                background: "#FFFFFF", borderRadius: 10, marginBottom: 8,
-                border: i === 0 && p.thru > 0 ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
-                boxShadow: i === 0 && p.thru > 0 ? `0 1px 6px ${accentColor}2e` : "none",
-                overflow: "hidden",
+                width: "100%", textAlign: "left", padding: "12px 12px", borderRadius: 9, marginBottom: 6,
+                border: isActive ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
+                background: isActive ? `${accentColor}14` : "#FFFFFF",
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
               }}
             >
-              <button
-                onClick={() => setOpenId(isOpen ? null : p.id)}
-                style={{
-                  width: "100%", display: "flex", alignItems: "center", gap: 12,
-                  padding: "12px 14px", background: "none", border: "none", textAlign: "left",
-                }}
-              >
-                <div className="mono" style={{ width: 22, textAlign: "center", fontSize: 15, fontWeight: 700, color: i < 3 && p.thru > 0 ? headerColor : "#9B9885" }}>
-                  {i + 1}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {p.displayName || p.name || "Unnamed"}
-                  </div>
-                  <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
-                    HCP {p.ph} · thru {p.thru === 18 ? "F" : p.thru}{isMedal && p.thru > 0 ? ` · net ${p.netTotal}` : ""}
-                  </div>
-                </div>
-                <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: headerColor, minWidth: 30, textAlign: "right" }}>
-                  {p.thru > 0 ? (isMedal ? formatRelToPar(p.relToPar) : p.pts) : "–"}
-                </div>
-                <ChevronRight
-                  size={16}
-                  color="#9B9885"
-                  style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
-                />
-              </button>
-              {isOpen && <HoleByHole course={course} player={p} headerColor={headerColor} isMedal={isMedal} />}
-            </div>
+              <span style={{ fontSize: 14, fontWeight: 600, color: isActive ? accentColor : "#1B1B1B" }}>
+                {r.label}
+              </span>
+              <span className="mono" style={{ fontSize: 10.5, color: "#8A8774", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                {r.format === "foursomes" ? "Foursomes" : "Singles"}
+              </span>
+            </button>
           );
         })}
+        <button
+          onClick={onClose}
+          style={{ width: "100%", padding: "10px 0", borderRadius: 9, border: "none", background: "transparent", color: "#8A8774", fontSize: 13, marginTop: 4 }}
+        >
+          Cancel
+        </button>
       </div>
-    )
+    </div>
   );
+}
+
+function Board({ rounds, headerColor, accentColor }) {
+  const [tab, setTab] = useState("singles"); // singles | foursomes
+  const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
+  const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
+  const activeRounds = tab === "singles" ? singlesRounds : foursomesRounds;
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
-      {multiRound && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <button
-            onClick={() => setView("day")}
-            style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-              background: view === "day" ? headerColor : "transparent",
-              color: view === "day" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
-            }}
-          >
-            This day
-          </button>
-          <button
-            onClick={() => setView("overall")}
-            style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-              background: view === "overall" ? headerColor : "transparent",
-              color: view === "overall" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
-            }}
-          >
-            Overall
-          </button>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button
+          onClick={() => setTab("singles")}
+          style={{
+            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: tab === "singles" ? headerColor : "transparent",
+            color: tab === "singles" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          Singles
+        </button>
+        <button
+          onClick={() => setTab("foursomes")}
+          style={{
+            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: tab === "foursomes" ? headerColor : "transparent",
+            color: tab === "foursomes" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          Foursomes
+        </button>
+      </div>
+      {activeRounds.length === 0 ? (
+        <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
+          <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
+          <div style={{ fontSize: 15 }}>
+            No {tab === "singles" ? "singles" : "foursomes"} days set up yet.
+          </div>
+          <div style={{ fontSize: 12.5, marginTop: 4 }}>
+            Set a day's Format in Draw setup to {tab === "singles" ? "Individual" : "Foursomes"} and it'll appear here.
+          </div>
         </div>
-      )}
-      {view === "overall" && multiRound ? (
-        <OverallBoard rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
       ) : (
-        dayBoard
+        <OverallBoard rounds={activeRounds} headerColor={headerColor} accentColor={accentColor} />
       )}
     </div>
   );
@@ -1483,7 +1495,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1508,6 +1520,18 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+          Label this day <span style={{ textTransform: "none", letterSpacing: 0 }}>(shows in the day switcher — e.g. a date or the competition name)</span>
+        </div>
+        <input
+          value={roundLabel}
+          onChange={(e) => onRenameRound(e.target.value)}
+          placeholder="e.g. 15 June — Spring Foursomes"
+          style={{ width: "100%", fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
+        />
+      </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
