@@ -291,12 +291,19 @@ function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
 function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes) {
   if (!names || names.length === 0) return "";
   // Each person's own raw handicap index, right after their name — lets a
-  // player instantly spot-check that what's on file for them is correct,
-  // as distinct from the calculated on-course playing handicap.
+  // player instantly spot-check that what's on file for them is correct.
+  // For Singles specifically, also show their playing handicap for this
+  // course (e.g. "3.3/6") — for Foursomes the combined figure after the
+  // pair covers that instead, so just the raw index is shown per person.
   const withIndex = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
     const idx = p && p.index !== "" && p.index != null ? p.index : null;
-    return idx !== null ? `${n} (${idx})` : n;
+    if (idx === null) return n;
+    if (!isFoursomes) {
+      const ph = individualPH(course, p, allowancePct);
+      return ph !== null ? `${n} (${idx}/${ph})` : `${n} (${idx})`;
+    }
+    return `${n} (${idx})`;
   };
 
   if (names.length === 4) {
