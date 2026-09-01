@@ -363,6 +363,16 @@ function sortRoundsByDate(rounds) {
   return [...dated, ...undated];
 }
 
+// Turns a stored YYYY-MM-DD into something readable, e.g. "23 Oct 2026" —
+// used wherever a round's date is shown to players, not just admins.
+function formatDisplayDate(dateStr) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
@@ -604,7 +614,7 @@ function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLea
     </div>
   );
 
-  const row = (label, onClick, key) => (
+  const row = (label, onClick, key, sublabel) => (
     <button
       key={key || label}
       onClick={onClick}
@@ -614,7 +624,12 @@ function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLea
         textAlign: "left",
       }}
     >
-      <span style={{ fontSize: 15, fontWeight: 600, color: "#1B1B1B" }}>{label}</span>
+      <span>
+        <span style={{ fontSize: 15, fontWeight: 600, color: "#1B1B1B", display: "block" }}>{label}</span>
+        {sublabel && (
+          <span className="mono" style={{ fontSize: 11.5, color: "#8A8774" }}>{sublabel}</span>
+        )}
+      </span>
       <ChevronRight size={16} color="#9B9885" />
     </button>
   );
@@ -635,7 +650,7 @@ function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLea
 
   return (
     <div style={{ padding: "14px 14px 40px" }}>
-      {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id)))}
+      {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id, formatDisplayDate(r.date))))}
       {sectionCard("Leaderboards", [
         row("Singles", () => onSelectLeaderboard("singles"), "singles"),
         row("Foursomes", () => onSelectLeaderboard("foursomes"), "foursomes"),
@@ -669,7 +684,6 @@ function CodeGate({ onSubmit }) {
           Enter the event code you were given.
         </div>
         <input
-          autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value.toUpperCase())}
           onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -766,6 +780,7 @@ function AppInner() {
   const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
+  const [viewingDoc, setViewingDoc] = useState(null); // { name, blobUrl, loading, error } | null
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
   // knows the PIN can enter it fresh each time they open the link, which
@@ -1282,19 +1297,23 @@ function AppInner() {
   const openDocument = (doc) => {
     const code = eventCodeRef.current;
     if (!code) return;
-    // Open the tab synchronously, inside the click itself — most browsers
-    // block window.open() called after an await, treating it as an
-    // unrequested popup rather than something the user just clicked.
-    const w = window.open();
+    setViewingDoc({ name: doc.name, blobUrl: null, loading: true });
     (async () => {
       try {
         const res = await window.storage.get(docStorageKey(code, doc.id), true);
         const blobUrl = dataUrlToBlobUrl(res.value);
-        if (w) w.location.href = blobUrl;
+        setViewingDoc({ name: doc.name, blobUrl, loading: false });
       } catch {
-        if (w) w.close();
+        setViewingDoc({ name: doc.name, blobUrl: null, loading: false, error: true });
       }
     })();
+  };
+
+  const closeDocument = () => {
+    setViewingDoc((prev) => {
+      if (prev && prev.blobUrl) URL.revokeObjectURL(prev.blobUrl);
+      return null;
+    });
   };
 
   const addRound = () => {
@@ -1711,6 +1730,33 @@ function AppInner() {
           onClose={() => setShowDaySwitcher(false)}
         />
       )}
+      {viewingDoc && (
+        <div style={{ position: "fixed", inset: 0, background: "#1B1B1B", zIndex: 60, display: "flex", flexDirection: "column" }}>
+          <div style={{ background: headerColor, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <button
+              onClick={closeDocument}
+              style={{
+                display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", borderRadius: 8,
+                border: "none", background: "#F1EFE3", color: headerColor, fontWeight: 700, fontSize: 13.5,
+              }}
+            >
+              <X size={15} /> Close
+            </button>
+            <span style={{ color: "#F1EFE3", fontSize: 13, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {viewingDoc.name}
+            </span>
+          </div>
+          <div style={{ flex: 1, background: "#525659" }}>
+            {viewingDoc.loading ? (
+              <div style={{ color: "#F1EFE3", textAlign: "center", padding: 40 }}>Loading…</div>
+            ) : viewingDoc.error ? (
+              <div style={{ color: "#F1EFE3", textAlign: "center", padding: 40 }}>Couldn't load this document — check your connection and try again.</div>
+            ) : (
+              <iframe src={viewingDoc.blobUrl} title={viewingDoc.name} style={{ width: "100%", height: "100%", border: "none" }} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1743,7 +1789,6 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel, title =
         <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>{title}</div>
         <div style={{ fontSize: 12, color: "#8A8774", marginBottom: 14 }}>{description}</div>
         <input
-          autoFocus
           type="password"
           inputMode="numeric"
           value={entry}
@@ -1804,8 +1849,13 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect
                 display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
               }}
             >
-              <span style={{ fontSize: 14, fontWeight: 600, color: isActive ? accentColor : "#1B1B1B" }}>
-                {r.label}
+              <span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: isActive ? accentColor : "#1B1B1B", display: "block" }}>
+                  {r.label}
+                </span>
+                {r.date && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{formatDisplayDate(r.date)}</span>
+                )}
               </span>
               <span className="mono" style={{ fontSize: 10.5, color: "#8A8774", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 {r.format === "foursomes" ? "Foursomes" : "Singles"}
@@ -2550,7 +2600,6 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         {showAddPlayer ? (
           <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
             <input
-              autoFocus
               value={newPlayerName}
               onChange={(e) => setNewPlayerName(e.target.value)}
               placeholder="Name"
@@ -2726,7 +2775,6 @@ function SlotHandicapEditor({ name, currentIndex, currentTee, course, headerColo
         <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{name}</div>
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
         <input
-          autoFocus
           type="number"
           inputMode="decimal"
           value={value}
@@ -3011,7 +3059,6 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
           <div style={{ fontSize: 16, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{selectedName}</div>
           <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
           <input
-            autoFocus
             type="number"
             inputMode="decimal"
             value={value}
@@ -3064,7 +3111,6 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
         Find your name to check or update your handicap index.
       </div>
       <input
-        autoFocus
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search your name…"
