@@ -242,6 +242,24 @@ function pairPlayersFromDraw(players, draw, course) {
   return pairs;
 }
 
+// Same idea as pairPlayersFromDraw, but preserves real entered scores for
+// any pair that's still grouped the same way — used for live display
+// (e.g. the leaderboard) so results are always correct straight from the
+// draw, without depending on the stored roster having been separately
+// resynced first. Round-agnostic (course is a parameter, not a closure),
+// so it works for any round, not just the one currently being viewed.
+function mergedPairsFromDraw(players, draw, course) {
+  const freshPairs = pairPlayersFromDraw(players, draw, course);
+  return freshPairs.map((np) => {
+    const existing = players.find(
+      (p) => p.name === np.name && (p.partnerName || "") === (np.partnerName || "")
+    );
+    return existing
+      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, scores: existing.scores }
+      : np;
+  });
+}
+
 function individualPH(course, rosterPlayer, allowancePct) {
   if (!rosterPlayer) return null;
   return allowedHandicap(playingHandicap(course, Number(rosterPlayer.index) || 0, rosterPlayer.tee), allowancePct);
@@ -372,7 +390,15 @@ function combinedStandings(rounds) {
     byName.get(trimmed).perRound[roundId] = t;
   };
   rounds.forEach((round) => {
-    round.players.forEach((p) => {
+    // A Foursomes round's stored roster only reflects the draw if it's
+    // been "visited" and resynced — computing it fresh here means the
+    // leaderboard is always correct straight from the draw for every
+    // round, not just whichever one happens to be currently selected.
+    const effectivePlayers =
+      round.format === "foursomes" && round.draw.length > 0
+        ? mergedPairsFromDraw(round.players, round.draw, round.course)
+        : round.players;
+    effectivePlayers.forEach((p) => {
       const t = totals(round.course, p, round.handicapAllowance, round.format === "foursomes");
       credit(p.name, round.id, t);
       // On a Foursomes day, both partners earned this result together — the
@@ -385,6 +411,41 @@ function combinedStandings(rounds) {
     });
   });
   return [...byName.values()].map((row) => {
+    let total = 0;
+    let anyPlayed = false;
+    rounds.forEach((round) => {
+      const t = row.perRound[round.id];
+      if (t && t.thru > 0) {
+        total += t.pts;
+        anyPlayed = true;
+      }
+    });
+    return { ...row, total, anyPlayed };
+  }).sort((a, b) => b.total - a.total);
+}
+
+// For the dedicated Foursomes leaderboard specifically — pairs are ranked
+// as a single team row (e.g. "Andrew Brice & Angus Chilvers"), not split
+// into two individual rows sharing the same score, which would just look
+// like singles scoring. Keyed by the sorted pair of names so the same
+// partnership across multiple days combines into one row.
+function combinedPairStandings(rounds) {
+  const byPairKey = new Map();
+  rounds.forEach((round) => {
+    const effectivePlayers =
+      round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
+    effectivePlayers.forEach((p) => {
+      const nameA = (p.name || "").trim();
+      const nameB = (p.partnerName || "").trim();
+      if (!nameA) return;
+      const key = nameB ? [nameA, nameB].sort().join(" & ") : nameA;
+      const display = nameB ? [nameA, nameB].sort().join(" & ") : nameA;
+      const t = totals(round.course, p, round.handicapAllowance, true);
+      if (!byPairKey.has(key)) byPairKey.set(key, { name: display, perRound: {} });
+      byPairKey.get(key).perRound[round.id] = t;
+    });
+  });
+  return [...byPairKey.values()].map((row) => {
     let total = 0;
     let anyPlayed = false;
     rounds.forEach((round) => {
@@ -767,17 +828,7 @@ function AppInner() {
   // and handicaps rather than being reset. Shared by both "the draw
   // changed" and "format just switched to Foursomes" triggers, so pairs
   // stay correct automatically in either case, with no manual step.
-  const syncPairsFromDraw = (currentPlayers, currentDraw) => {
-    const freshPairs = pairPlayersFromDraw(currentPlayers, currentDraw, course);
-    return freshPairs.map((np) => {
-      const existing = currentPlayers.find(
-        (p) => p.name === np.name && (p.partnerName || "") === (np.partnerName || "")
-      );
-      return existing
-        ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, scores: existing.scores }
-        : np;
-    });
-  };
+  const syncPairsFromDraw = (currentPlayers, currentDraw) => mergedPairsFromDraw(currentPlayers, currentDraw, course);
 
   const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
@@ -1351,14 +1402,20 @@ function Board({ rounds, headerColor, accentColor }) {
           </div>
         </div>
       ) : (
-        <OverallBoard rounds={activeRounds} headerColor={headerColor} accentColor={accentColor} />
+        <OverallBoard
+          rounds={activeRounds}
+          headerColor={headerColor}
+          accentColor={accentColor}
+          computeStandings={tab === "foursomes" ? combinedPairStandings : combinedStandings}
+          rowLabel={tab === "foursomes" ? "Pair" : "Player"}
+        />
       )}
     </div>
   );
 }
 
-function OverallBoard({ rounds, headerColor, accentColor }) {
-  const standings = combinedStandings(rounds);
+function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowLabel = "Player" }) {
+  const standings = (computeStandings || combinedStandings)(rounds);
 
   if (standings.length === 0) {
     return (
@@ -1375,7 +1432,7 @@ function OverallBoard({ rounds, headerColor, accentColor }) {
         <thead>
           <tr style={{ background: `${headerColor}12` }}>
             <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
-            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Player</th>
+            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>{rowLabel}</th>
             {rounds.map((r) => (
               <th key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>
                 {r.label}
