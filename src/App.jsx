@@ -468,54 +468,77 @@ function combinedPairStandings(rounds) {
 }
 
 // ---- Draw import via paste: Time, then one or more player-name columns ----
-function parsePastedDraw(text) {
-  const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
-  let rows = parsed.data;
-  if (rows.length === 0) return [];
-
-  // If the first row's time column has no digits at all, it's a header
-  // row (e.g. "Time, Group") rather than an actual tee time — drop it.
-  if (!/\d/.test(rows[0][0] || "")) {
-    rows = rows.slice(1);
-  }
-
-  return rows
-    .map((cols) => {
-      const time = (cols[0] || "").trim();
-      // Some draw sheets put each player's handicap in the column right
-      // next to their name (Time, Name, HCP, Name, HCP, ...) — a name is
-      // never *just* a number, so skip any column that parses as one,
-      // rather than treating handicap figures as extra "players".
-      const players = cols
-        .slice(1)
-        .map((c) => (c || "").trim())
-        .filter((c) => c && !/^-?\d+(\.\d+)?$/.test(c));
-      return { id: crypto.randomUUID(), time, players };
-    })
-    .filter((r) => r.time || r.players.length > 0);
+function isNumericToken(raw) {
+  return /^-?\d+(\.\d+)?$/.test((raw || "").trim());
 }
 
-// Companion to parsePastedDraw — if a draw sheet has each player's
-// handicap in the column right after their name, this pulls out
-// {name, index} pairs so that data can populate the roster too, rather
-// than being discarded just because it arrived via the draw paste.
-function extractHandicapsFromDrawPaste(text) {
+// Strips everything except letters before comparing, so a hidden character
+// Excel sometimes inserts on copy/paste (a non-breaking space, a stray
+// mark) can't cause a real "Back"/"Front" to be missed.
+function isTeeToken(raw) {
+  const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
+  return cleaned === "back" || cleaned === "front" || cleaned === "b" || cleaned === "f";
+}
+
+function normalizeTeeIndicator(raw) {
+  const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
+  if (cleaned === "b" || cleaned === "back") return "Back";
+  if (cleaned === "f" || cleaned === "front") return "Front";
+  return (raw || "").trim();
+}
+
+// Single shared pass over a pasted draw sheet — classifies every column
+// after Time as a name, a handicap number, or a tee indicator (in any
+// order, and regardless of which sits next to which), and returns all
+// three kinds of data together. Used by parsePastedDraw and the two
+// roster-import extractors below, so there's exactly one place that
+// understands the row shape rather than three separate, driftable copies.
+function walkPastedDrawRows(text) {
   const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
   let rows = parsed.data;
   if (rows.length === 0) return [];
   if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
 
-  const pairs = [];
-  rows.forEach((cols) => {
-    for (let i = 1; i < cols.length - 1; i++) {
-      const name = (cols[i] || "").trim();
-      const next = (cols[i + 1] || "").trim();
-      if (name && !/^-?\d+(\.\d+)?$/.test(name) && /^-?\d+(\.\d+)?$/.test(next)) {
-        pairs.push({ name, index: next });
+  return rows.map((cols) => {
+    const time = (cols[0] || "").trim();
+    const names = [];
+    const handicaps = [];
+    const tees = [];
+    let lastName = null;
+    for (let i = 1; i < cols.length; i++) {
+      const val = (cols[i] || "").trim();
+      if (!val) continue;
+      if (isNumericToken(val)) {
+        if (lastName) handicaps.push({ name: lastName, index: val });
+      } else if (isTeeToken(val)) {
+        if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val) });
+      } else {
+        names.push(val);
+        lastName = val;
       }
     }
+    return { time, names, handicaps, tees };
   });
-  return pairs;
+}
+
+function parsePastedDraw(text) {
+  return walkPastedDrawRows(text)
+    .map((r) => ({ id: crypto.randomUUID(), time: r.time, players: r.names }))
+    .filter((r) => r.time || r.players.length > 0);
+}
+
+// Pulls {name, index} handicap pairs out of the same draw paste, so that
+// data can populate the roster too rather than being discarded just
+// because it arrived via the draw paste.
+function extractHandicapsFromDrawPaste(text) {
+  return walkPastedDrawRows(text).flatMap((r) => r.handicaps);
+}
+
+// Pulls {name, tee} pairs out of the same draw paste, in any column order
+// relative to the handicap.
+function extractTeesFromDrawPaste(text) {
+  return walkPastedDrawRows(text).flatMap((r) => r.tees);
+
 }
 
 function CodeGate({ onSubmit }) {
@@ -825,6 +848,21 @@ function AppInner() {
     return next;
   };
 
+  // Sets which tee a player uses, straight from a draw paste's tee-indicator
+  // column. Runs on the (already handicap-merged) individual player list —
+  // if this round is Foursomes, the pairing step right after will correctly
+  // carry this into the pair record's tee/partnerTee fields on its own.
+  const mergeTeesIntoPlayers = (currentPlayers, teePairs) => {
+    if (!teePairs || teePairs.length === 0) return currentPlayers;
+    let next = [...currentPlayers];
+    teePairs.forEach(({ name, tee }) => {
+      const target = normalizeName(name);
+      const idx = next.findIndex((p) => normalizeName(p.name) === target);
+      if (idx !== -1) next[idx] = { ...next[idx], tee };
+    });
+    return next;
+  };
+
   const importPlayers = (newPlayers) => {
     updateRound({ players: [...players, ...newPlayers] });
   };
@@ -931,18 +969,19 @@ function AppInner() {
 
   const updatePin = (newPin) => save({ pin: newPin });
 
-  const updateDraw = (newDraw, hcpPairs) => {
-    // Everything the draw paste can touch (roster handicaps, then pairing)
-    // gets computed here in one pass from the same starting snapshot of
-    // players, and written in a single update — doing this as two separate
-    // save() calls previously meant the second one could work from
-    // stale data and silently undo the first.
+  const updateDraw = (newDraw, hcpPairs, teePairs) => {
+    // Everything the draw paste can touch (roster handicaps, tees, then
+    // pairing) gets computed here in one pass from the same starting
+    // snapshot of players, and written in a single update — doing this as
+    // separate save() calls previously meant a later one could work from
+    // stale data and silently undo an earlier one.
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
+    const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     if (!isFoursomes) {
-      updateRound({ draw: newDraw, players: withHandicaps });
+      updateRound({ draw: newDraw, players: withTees });
       return;
     }
-    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withHandicaps, newDraw, course) });
+    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withTees, newDraw, course) });
   };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
@@ -1647,10 +1686,14 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       return;
     }
     const hcpPairs = extractHandicapsFromDrawPaste(pasteText);
-    onUpdate(parsed, hcpPairs);
+    const teePairs = extractTeesFromDrawPaste(pasteText);
+    onUpdate(parsed, hcpPairs, teePairs);
+    const extras = [];
+    if (hcpPairs.length > 0) extras.push(`${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"}`);
+    if (teePairs.length > 0) extras.push(`${teePairs.length} tee${teePairs.length === 1 ? "" : "s"}`);
     setMsg(
       `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
-      (hcpPairs.length > 0 ? `, ${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"} added to the roster.` : ".")
+      (extras.length > 0 ? `, ${extras.join(" and ")} added to the roster.` : ".")
     );
     setPasteText("");
   };
@@ -1848,13 +1891,14 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
               One tee time per line: Time, then each player in their own column (copy straight from your
-              spreadsheet). A handicap number right after a name is picked up too, and added to the roster
-              automatically. Pasting replaces the whole draw below.
+              spreadsheet). A handicap number right after a name is picked up automatically, and so is a tee
+              column — write "Back" or "Front" (or just B/F) anywhere in that name's columns. Both get added
+              straight to the roster. Pasting replaces the whole draw below.
             </div>
             <textarea
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
-              placeholder={"9:00\tSmith\t8.4\tJones\t14.1\tBrown\t9.9\tWhite\t22\n9:10\tOkonkwo\t12\tPetrov\t6"}
+              placeholder={"9:00\tSmith\t8.4\tBack\tJones\t14.1\tFront\tBrown\t9.9\tBack\n9:10\tOkonkwo\t12\tFront\tPetrov\t6\tBack"}
               rows={6}
               className="mono"
               style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit" }}
