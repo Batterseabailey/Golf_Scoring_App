@@ -2729,9 +2729,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
 }
 
 function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
-  const [saveName, setSaveName] = useState(course.name);
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
+  const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
   const setHole = (idx, field, val) => {
     const clean = val === "" ? "" : Math.max(1, Math.min(field === "par" ? 7 : 18, Number(val)));
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
@@ -2984,20 +2984,54 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Saved courses
         </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          <input
-            value={saveName}
-            onChange={(e) => setSaveName(e.target.value)}
-            placeholder="Name this course setup"
-            style={{ flex: 1, fontSize: 12.5, padding: "7px 9px", borderRadius: 6, border: "1px solid #D8D4C0" }}
-          />
-          <button
-            onClick={() => onSaveToLibrary(saveName)}
-            style={{ padding: "7px 12px", borderRadius: 6, border: "none", background: headerColor, color: "#FFFFFF", fontSize: 12, fontWeight: 600 }}
-          >
-            Save
-          </button>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+          Saves whatever's currently in the "Course / venue name" field above — <strong>{course.name}</strong> — as its own entry.
         </div>
+        {(() => {
+          const existingMatch = library.find((e) => e.name.trim().toLowerCase() === course.name.trim().toLowerCase());
+          if (existingMatch && !confirmOverwriteSave) {
+            return (
+              <button
+                onClick={() => setConfirmOverwriteSave(true)}
+                style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: `1px solid #B5442E`, background: "#FBEDEA", color: "#B5442E", fontSize: 13, fontWeight: 600, marginBottom: 10 }}
+              >
+                ⚠ This will overwrite "{existingMatch.name}"
+              </button>
+            );
+          }
+          if (existingMatch && confirmOverwriteSave) {
+            return (
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <button
+                  onClick={() => { onSaveToLibrary(course.name); setConfirmOverwriteSave(false); }}
+                  style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "none", background: "#B5442E", color: "#FFFFFF", fontSize: 12.5, fontWeight: 600 }}
+                >
+                  Yes, overwrite it
+                </button>
+                <button
+                  onClick={() => setConfirmOverwriteSave(false)}
+                  style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontSize: 12.5, fontWeight: 600 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            );
+          }
+          return (
+            <button
+              onClick={() => onSaveToLibrary(course.name)}
+              style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontSize: 13, fontWeight: 600, marginBottom: 10 }}
+            >
+              Save "{course.name}" to library
+            </button>
+          );
+        })()}
+        <button
+          onClick={() => onUpdate({ name: "New course", tees: DEFAULT_COURSE.tees, holes: DEFAULT_COURSE.holes })}
+          style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: `1px dashed ${headerColor}`, background: "transparent", color: headerColor, fontSize: 13, fontWeight: 600, marginBottom: 12 }}
+        >
+          + Add new course (start blank)
+        </button>
         {library.length === 0 ? (
           <div style={{ fontSize: 12, color: "#9B9885" }}>No courses saved yet — save this one to reuse it next year.</div>
         ) : (
