@@ -14,8 +14,8 @@ const DEFAULT_COURSE = {
     { par: 4, si: 6 }, { par: 4, si: 10 },
   ],
   tees: [
-    { id: "W", label: "White", cr: 72.0, slope: 129 },
-    { id: "Y", label: "Yellow", cr: 70.7, slope: 127 },
+    { id: "W", label: "Back", cr: 72.0, slope: 129 },
+    { id: "Y", label: "Front", cr: 70.7, slope: 127 },
   ],
 };
 
@@ -66,8 +66,9 @@ function coursePar(course) {
   return course.holes.reduce((sum, h) => sum + Number(h.par || 0), 0);
 }
 
-function getTee(course, teeId) {
-  return course.tees.find((t) => t.id === teeId) || course.tees[0];
+function getTee(course, teeLabel) {
+  const target = (teeLabel || "").trim().toLowerCase();
+  return course.tees.find((t) => t.label.trim().toLowerCase() === target) || course.tees[0];
 }
 
 function playingHandicap(course, index, teeId) {
@@ -128,9 +129,9 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
 }
 
 function emptyPlayer(course, isFoursomes = false) {
-  const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.id || "W", scores: Array(18).fill("") };
+  const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "W", scores: Array(18).fill("") };
   if (isFoursomes) {
-    return { ...base, partnerName: "", partnerIndex: "", partnerTee: course.tees[0]?.id || "W" };
+    return { ...base, partnerName: "", partnerIndex: "", partnerTee: course.tees[0]?.label || "W" };
   }
   return base;
 }
@@ -159,7 +160,7 @@ function parsePastedPlayers(text, course) {
       const name = (cols[0] || "").trim();
       const index = (cols[1] || "").trim();
       const teeRaw = (cols[2] || "").trim().toLowerCase();
-      let teeId = course.tees[0]?.id || "";
+      let teeId = course.tees[0]?.label || "";
       if (teeRaw) {
         const match = course.tees.find(
           (t) => t.label.toLowerCase() === teeRaw || t.id.toLowerCase() === teeRaw
@@ -224,7 +225,7 @@ function findIndividualByName(rosterPlayers, name) {
 // group), pulling each person's existing handicap/tee from the current
 // roster by name. This replaces the whole roster with proper pairs.
 function pairPlayersFromDraw(players, draw, course) {
-  const validTee = (teeId) => (teeId && course.tees.some((t) => t.id === teeId)) ? teeId : course.tees[0]?.id || "";
+  const validTee = (teeLabel) => (teeLabel && course.tees.some((t) => t.label === teeLabel)) ? teeLabel : course.tees[0]?.label || "";
   const pairs = [];
   draw.forEach((entry) => {
     const names = entry.players || [];
@@ -797,7 +798,7 @@ function AppInner() {
   const addPlayerQuick = (name, index) => {
     const trimmed = (name || "").trim();
     if (!trimmed) return;
-    const newPlayer = { id: crypto.randomUUID(), name: trimmed, index, tee: course.tees[0]?.id || "", scores: Array(18).fill("") };
+    const newPlayer = { id: crypto.randomUUID(), name: trimmed, index, tee: course.tees[0]?.label || "", scores: Array(18).fill("") };
     updateRound({ players: [...players, newPlayer] });
   };
 
@@ -816,7 +817,7 @@ function AppInner() {
       const target = normalizeName(name);
       const existingIdx = next.findIndex((p) => normalizeName(p.name) === target);
       if (existingIdx === -1) {
-        next.push({ id: crypto.randomUUID(), name: name.trim(), index, tee: course.tees[0]?.id || "", scores: Array(18).fill("") });
+        next.push({ id: crypto.randomUUID(), name: name.trim(), index, tee: course.tees[0]?.label || "", scores: Array(18).fill("") });
       } else if (!next[existingIdx].index) {
         next[existingIdx] = { ...next[existingIdx], index };
       }
@@ -867,7 +868,7 @@ function AppInner() {
     const source = rounds.find((r) => r.id === sourceRoundId);
     if (!source) return;
 
-    const validTee = (teeId) => (teeId && course.tees.some((t) => t.id === teeId)) ? teeId : course.tees[0]?.id || "";
+    const validTee = (teeLabel) => (teeLabel && course.tees.some((t) => t.label === teeLabel)) ? teeLabel : course.tees[0]?.label || "";
 
     if (isFoursomes && source.format !== "foursomes") {
       // Source players are individuals, but this day needs pairs — pair
@@ -885,7 +886,7 @@ function AppInner() {
           scores: Array(18).fill(""),
           partnerName: b ? b.name : "",
           partnerIndex: b ? b.index : "",
-          partnerTee: b ? validTee(b.tee) : course.tees[0]?.id || "",
+          partnerTee: b ? validTee(b.tee) : course.tees[0]?.label || "",
         });
       }
       updateRound({ players: copied });
@@ -2743,7 +2744,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
                 {course.tees.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
+                  <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
               </select>
             </div>
@@ -2765,12 +2766,12 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
               />
               <select
-                value={player.partnerTee || course.tees[0]?.id}
+                value={player.partnerTee || course.tees[0]?.label}
                 onChange={(e) => onUpdate({ partnerTee: e.target.value })}
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
                 {course.tees.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
+                  <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
               </select>
             </div>
@@ -2803,7 +2804,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
                 {course.tees.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
+                  <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
               </select>
             </div>
@@ -3065,6 +3066,11 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Tees
+        </div>
+        <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 10 }}>
+          Use the same labels across every course — e.g. always "Back" and "Front" — rather than each venue's own tee
+          names. A player's tee choice is matched by this label, so keeping it consistent means it follows them
+          automatically when you switch courses.
         </div>
         {course.tees.map((t) => (
           <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
