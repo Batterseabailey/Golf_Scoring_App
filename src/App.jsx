@@ -560,7 +560,7 @@ function CodeGate({ onSubmit }) {
         <Flag size={26} color="#8A8774" style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 4 }}>Live Leaderboard</div>
         <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 18 }}>
-          Enter the event code your scorer gave you.
+          Enter the event code you were given.
         </div>
         <input
           autoFocus
@@ -583,7 +583,7 @@ function CodeGate({ onSubmit }) {
         </button>
         <div style={{ fontSize: 11, color: "#9B9885", marginTop: 16 }}>
           Setting up a new meeting? Just type a new code to start it —
-          your scorer PIN protects it from there.
+          the Admin PIN protects it from there.
         </div>
       </div>
     </div>
@@ -659,7 +659,7 @@ function AppInner() {
   const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [library, setLibrary] = useState([]);
-  // Unlocking Scorer entry is per-browser-tab, not persisted — anyone who
+  // Unlocking Admin is per-browser-tab, not persisted — anyone who
   // knows the PIN can enter it fresh each time they open the link, which
   // is the point (keeps casual players from fumbling into edit mode).
   const [scorerUnlocked, setScorerUnlocked] = useState(false);
@@ -814,7 +814,7 @@ function AppInner() {
   };
 
   // Lets a player be added straight from the Draw screen (name + handicap
-  // in one go) rather than needing to jump to Scorer entry. Always creates
+  // in one go) rather than needing to jump to Admin. Always creates
   // a plain individual entry — pairing itself still happens by placing them
   // into the draw's slots, and gets folded into a proper pair record the
   // next time the draw is saved.
@@ -1230,7 +1230,7 @@ function AppInner() {
               fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
             }}
           >
-            Scorer entry
+            Admin
           </button>
         </div>
       </div>
@@ -1412,7 +1412,7 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
         style={{ background: "#FFFFFF", borderRadius: 12, padding: 22, width: "100%", maxWidth: 300, textAlign: "center" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>Scorer PIN</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>Admin PIN</div>
         <div style={{ fontSize: 12, color: "#8A8774", marginBottom: 14 }}>Enter the PIN to enter scores or edit the course.</div>
         <input
           autoFocus
@@ -1649,7 +1649,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
         <Clipboard size={28} color={accentColor} style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 15 }}>The draw hasn't been posted yet.</div>
-        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added tee times.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once tee times have been added.</div>
       </div>
     );
   }
@@ -2398,7 +2398,7 @@ function LocalRulesView({ text, headerColor, accentColor }) {
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
         <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 15 }}>No local rules posted yet.</div>
-        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added them.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once they've been posted.</div>
       </div>
     );
   }
@@ -2461,7 +2461,7 @@ function DocumentsView({ documents, onOpen, headerColor, accentColor }) {
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
         <FileText size={28} color={accentColor} style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 15 }}>No documents posted yet.</div>
-        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once your scorer has added something.</div>
+        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once something's been posted.</div>
       </div>
     );
   }
@@ -2606,7 +2606,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         </button>
         <button
           onClick={onLock}
-          title="Lock scorer mode"
+          title="Lock Admin"
           style={{
             width: 42, display: "flex", alignItems: "center", justifyContent: "center",
             borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF",
@@ -3153,7 +3153,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           <div style={{ fontSize: 11, color: "#9B9885", marginTop: 10 }}>Maximum of {MAX_ROUNDS} days.</div>
         )}
         <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 8 }}>
-          Everything below (course, tees, holes) applies to whichever day is bold above. Players are separate per day too — use "Copy from another day" in Scorer entry to reuse a roster.
+          Everything below (course, tees, holes) applies to whichever day is bold above. Players are separate per day too — use "Copy from another day" in Admin to reuse a roster.
         </div>
       </div>
 
@@ -3194,7 +3194,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
         </div>
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
-            Scorer PIN <span style={{ textTransform: "none", letterSpacing: 0 }}>(required to enter Scorer entry)</span>
+            Admin PIN <span style={{ textTransform: "none", letterSpacing: 0 }}>(required to enter Admin)</span>
           </div>
           <input
             value={pin}
