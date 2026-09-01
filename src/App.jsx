@@ -784,11 +784,16 @@ function AppInner() {
     if (!code) return;
     try {
       const res = await window.storage.get(storageKeyFor(code), true);
-      if (modeRef.current !== "board") return;
+      // Only skip applying a refresh while actively in the scorer screens
+      // (Admin) — that's the one place a background update could yank the
+      // screen out from under someone mid-edit. Every other screen,
+      // including the very first load right after entering an event code,
+      // should always get the real data.
+      if (modeRef.current === "scorer") return;
       setState(res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE);
       setLive(true);
     } catch (err) {
-      if (modeRef.current !== "board") return;
+      if (modeRef.current === "scorer") return;
       if (String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404")) {
         setState(DEFAULT_STATE);
       }
