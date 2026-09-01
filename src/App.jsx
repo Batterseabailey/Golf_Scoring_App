@@ -1159,6 +1159,32 @@ function AppInner() {
     });
   };
 
+  // Sets a competition tag for a whole set of players at once, everywhere
+  // each of them appears across every day — used by the bulk-tag tool.
+  // Selecting someone sets the tag; leaving someone unselected clears it
+  // ONLY if they currently carry this specific competition (so it never
+  // touches a different tag they might already have).
+  const bulkTagCompetition = (selectedNames, abbreviation) => {
+    const selectedSet = new Set(selectedNames.map(normalizeName));
+    save({
+      rounds: rounds.map((r) => ({
+        ...r,
+        players: r.players.map((p) => {
+          let patch = {};
+          if (p.name) {
+            if (selectedSet.has(normalizeName(p.name))) patch.competition = abbreviation;
+            else if (p.competition === abbreviation) patch.competition = "";
+          }
+          if (p.partnerName) {
+            if (selectedSet.has(normalizeName(p.partnerName))) patch.partnerCompetition = abbreviation;
+            else if (p.partnerCompetition === abbreviation) patch.partnerCompetition = "";
+          }
+          return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
+        }),
+      })),
+    });
+  };
+
   // Every distinct player name across every day, each with whatever
   // handicap, tee, and competition tag they currently have on their most
   // recent appearance — the list the handicap-check screen searches against.
@@ -1578,6 +1604,8 @@ function AppInner() {
           onAdd={addCompetition}
           onUpdate={updateCompetition}
           onRemove={removeCompetition}
+          allPlayers={allPlayersAcrossRounds()}
+          onBulkTag={bulkTagCompetition}
           onBack={() => setShowCompetitionsSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -2769,7 +2797,31 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, onBack, headerColor, accentColor }) {
+function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor }) {
+  const [bulkTarget, setBulkTarget] = useState(""); // abbreviation being edited, or "" if none chosen
+  const [selectedNames, setSelectedNames] = useState(new Set());
+
+  const chooseBulkTarget = (abbreviation) => {
+    setBulkTarget(abbreviation);
+    setSelectedNames(new Set(allPlayers.filter((p) => p.competition === abbreviation).map((p) => p.name)));
+  };
+
+  const toggleName = (name) => {
+    setSelectedNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const [savedMsg, setSavedMsg] = useState(false);
+  const apply = () => {
+    onBulkTag([...selectedNames], bulkTarget);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 1500);
+  };
+
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
@@ -2820,6 +2872,63 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, onBack, he
           <Plus size={13} /> Add competition
         </button>
       </div>
+
+      {competitions.length > 0 && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Bulk-tag players</div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 10 }}>
+            Pick a competition, tick everyone who belongs to it, and apply — updates all of them at once, everywhere
+            they appear across the event. Anyone already tagged is pre-ticked.
+          </div>
+          <select
+            value={bulkTarget}
+            onChange={(e) => chooseBulkTarget(e.target.value)}
+            style={{ width: "100%", fontSize: 14, fontWeight: 600, padding: "9px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 12, background: "#FFF" }}
+          >
+            <option value="">Choose a competition…</option>
+            {competitions.filter((c) => c.abbreviation).map((c) => (
+              <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+            ))}
+          </select>
+          {bulkTarget && (
+            <>
+              <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 12 }}>
+                {allPlayers.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#9B9885", padding: 12 }}>No players yet.</div>
+                ) : (
+                  allPlayers.map((p) => (
+                    <label
+                      key={p.name}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10, padding: "9px 10px",
+                        borderTop: "1px solid #EFEDE0", cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedNames.has(p.name)}
+                        onChange={() => toggleName(p.name)}
+                        style={{ width: 16, height: 16 }}
+                      />
+                      <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{p.name}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>
+                        {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP"}
+                        {p.competition && p.competition !== bulkTarget ? ` · ${p.competition}` : ""}
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <button
+                onClick={apply}
+                style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
+              >
+                {savedMsg ? "Saved" : `Apply to ${selectedNames.size} player${selectedNames.size === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
