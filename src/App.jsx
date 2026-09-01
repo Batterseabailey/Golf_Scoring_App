@@ -759,6 +759,18 @@ function AppInner() {
     setActiveId(next[next.length - 1].id);
   };
 
+  // Lets a player be added straight from the Draw screen (name + handicap
+  // in one go) rather than needing to jump to Scorer entry. Always creates
+  // a plain individual entry — pairing itself still happens by placing them
+  // into the draw's slots, and gets folded into a proper pair record the
+  // next time the draw is saved.
+  const addPlayerQuick = (name, index) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const newPlayer = { id: crypto.randomUUID(), name: trimmed, index, tee: course.tees[0]?.id || "", scores: Array(18).fill("") };
+    updateRound({ players: [...players, newPlayer] });
+  };
+
   const importPlayers = (newPlayers) => {
     updateRound({ players: [...players, ...newPlayers] });
   };
@@ -796,7 +808,7 @@ function AppInner() {
 
   const removePlayer = (id) => updateRound({ players: players.filter((p) => p.id !== id) });
 
-  const clearAllPlayers = () => updateRound({ players: [] });
+  const clearAllPlayers = () => updateRound({ players: [], draw: [] });
 
   const copyPlayersFromRound = (sourceRoundId) => {
     const source = rounds.find((r) => r.id === sourceRoundId);
@@ -886,23 +898,6 @@ function AppInner() {
   };
 
   const updateScoring = (s) => updateRound({ scoring: s });
-
-  // Belt-and-braces: updateDraw/updateFormat above resync pairs the moment
-  // you actively change something, but this catches everything else too —
-  // data that was already stale before this fix existed, a page reload,
-  // switching to a different day, etc. Runs a cheap comparison and only
-  // writes if the roster's pairing genuinely doesn't match the draw.
-  useEffect(() => {
-    if (loading || !isFoursomes || draw.length === 0) return;
-    const fresh = pairPlayersFromDraw(players, draw, course);
-    const sig = (list) => list.map((p) => `${p.name}|${p.partnerName || ""}`).sort().join(",");
-    if (sig(players) !== sig(fresh)) {
-      updateRound({ players: syncPairsFromDraw(players, draw) });
-    }
-    // Deliberately not depending on `players` — this should react to the
-    // draw/format changing (or a fresh load), not to every score edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFoursomes, draw, activeRoundId, loading]);
 
   const updateDrawStartTime = (t) => updateRound({ drawStartTime: t });
 
@@ -1173,6 +1168,7 @@ function AppInner() {
           roundLabel={activeRound.label}
           onRenameRound={(label) => renameRound(activeRoundId, label)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
+          onAddPlayerQuick={addPlayerQuick}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1578,7 +1574,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1781,7 +1777,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onAddPlayerQuick={onAddPlayerQuick} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -1843,7 +1839,7 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onAddPlayerQuick }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => {
@@ -1859,6 +1855,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [selected, setSelected] = useState(null); // player name currently picked up
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
+  const [showAddPlayer, setShowAddPlayer] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [newPlayerIndex, setNewPlayerIndex] = useState("");
   // startTime/intervalMinutes are now saved as part of the round (passed in
   // as props) rather than local state — previously these reset to defaults
   // any time this screen was left and re-opened.
@@ -1975,7 +1974,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 140, overflowY: "auto" }}>
           {pool.length === 0 && (
             <div style={{ fontSize: 12, color: "#9B9885" }}>
-              {players.length === 0 ? "Add players in Scorer entry first." : "Every player has been placed below."}
+              {players.length === 0 ? "No players yet — add one below." : "Every player has been placed below."}
             </div>
           )}
           {pool.map((p) => (
@@ -1993,6 +1992,55 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             </button>
           ))}
         </div>
+
+        {showAddPlayer ? (
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            <input
+              autoFocus
+              value={newPlayerName}
+              onChange={(e) => setNewPlayerName(e.target.value)}
+              placeholder="Name"
+              style={{ flex: 1.4, fontSize: 12.5, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
+            <input
+              value={newPlayerIndex}
+              onChange={(e) => setNewPlayerIndex(e.target.value)}
+              placeholder="HCP"
+              type="number"
+              inputMode="decimal"
+              className="mono"
+              style={{ flex: 0.7, fontSize: 12.5, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
+            <button
+              onClick={() => {
+                if (!newPlayerName.trim()) return;
+                onAddPlayerQuick(newPlayerName, newPlayerIndex);
+                setNewPlayerName("");
+                setNewPlayerIndex("");
+              }}
+              style={{ padding: "0 12px", borderRadius: 6, border: "none", background: headerColor, color: "#FFFFFF", fontSize: 12.5, fontWeight: 600 }}
+            >
+              Add
+            </button>
+            <button
+              onClick={() => { setShowAddPlayer(false); setNewPlayerName(""); setNewPlayerIndex(""); }}
+              style={{ padding: "0 10px", borderRadius: 6, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontSize: 12.5 }}
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowAddPlayer(true)}
+            style={{
+              width: "100%", marginTop: 10, padding: "8px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+              background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            }}
+          >
+            <Plus size={13} /> Add player
+          </button>
+        )}
       </div>
 
       {rows.map((row, rowIdx) => (
@@ -2387,7 +2435,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
           {confirmClear ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: "#8A8774" }}>Remove all {ranked.length} players?</span>
+              <span style={{ fontSize: 11, color: "#8A8774" }}>Remove all {ranked.length} players and clear the draw?</span>
               <button
                 onClick={() => { onClearAll(); setConfirmClear(false); }}
                 style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px 6px" }}
