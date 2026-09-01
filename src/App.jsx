@@ -129,9 +129,9 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
 }
 
 function emptyPlayer(course, isFoursomes = false) {
-  const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "W", scores: Array(18).fill("") };
+  const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "W", competition: "", scores: Array(18).fill("") };
   if (isFoursomes) {
-    return { ...base, partnerName: "", partnerIndex: "", partnerTee: course.tees[0]?.label || "W" };
+    return { ...base, partnerName: "", partnerIndex: "", partnerTee: course.tees[0]?.label || "W", partnerCompetition: "" };
   }
   return base;
 }
@@ -211,10 +211,10 @@ function findIndividualByName(rosterPlayers, name) {
   if (!target) return null;
   for (const p of rosterPlayers) {
     if (normalizeName(p.name) === target) {
-      return { index: p.index, tee: p.tee };
+      return { index: p.index, tee: p.tee, competition: p.competition };
     }
     if (normalizeName(p.partnerName) === target) {
-      return { index: p.partnerIndex, tee: p.partnerTee };
+      return { index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition };
     }
   }
   return null;
@@ -240,10 +240,12 @@ function pairPlayersFromDraw(players, draw, course) {
         name: nameA,
         index: pA ? pA.index : "",
         tee: validTee(pA && pA.tee),
+        competition: pA ? pA.competition || "" : "",
         scores: Array(18).fill(""),
         partnerName: nameB || "",
         partnerIndex: pB ? pB.index : "",
         partnerTee: validTee(pB && pB.tee),
+        partnerCompetition: pB ? pB.competition || "" : "",
       });
     }
   });
@@ -263,7 +265,7 @@ function mergedPairsFromDraw(players, draw, course) {
       (p) => normalizeName(p.name) === normalizeName(np.name) && normalizeName(p.partnerName) === normalizeName(np.partnerName)
     );
     return existing
-      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, scores: existing.scores }
+      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, scores: existing.scores }
       : np;
   });
 }
@@ -363,6 +365,7 @@ const DEFAULT_STATE = {
   rounds: [emptyRound("Day 1")],
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
+  competitions: [], // event-wide sub-competitions (e.g. seniors' trophy) — [{ id, abbreviation, fullName }]
 };
 
 function sanitizeState(parsed) {
@@ -401,11 +404,12 @@ function sanitizeState(parsed) {
     rounds,
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
+    competitions: Array.isArray(parsed.competitions) ? parsed.competitions : [],
   };
 }
 
 // ---- Combined standings across every round, matched by player name ----
-function combinedStandings(rounds) {
+function combinedStandings(rounds, competitionFilter) {
   const byName = new Map();
   const credit = (name, roundId, t) => {
     const trimmed = (name || "").trim();
@@ -424,13 +428,13 @@ function combinedStandings(rounds) {
         : round.players;
     effectivePlayers.forEach((p) => {
       const t = totals(round.course, p, round.handicapAllowance, round.format === "foursomes");
-      credit(p.name, round.id, t);
+      if (!competitionFilter || p.competition === competitionFilter) credit(p.name, round.id, t);
       // On a Foursomes day, both partners earned this result together — the
       // combined-across-days table only makes sense (and stays comparable
       // to Individual/Medal days) if each person is credited individually,
       // not just whichever name happens to be stored first in the pair.
       if (round.format === "foursomes" && p.partnerName) {
-        credit(p.partnerName, round.id, t);
+        if (!competitionFilter || p.partnerCompetition === competitionFilter) credit(p.partnerName, round.id, t);
       }
     });
   });
@@ -509,17 +513,20 @@ function normalizeTeeIndicator(raw) {
 // three kinds of data together. Used by parsePastedDraw and the two
 // roster-import extractors below, so there's exactly one place that
 // understands the row shape rather than three separate, driftable copies.
-function walkPastedDrawRows(text) {
+function walkPastedDrawRows(text, knownAbbreviations) {
   const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
   let rows = parsed.data;
   if (rows.length === 0) return [];
   if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
+
+  const abbrevSet = new Set((knownAbbreviations || []).map((a) => a.trim().toUpperCase()).filter(Boolean));
 
   return rows.map((cols) => {
     const time = (cols[0] || "").trim();
     const names = [];
     const handicaps = [];
     const tees = [];
+    const comps = [];
     let lastName = null;
     for (let i = 1; i < cols.length; i++) {
       const val = (cols[i] || "").trim();
@@ -528,17 +535,19 @@ function walkPastedDrawRows(text) {
         if (lastName) handicaps.push({ name: lastName, index: val });
       } else if (isTeeToken(val)) {
         if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val) });
+      } else if (abbrevSet.has(val.toUpperCase())) {
+        if (lastName) comps.push({ name: lastName, abbreviation: val.toUpperCase() });
       } else {
         names.push(val);
         lastName = val;
       }
     }
-    return { time, names, handicaps, tees };
+    return { time, names, handicaps, tees, comps };
   });
 }
 
-function parsePastedDraw(text) {
-  return walkPastedDrawRows(text)
+function parsePastedDraw(text, knownAbbreviations) {
+  return walkPastedDrawRows(text, knownAbbreviations)
     .map((r) => ({ id: crypto.randomUUID(), time: r.time, players: r.names }))
     .filter((r) => r.time || r.players.length > 0);
 }
@@ -546,14 +555,21 @@ function parsePastedDraw(text) {
 // Pulls {name, index} handicap pairs out of the same draw paste, so that
 // data can populate the roster too rather than being discarded just
 // because it arrived via the draw paste.
-function extractHandicapsFromDrawPaste(text) {
-  return walkPastedDrawRows(text).flatMap((r) => r.handicaps);
+function extractHandicapsFromDrawPaste(text, knownAbbreviations) {
+  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.handicaps);
+}
+
+// Pulls {name, abbreviation} sub-competition tags out of the same draw
+// paste — only recognized if the token exactly matches an abbreviation
+// already defined in Admin, so a genuine name can never be mistaken for one.
+function extractCompetitionsFromDrawPaste(text, knownAbbreviations) {
+  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.comps);
 }
 
 // Pulls {name, tee} pairs out of the same draw paste, in any column order
 // relative to the handicap.
-function extractTeesFromDrawPaste(text) {
-  return walkPastedDrawRows(text).flatMap((r) => r.tees);
+function extractTeesFromDrawPaste(text, knownAbbreviations) {
+  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.tees);
 
 }
 
@@ -720,7 +736,7 @@ function AppInner() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId, documents } = state;
+  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId, documents, competitions } = state;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
@@ -940,6 +956,19 @@ function AppInner() {
     return next;
   };
 
+  // Same idea, for a sub-competition abbreviation straight from the draw
+  // paste — runs before pairing, same as tees, for the same reason.
+  const mergeCompetitionsIntoPlayers = (currentPlayers, compPairs) => {
+    if (!compPairs || compPairs.length === 0) return currentPlayers;
+    let next = [...currentPlayers];
+    compPairs.forEach(({ name, abbreviation }) => {
+      const target = normalizeName(name);
+      const idx = next.findIndex((p) => normalizeName(p.name) === target);
+      if (idx !== -1) next[idx] = { ...next[idx], competition: abbreviation };
+    });
+    return next;
+  };
+
   const importPlayers = (newPlayers) => {
     updateRound({ players: [...players, ...newPlayers] });
   };
@@ -1061,18 +1090,33 @@ function AppInner() {
 
   const updateHandicapPin = (newPin) => save({ handicapPin: newPin });
 
+  // Sub-competitions (e.g. a seniors' trophy) — freeform, since the actual
+  // trophies change through the year. Just an abbreviation + full name;
+  // players get tagged with the abbreviation, same idea as the tee field.
+  const addCompetition = () => {
+    save({ competitions: [...competitions, { id: crypto.randomUUID(), abbreviation: "", fullName: "" }] });
+  };
+
+  const updateCompetition = (id, patch) => {
+    save({ competitions: competitions.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  };
+
+  const removeCompetition = (id) => {
+    save({ competitions: competitions.filter((c) => c.id !== id) });
+  };
+
   // Updates a player's handicap index everywhere they appear, across every
   // day of the event — matches by name, checking both the primary name and
   // (for Foursomes pairs) the partner name, since it's the same portable
   // index either way.
-  const updatePlayerEverywhere = (name, newIndex, newTee) => {
+  const updatePlayerEverywhere = (name, newIndex, newTee, newCompetition) => {
     const target = normalizeName(name);
     save({
       rounds: rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
-          if (normalizeName(p.name) === target) return { ...p, index: newIndex, tee: newTee };
-          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee };
+          if (normalizeName(p.name) === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
+          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
           return p;
         }),
       })),
@@ -1080,14 +1124,14 @@ function AppInner() {
   };
 
   // Every distinct player name across every day, each with whatever
-  // handicap and tee they currently have on their most recent appearance —
-  // the list the handicap-check screen searches against.
+  // handicap, tee, and competition tag they currently have on their most
+  // recent appearance — the list the handicap-check screen searches against.
   const allPlayersAcrossRounds = () => {
     const byName = new Map();
     rounds.forEach((r) => {
       r.players.forEach((p) => {
-        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index, tee: p.tee });
-        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex, tee: p.partnerTee });
+        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index, tee: p.tee, competition: p.competition });
+        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition });
       });
     });
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -1103,19 +1147,20 @@ function AppInner() {
     return [...labels];
   };
 
-  const updateDraw = (newDraw, hcpPairs, teePairs) => {
-    // Everything the draw paste can touch (roster handicaps, tees, then
-    // pairing) gets computed here in one pass from the same starting
-    // snapshot of players, and written in a single update — doing this as
-    // separate save() calls previously meant a later one could work from
-    // stale data and silently undo an earlier one.
+  const updateDraw = (newDraw, hcpPairs, teePairs, compPairs) => {
+    // Everything the draw paste can touch (roster handicaps, tees,
+    // competitions, then pairing) gets computed here in one pass from the
+    // same starting snapshot of players, and written in a single update —
+    // doing this as separate save() calls previously meant a later one
+    // could work from stale data and silently undo an earlier one.
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
+    const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs);
     if (!isFoursomes) {
-      updateRound({ draw: newDraw, players: withTees });
+      updateRound({ draw: newDraw, players: withComps });
       return;
     }
-    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withTees, newDraw, course) });
+    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withComps, newDraw, course) });
   };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
@@ -1412,7 +1457,7 @@ function AppInner() {
           onSelectHandicap={handleHandicapTap}
         />
       ) : mode === "board" ? (
-        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
@@ -1426,6 +1471,7 @@ function AppInner() {
         <HandicapCheck
           players={allPlayersAcrossRounds()}
           teeOptions={allTeeLabels()}
+          competitions={competitions}
           onUpdate={updatePlayerEverywhere}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -1435,7 +1481,7 @@ function AppInner() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1465,6 +1511,7 @@ function AppInner() {
           onUpdateRoundDate={(date) => updateRoundDate(activeRoundId, date)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
           onUpdatePlayerDetails={updatePlayerDetailsByName}
+          competitions={competitions}
           onAddPlayerQuick={addPlayerQuick}
         />
       ) : showLocalRulesSetup ? (
@@ -1496,6 +1543,10 @@ function AppInner() {
           onUpdatePin={updatePin}
           handicapPin={handicapPin}
           onUpdateHandicapPin={updateHandicapPin}
+          competitions={competitions}
+          onAddCompetition={addCompetition}
+          onUpdateCompetition={updateCompetition}
+          onRemoveCompetition={removeCompetition}
           course={course}
           onUpdate={updateCourse}
           onBack={() => setShowCourseSetup(false)}
@@ -1697,7 +1748,8 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect
   );
 }
 
-function Board({ rounds, tab, onTabChange, headerColor, accentColor }) {
+function Board({ rounds, tab, onTabChange, competitions, headerColor, accentColor }) {
+  const [subFilter, setSubFilter] = useState(""); // competition abbreviation, or "" for all
   const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
   const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
   const activeRounds = tab === "singles" ? singlesRounds : foursomesRounds;
@@ -1726,6 +1778,35 @@ function Board({ rounds, tab, onTabChange, headerColor, accentColor }) {
           Foursomes
         </button>
       </div>
+      {tab === "singles" && competitions.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+          <button
+            onClick={() => setSubFilter("")}
+            style={{
+              padding: "5px 11px", borderRadius: 20, fontSize: 11.5, fontWeight: 600,
+              border: `1px solid ${accentColor}`,
+              background: subFilter === "" ? accentColor : "transparent",
+              color: subFilter === "" ? "#FFFFFF" : accentColor,
+            }}
+          >
+            All
+          </button>
+          {competitions.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setSubFilter(c.abbreviation)}
+              style={{
+                padding: "5px 11px", borderRadius: 20, fontSize: 11.5, fontWeight: 600,
+                border: `1px solid ${accentColor}`,
+                background: subFilter === c.abbreviation ? accentColor : "transparent",
+                color: subFilter === c.abbreviation ? "#FFFFFF" : accentColor,
+              }}
+            >
+              {c.fullName || c.abbreviation}
+            </button>
+          ))}
+        </div>
+      )}
       {activeRounds.length === 0 ? (
         <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
           <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
@@ -1741,7 +1822,11 @@ function Board({ rounds, tab, onTabChange, headerColor, accentColor }) {
           rounds={activeRounds}
           headerColor={headerColor}
           accentColor={accentColor}
-          computeStandings={tab === "foursomes" ? combinedPairStandings : combinedStandings}
+          computeStandings={
+            tab === "foursomes"
+              ? combinedPairStandings
+              : (rs) => combinedStandings(rs, tab === "singles" ? subFilter : "")
+          }
           rowLabel={tab === "foursomes" ? "Pair" : "Player"}
         />
       )}
@@ -1887,27 +1972,30 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
   const [confirmLoadId, setConfirmLoadId] = useState(null);
 
   const doImport = () => {
-    const parsed = parsePastedDraw(pasteText);
+    const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
+    const parsed = parsePastedDraw(pasteText, abbrevs);
     if (parsed.length === 0) {
       setMsg("No rows found — make sure each line starts with a time.");
       return;
     }
-    const hcpPairs = extractHandicapsFromDrawPaste(pasteText);
-    const teePairs = extractTeesFromDrawPaste(pasteText);
-    onUpdate(parsed, hcpPairs, teePairs);
+    const hcpPairs = extractHandicapsFromDrawPaste(pasteText, abbrevs);
+    const teePairs = extractTeesFromDrawPaste(pasteText, abbrevs);
+    const compPairs = extractCompetitionsFromDrawPaste(pasteText, abbrevs);
+    onUpdate(parsed, hcpPairs, teePairs, compPairs);
     const extras = [];
     if (hcpPairs.length > 0) extras.push(`${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"}`);
     if (teePairs.length > 0) extras.push(`${teePairs.length} tee${teePairs.length === 1 ? "" : "s"}`);
+    if (compPairs.length > 0) extras.push(`${compPairs.length} competition tag${compPairs.length === 1 ? "" : "s"}`);
     setMsg(
       `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
-      (extras.length > 0 ? `, ${extras.join(" and ")} added to the roster.` : ".")
+      (extras.length > 0 ? `, ${extras.join(", ")} added to the roster.` : ".")
     );
     setPasteText("");
   };
@@ -2115,9 +2203,10 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
               One tee time per line: Time, then each player in their own column (copy straight from your
-              spreadsheet). A handicap number right after a name is picked up automatically, and so is a tee
-              column — write "Back" or "Front" (or just B/F) anywhere in that name's columns. Both get added
-              straight to the roster. Pasting replaces the whole draw below.
+              spreadsheet). A handicap number right after a name is picked up automatically, so is a tee
+              column — write "Back" or "Front" (or just B/F) — and so is a competition abbreviation you've
+              already set up in Admin (e.g. "JHB"). All added straight to the roster. Pasting replaces the
+              whole draw below.
             </div>
             <textarea
               value={pasteText}
@@ -2665,11 +2754,12 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor }) {
+function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColor, accentColor }) {
   const [query, setQuery] = useState("");
   const [selectedName, setSelectedName] = useState(null);
   const [value, setValue] = useState("");
   const [tee, setTee] = useState("");
+  const [competition, setCompetition] = useState("");
   const [savedMsg, setSavedMsg] = useState(false);
 
   const filtered = query.trim()
@@ -2680,11 +2770,12 @@ function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor
     setSelectedName(p.name);
     setValue(p.index || "");
     setTee(p.tee || teeOptions[0] || "");
+    setCompetition(p.competition || "");
     setSavedMsg(false);
   };
 
   const save = () => {
-    onUpdate(selectedName, value, tee);
+    onUpdate(selectedName, value, tee, competition);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
   };
@@ -2720,6 +2811,21 @@ function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor
               <option key={label} value={label}>{label}</option>
             ))}
           </select>
+          {competitions.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
+              <select
+                value={competition}
+                onChange={(e) => setCompetition(e.target.value)}
+                style={{ width: "100%", fontSize: 16, fontWeight: 600, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
+              >
+                <option value="">Main competition (no sub-trophy)</option>
+                {competitions.map((c) => (
+                  <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+                ))}
+              </select>
+            </>
+          )}
           <button
             onClick={save}
             style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
@@ -2727,7 +2833,7 @@ function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor
             {savedMsg ? "Saved" : "Save"}
           </button>
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
-            Updates this handicap and tee everywhere {selectedName} appears across the whole event, not just one day.
+            Updates everywhere {selectedName} appears across the whole event, not just one day.
           </div>
         </div>
       </div>
@@ -2763,7 +2869,7 @@ function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor
           >
             <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
             <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
-              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.tee ? ` · ${p.tee}` : ""}
+              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.tee ? ` · ${p.tee}` : ""}{p.competition ? ` · ${p.competition}` : ""}
             </span>
           </button>
         ))
@@ -3328,7 +3434,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, competitions, onAddCompetition, onUpdateCompetition, onRemoveCompetition, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -3603,6 +3709,47 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           }}
         >
           <Plus size={13} /> Add tee
+        </button>
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Competitions
+        </div>
+        <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 10 }}>
+          Sub-competitions running alongside the main one — e.g. a seniors' trophy. Give each a short abbreviation
+          (matched automatically when you paste a draw with that abbreviation next to a name) and a full name for
+          display. Leave this empty if there's just the one competition.
+        </div>
+        {competitions.map((c) => (
+          <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+            <input
+              value={c.abbreviation}
+              onChange={(e) => onUpdateCompetition(c.id, { abbreviation: e.target.value.toUpperCase() })}
+              placeholder="JHB"
+              className="mono"
+              style={{ width: 64, fontSize: 13, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px" }}
+            />
+            <input
+              value={c.fullName}
+              onChange={(e) => onUpdateCompetition(c.id, { fullName: e.target.value })}
+              placeholder="John Hay Bowl"
+              style={{ flex: 1, fontSize: 13, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px", fontFamily: "inherit" }}
+            />
+            <button onClick={() => onRemoveCompetition(c.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+              <X size={15} />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={onAddCompetition}
+          style={{
+            width: "100%", padding: "8px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+            background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          }}
+        >
+          <Plus size={13} /> Add competition
         </button>
       </div>
 
