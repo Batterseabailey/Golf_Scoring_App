@@ -346,6 +346,7 @@ const DEFAULT_STATE = {
   accentColor: "#3B6D8C",
   headerColor: "#1F2A37",
   pin: DEFAULT_PIN,
+  handicapPin: "0000", // separate, lighter-weight code for players checking/updating their own handicap
   rounds: [emptyRound("Day 1")],
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
@@ -382,6 +383,7 @@ function sanitizeState(parsed) {
     accentColor: typeof parsed.accentColor === "string" && parsed.accentColor ? parsed.accentColor : DEFAULT_STATE.accentColor,
     headerColor: typeof parsed.headerColor === "string" && parsed.headerColor ? parsed.headerColor : DEFAULT_STATE.headerColor,
     pin: typeof parsed.pin === "string" && parsed.pin ? parsed.pin : DEFAULT_PIN,
+    handicapPin: typeof parsed.handicapPin === "string" && parsed.handicapPin ? parsed.handicapPin : "0000",
     rounds,
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
@@ -541,6 +543,64 @@ function extractTeesFromDrawPaste(text) {
 
 }
 
+function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap }) {
+  const sectionCard = (title, items) => (
+    <div style={{ background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", marginBottom: 12, overflow: "hidden" }}>
+      <div
+        style={{
+          fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+          color: "#FFFFFF", background: headerColor, padding: "10px 14px",
+        }}
+      >
+        {title}
+      </div>
+      {items}
+    </div>
+  );
+
+  const row = (label, onClick, key) => (
+    <button
+      key={key || label}
+      onClick={onClick}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "14px 16px", background: "none", border: "none", borderTop: "1px solid #EFEDE0",
+        textAlign: "left",
+      }}
+    >
+      <span style={{ fontSize: 15, fontWeight: 600, color: "#1B1B1B" }}>{label}</span>
+      <ChevronRight size={16} color="#9B9885" />
+    </button>
+  );
+
+  const standaloneRow = (label, onClick) => (
+    <button
+      onClick={onClick}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "16px", background: "#FFFFFF", border: "1px solid #E4E0D0", borderRadius: 12,
+        marginBottom: 10, textAlign: "left",
+      }}
+    >
+      <span style={{ fontSize: 15, fontWeight: 700, color: headerColor }}>{label}</span>
+      <ChevronRight size={16} color="#9B9885" />
+    </button>
+  );
+
+  return (
+    <div style={{ padding: "14px 14px 40px" }}>
+      {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id)))}
+      {sectionCard("Leaderboards", [
+        row("Singles", () => onSelectLeaderboard("singles"), "singles"),
+        row("Foursomes", () => onSelectLeaderboard("foursomes"), "foursomes"),
+      ])}
+      {standaloneRow("Information", onSelectInfo)}
+      {standaloneRow("Local Rules", onSelectRules)}
+      {standaloneRow("Your Handicap", onSelectHandicap)}
+    </div>
+  );
+}
+
 function CodeGate({ onSubmit }) {
   const [value, setValue] = useState("");
 
@@ -639,13 +699,14 @@ function AppInner() {
   const eventCodeRef = useRef(eventCode);
   useEffect(() => { eventCodeRef.current = eventCode; }, [eventCode]);
 
-  const [mode, setMode] = useState("board"); // board | draw | scorer
+  const [mode, setMode] = useState("menu"); // menu | board | draw | rules | docs | handicap | scorer
+  const [boardTab, setBoardTab] = useState("singles"); // singles | foursomes — lifted so the menu can jump straight to one
   // All persisted event state lives in one object now, saved with a single
   // functional update (setState(prev => ({...prev, ...patch}))) — this
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, rounds, activeRoundId, documents } = state;
+  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId, documents } = state;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
@@ -664,6 +725,8 @@ function AppInner() {
   // is the point (keeps casual players from fumbling into edit mode).
   const [scorerUnlocked, setScorerUnlocked] = useState(false);
   const [showPinPrompt, setShowPinPrompt] = useState(false);
+  const [handicapUnlocked, setHandicapUnlocked] = useState(false);
+  const [showHandicapPinPrompt, setShowHandicapPinPrompt] = useState(false);
   const [showDaySwitcher, setShowDaySwitcher] = useState(false);
   const pollRef = useRef(null);
   const modeRef = useRef(mode);
@@ -982,6 +1045,40 @@ function AppInner() {
 
   const updatePin = (newPin) => save({ pin: newPin });
 
+  const updateHandicapPin = (newPin) => save({ handicapPin: newPin });
+
+  // Updates a player's handicap index everywhere they appear, across every
+  // day of the event — matches by name, checking both the primary name and
+  // (for Foursomes pairs) the partner name, since it's the same portable
+  // index either way.
+  const updateHandicapEverywhere = (name, newIndex) => {
+    const target = normalizeName(name);
+    save({
+      rounds: rounds.map((r) => ({
+        ...r,
+        players: r.players.map((p) => {
+          if (normalizeName(p.name) === target) return { ...p, index: newIndex };
+          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex };
+          return p;
+        }),
+      })),
+    });
+  };
+
+  // Every distinct player name across every day, each with whatever
+  // handicap they currently have on their most recent appearance — the
+  // list the handicap-check screen searches against.
+  const allPlayersAcrossRounds = () => {
+    const byName = new Map();
+    rounds.forEach((r) => {
+      r.players.forEach((p) => {
+        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index });
+        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex });
+      });
+    });
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  };
+
   const updateDraw = (newDraw, hcpPairs, teePairs) => {
     // Everything the draw paste can touch (roster handicaps, tees, then
     // pairing) gets computed here in one pass from the same starting
@@ -1095,6 +1192,14 @@ function AppInner() {
     }
   };
 
+  const handleHandicapTap = () => {
+    if (handicapUnlocked) {
+      setMode("handicap");
+    } else {
+      setShowHandicapPinPrompt(true);
+    }
+  };
+
   const ranked = [...players]
     .map((p) => ({
       ...p,
@@ -1178,6 +1283,17 @@ function AppInner() {
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
           <button
+            onClick={() => { setMode("menu"); setShowCourseSetup(false); }}
+            style={{
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "menu" ? "#F1EFE3" : "transparent",
+              color: mode === "menu" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Menu
+          </button>
+          <button
             onClick={() => { setMode("board"); setShowCourseSetup(false); }}
             style={{
               flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
@@ -1222,6 +1338,17 @@ function AppInner() {
             Information
           </button>
           <button
+            onClick={handleHandicapTap}
+            style={{
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "handicap" ? "#F1EFE3" : "transparent",
+              color: mode === "handicap" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Your Handicap
+          </button>
+          <button
             onClick={handleScorerTap}
             style={{
               flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
@@ -1237,8 +1364,19 @@ function AppInner() {
 
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
+      ) : mode === "menu" ? (
+        <PlayerMenu
+          rounds={rounds}
+          headerColor={headerColor}
+          accentColor={accentColor}
+          onSelectDay={(roundId) => { setActiveRound(roundId); setMode("draw"); }}
+          onSelectLeaderboard={(tab) => { setBoardTab(tab); setMode("board"); }}
+          onSelectRules={() => setMode("rules")}
+          onSelectInfo={() => setMode("docs")}
+          onSelectHandicap={handleHandicapTap}
+        />
       ) : mode === "board" ? (
-        <Board rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
@@ -1248,12 +1386,19 @@ function AppInner() {
       ) : mode === "docs" ? (
         // Public — a list of PDFs anyone can open, no PIN needed.
         <DocumentsView documents={documents} onOpen={openDocument} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "handicap" && handicapUnlocked ? (
+        <HandicapCheck
+          players={allPlayersAcrossRounds()}
+          onUpdate={updateHandicapEverywhere}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : !scorerUnlocked ? (
         // Guard: mode can only reach "scorer" via handleScorerTap, which
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board rounds={rounds} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} headerColor={headerColor} accentColor={accentColor} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1310,6 +1455,8 @@ function AppInner() {
           onUpdateHeaderColor={updateHeaderColor}
           pin={pin}
           onUpdatePin={updatePin}
+          handicapPin={handicapPin}
+          onUpdateHandicapPin={updateHandicapPin}
           course={course}
           onUpdate={updateCourse}
           onBack={() => setShowCourseSetup(false)}
@@ -1373,6 +1520,21 @@ function AppInner() {
           onCancel={() => setShowPinPrompt(false)}
         />
       )}
+      {showHandicapPinPrompt && (
+        <PinPrompt
+          pin={handicapPin}
+          accentColor={accentColor}
+          headerColor={headerColor}
+          title="Handicap code"
+          description="Enter the code to check or update a player's handicap index."
+          onSuccess={() => {
+            setHandicapUnlocked(true);
+            setShowHandicapPinPrompt(false);
+            setMode("handicap");
+          }}
+          onCancel={() => setShowHandicapPinPrompt(false)}
+        />
+      )}
       {showDaySwitcher && (
         <DaySwitcher
           rounds={rounds}
@@ -1387,7 +1549,7 @@ function AppInner() {
   );
 }
 
-function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
+function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel, title = "Admin PIN", description = "Enter the PIN to enter scores or edit the course." }) {
   const [entry, setEntry] = useState("");
   const [error, setError] = useState(false);
 
@@ -1412,8 +1574,8 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel }) {
         style={{ background: "#FFFFFF", borderRadius: 12, padding: 22, width: "100%", maxWidth: 300, textAlign: "center" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>Admin PIN</div>
-        <div style={{ fontSize: 12, color: "#8A8774", marginBottom: 14 }}>Enter the PIN to enter scores or edit the course.</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 12, color: "#8A8774", marginBottom: 14 }}>{description}</div>
         <input
           autoFocus
           type="password"
@@ -1496,8 +1658,7 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect
   );
 }
 
-function Board({ rounds, headerColor, accentColor }) {
-  const [tab, setTab] = useState("singles"); // singles | foursomes
+function Board({ rounds, tab, onTabChange, headerColor, accentColor }) {
   const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
   const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
   const activeRounds = tab === "singles" ? singlesRounds : foursomesRounds;
@@ -1506,7 +1667,7 @@ function Board({ rounds, headerColor, accentColor }) {
     <div style={{ padding: "14px 12px 40px" }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
         <button
-          onClick={() => setTab("singles")}
+          onClick={() => onTabChange("singles")}
           style={{
             flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
             background: tab === "singles" ? headerColor : "transparent",
@@ -1516,7 +1677,7 @@ function Board({ rounds, headerColor, accentColor }) {
           Singles
         </button>
         <button
-          onClick={() => setTab("foursomes")}
+          onClick={() => onTabChange("foursomes")}
           style={{
             flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
             background: tab === "foursomes" ? headerColor : "transparent",
@@ -2455,6 +2616,101 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
+function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
+  const [query, setQuery] = useState("");
+  const [selectedName, setSelectedName] = useState(null);
+  const [value, setValue] = useState("");
+  const [savedMsg, setSavedMsg] = useState(false);
+
+  const filtered = query.trim()
+    ? players.filter((p) => p.name.toLowerCase().includes(query.trim().toLowerCase()))
+    : players;
+
+  const selectPlayer = (p) => {
+    setSelectedName(p.name);
+    setValue(p.index || "");
+    setSavedMsg(false);
+  };
+
+  const save = () => {
+    onUpdate(selectedName, value);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 1500);
+  };
+
+  if (selectedName) {
+    return (
+      <div style={{ padding: "14px 14px 40px" }}>
+        <button
+          onClick={() => setSelectedName(null)}
+          style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 12, padding: 0, fontWeight: 600 }}
+        >
+          ← Back to search
+        </button>
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{selectedName}</div>
+          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
+          <input
+            autoFocus
+            type="number"
+            inputMode="decimal"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="mono"
+            style={{ width: "100%", fontSize: 20, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
+          />
+          <button
+            onClick={save}
+            style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
+          >
+            {savedMsg ? "Saved" : "Save"}
+          </button>
+          <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
+            Updates this handicap everywhere {selectedName} appears across the whole event, not just one day.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "14px 14px 40px" }}>
+      <div style={{ fontSize: 12.5, color: "#6B6B5F", marginBottom: 10 }}>
+        Find your name to check or update your handicap index.
+      </div>
+      <input
+        autoFocus
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search your name…"
+        style={{ width: "100%", fontSize: 15, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 12, fontFamily: "inherit" }}
+      />
+      {filtered.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "#9B9885", textAlign: "center", padding: "24px 0" }}>
+          No matching players yet.
+        </div>
+      ) : (
+        filtered.map((p) => (
+          <button
+            key={p.name}
+            onClick={() => selectPlayer(p)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "12px 14px", background: "#FFFFFF", borderRadius: 10, marginBottom: 8, border: "1px solid #E4E0D0",
+              textAlign: "left",
+            }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
+            <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
+              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}
+            </span>
+          </button>
+        ))
+      )}
+    </div>
+  );
+}
+
 function DocumentsView({ documents, onOpen, headerColor, accentColor }) {
   if (documents.length === 0) {
     return (
@@ -3011,7 +3267,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -3199,6 +3455,18 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           <input
             value={pin}
             onChange={(e) => onUpdatePin(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
+            inputMode="numeric"
+            className="mono"
+            style={{ width: 120, fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", letterSpacing: "0.15em" }}
+          />
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+            Handicap code <span style={{ textTransform: "none", letterSpacing: 0 }}>(separate, lighter code — share with all players so they can check/update their own handicap)</span>
+          </div>
+          <input
+            value={handicapPin}
+            onChange={(e) => onUpdateHandicapPin(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
             inputMode="numeric"
             className="mono"
             style={{ width: 120, fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", letterSpacing: "0.15em" }}
