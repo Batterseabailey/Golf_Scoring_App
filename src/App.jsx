@@ -765,6 +765,7 @@ function AppInner() {
   const [showDrawSetup, setShowDrawSetup] = useState(false);
   const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
+  const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
   // knows the PIN can enter it fresh each time they open the link, which
@@ -1566,6 +1567,16 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
         />
+      ) : showCompetitionsSetup ? (
+        <CompetitionsSetup
+          competitions={competitions}
+          onAdd={addCompetition}
+          onUpdate={updateCompetition}
+          onRemove={removeCompetition}
+          onBack={() => setShowCompetitionsSetup(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showCourseSetup ? (
         <CourseSetup
           orgName={orgName}
@@ -1578,10 +1589,6 @@ function AppInner() {
           onUpdatePin={updatePin}
           handicapPin={handicapPin}
           onUpdateHandicapPin={updateHandicapPin}
-          competitions={competitions}
-          onAddCompetition={addCompetition}
-          onUpdateCompetition={updateCompetition}
-          onRemoveCompetition={removeCompetition}
           course={course}
           onUpdate={updateCourse}
           onBack={() => setShowCourseSetup(false)}
@@ -1620,11 +1627,12 @@ function AppInner() {
           onOpenDrawSetup={() => setShowDrawSetup(true)}
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
+          onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
           onImport={importPlayers}
           onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); }}
           rounds={rounds}
           activeRoundId={activeRoundId}
           onCopyPlayers={copyPlayersFromRound}
@@ -2756,6 +2764,61 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
+function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, onBack, headerColor, accentColor }) {
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Competitions</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
+          Sub-competitions running alongside the main one — e.g. a seniors' trophy or a ladies' event. Give each a
+          short abbreviation (matched automatically when you paste a draw with that abbreviation next to a name,
+          or add it here yourself) and a full name for display. This list is entirely separate from your course
+          data — reusing or switching a course never touches it.
+        </div>
+        {competitions.map((c) => (
+          <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+            <input
+              value={c.abbreviation}
+              onChange={(e) => onUpdate(c.id, { abbreviation: e.target.value.toUpperCase() })}
+              placeholder="JHB"
+              className="mono"
+              style={{ width: 64, fontSize: 13, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px" }}
+            />
+            <input
+              value={c.fullName}
+              onChange={(e) => onUpdate(c.id, { fullName: e.target.value })}
+              placeholder="John Hay Bowl"
+              style={{ flex: 1, fontSize: 13, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px", fontFamily: "inherit" }}
+            />
+            <button onClick={() => onRemove(c.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+              <X size={15} />
+            </button>
+          </div>
+        ))}
+        {competitions.length === 0 && (
+          <div style={{ fontSize: 12, color: "#9B9885", marginBottom: 10 }}>
+            None yet — just the one main competition. Add one below whenever you need a sub-trophy running alongside it.
+          </div>
+        )}
+        <button
+          onClick={onAdd}
+          style={{
+            width: "100%", padding: "9px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+            background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          }}
+        >
+          <Plus size={13} /> Add competition
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   const [draft, setDraft] = useState(text);
   const [saved, setSaved] = useState(false);
@@ -3030,7 +3093,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -3116,6 +3179,19 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
       >
         <FileText size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Information (PDFs)</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenCompetitionsSetup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Flag size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Competitions</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
@@ -3475,7 +3551,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, competitions, onAddCompetition, onUpdateCompetition, onRemoveCompetition, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -3750,47 +3826,6 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           }}
         >
           <Plus size={13} /> Add tee
-        </button>
-      </div>
-
-      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
-          Competitions
-        </div>
-        <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 10 }}>
-          Sub-competitions running alongside the main one — e.g. a seniors' trophy. Give each a short abbreviation
-          (matched automatically when you paste a draw with that abbreviation next to a name) and a full name for
-          display. Leave this empty if there's just the one competition.
-        </div>
-        {competitions.map((c) => (
-          <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
-            <input
-              value={c.abbreviation}
-              onChange={(e) => onUpdateCompetition(c.id, { abbreviation: e.target.value.toUpperCase() })}
-              placeholder="JHB"
-              className="mono"
-              style={{ width: 64, fontSize: 13, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px" }}
-            />
-            <input
-              value={c.fullName}
-              onChange={(e) => onUpdateCompetition(c.id, { fullName: e.target.value })}
-              placeholder="John Hay Bowl"
-              style={{ flex: 1, fontSize: 13, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px", fontFamily: "inherit" }}
-            />
-            <button onClick={() => onRemoveCompetition(c.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
-              <X size={15} />
-            </button>
-          </div>
-        ))}
-        <button
-          onClick={onAddCompetition}
-          style={{
-            width: "100%", padding: "8px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
-            background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5,
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-          }}
-        >
-          <Plus size={13} /> Add competition
         </button>
       </div>
 
