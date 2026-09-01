@@ -716,9 +716,13 @@ function AppInner() {
   };
 
   const loadCourseFromLibrary = (entry) => {
-    // Loading a different course means a different meeting — start with
-    // a clean player list rather than mixing last year's scores in.
-    updateRound({ course: entry.course, players: [] });
+    // A handicap index is portable across courses — only the course's own
+    // par/slope/stroke-index data changes here, so the roster stays put.
+    // (This used to also clear players, on the assumption that a course
+    // switch always meant starting a brand new event — but it's also used
+    // to compare different saved courses for the *same* day/draw, where
+    // wiping the roster loses real work for no reason.)
+    updateRound({ course: entry.course });
   };
 
   const deleteCourseFromLibrary = async (id) => {
@@ -1631,7 +1635,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                 </div>
                 {confirmLoadId === entry.id ? (
                   <>
-                    <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Clears players?</span>
+                    <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Load this course?</span>
                     <button
                       onClick={() => { onLoadFromLibrary(entry); setConfirmLoadId(null); }}
                       style={{ fontSize: 11.5, fontWeight: 700, color: headerColor, background: "none", border: "none", padding: "4px 6px" }}
@@ -3069,7 +3073,7 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
               <div style={{ flex: 1, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.name}</div>
               {confirmLoadId === entry.id ? (
                 <>
-                  <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Clears players?</span>
+                  <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Load this course?</span>
                   <button
                     onClick={() => { onLoadFromLibrary(entry); setConfirmLoadId(null); }}
                     style={{ fontSize: 11.5, fontWeight: 700, color: headerColor, background: "none", border: "none", padding: "4px 6px" }}
