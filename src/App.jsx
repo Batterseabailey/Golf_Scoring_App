@@ -1051,14 +1051,14 @@ function AppInner() {
   // day of the event — matches by name, checking both the primary name and
   // (for Foursomes pairs) the partner name, since it's the same portable
   // index either way.
-  const updateHandicapEverywhere = (name, newIndex) => {
+  const updatePlayerEverywhere = (name, newIndex, newTee) => {
     const target = normalizeName(name);
     save({
       rounds: rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
-          if (normalizeName(p.name) === target) return { ...p, index: newIndex };
-          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex };
+          if (normalizeName(p.name) === target) return { ...p, index: newIndex, tee: newTee };
+          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee };
           return p;
         }),
       })),
@@ -1066,17 +1066,27 @@ function AppInner() {
   };
 
   // Every distinct player name across every day, each with whatever
-  // handicap they currently have on their most recent appearance — the
-  // list the handicap-check screen searches against.
+  // handicap and tee they currently have on their most recent appearance —
+  // the list the handicap-check screen searches against.
   const allPlayersAcrossRounds = () => {
     const byName = new Map();
     rounds.forEach((r) => {
       r.players.forEach((p) => {
-        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index });
-        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex });
+        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index, tee: p.tee });
+        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex, tee: p.partnerTee });
       });
     });
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  };
+
+  // Every distinct tee label used across any day's course — since the
+  // whole point of naming tees consistently (e.g. always "Back"/"Front")
+  // is that the same choice works everywhere, this is what the
+  // handicap-check screen's tee dropdown offers.
+  const allTeeLabels = () => {
+    const labels = new Set();
+    rounds.forEach((r) => r.course.tees.forEach((t) => labels.add(t.label)));
+    return [...labels];
   };
 
   const updateDraw = (newDraw, hcpPairs, teePairs) => {
@@ -1228,6 +1238,11 @@ function AppInner() {
         .mono { font-family: 'Courier New', ui-monospace, monospace; }
         .scoreInput::-webkit-outer-spin-button, .scoreInput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .scoreInput { -moz-appearance: textfield; }
+        @keyframes menuPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(241,239,227,0.55); }
+          50% { box-shadow: 0 0 0 7px rgba(241,239,227,0); }
+        }
+        .menu-pulse { animation: menuPulse 1.8s ease-in-out infinite; }
       `}</style>
 
       {/* Header */}
@@ -1284,11 +1299,13 @@ function AppInner() {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
           <button
             onClick={() => { setMode("menu"); setShowCourseSetup(false); }}
+            className={mode === "menu" ? "" : "menu-pulse"}
             style={{
-              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7,
+              border: mode === "menu" ? "1px solid rgba(241,239,227,0.25)" : `2px solid ${accentColor}`,
               background: mode === "menu" ? "#F1EFE3" : "transparent",
               color: mode === "menu" ? headerColor : "#F1EFE3",
-              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+              fontSize: 12, fontWeight: 800, letterSpacing: "0.02em",
             }}
           >
             Menu
@@ -1389,7 +1406,8 @@ function AppInner() {
       ) : mode === "handicap" && handicapUnlocked ? (
         <HandicapCheck
           players={allPlayersAcrossRounds()}
-          onUpdate={updateHandicapEverywhere}
+          teeOptions={allTeeLabels()}
+          onUpdate={updatePlayerEverywhere}
           headerColor={headerColor}
           accentColor={accentColor}
         />
@@ -2616,10 +2634,11 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
+function HandicapCheck({ players, teeOptions, onUpdate, headerColor, accentColor }) {
   const [query, setQuery] = useState("");
   const [selectedName, setSelectedName] = useState(null);
   const [value, setValue] = useState("");
+  const [tee, setTee] = useState("");
   const [savedMsg, setSavedMsg] = useState(false);
 
   const filtered = query.trim()
@@ -2629,11 +2648,12 @@ function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
   const selectPlayer = (p) => {
     setSelectedName(p.name);
     setValue(p.index || "");
+    setTee(p.tee || teeOptions[0] || "");
     setSavedMsg(false);
   };
 
   const save = () => {
-    onUpdate(selectedName, value);
+    onUpdate(selectedName, value, tee);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
   };
@@ -2659,6 +2679,16 @@ function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
             className="mono"
             style={{ width: "100%", fontSize: 20, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
           />
+          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Tee</div>
+          <select
+            value={tee}
+            onChange={(e) => setTee(e.target.value)}
+            style={{ width: "100%", fontSize: 16, fontWeight: 600, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
+          >
+            {teeOptions.map((label) => (
+              <option key={label} value={label}>{label}</option>
+            ))}
+          </select>
           <button
             onClick={save}
             style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
@@ -2666,7 +2696,7 @@ function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
             {savedMsg ? "Saved" : "Save"}
           </button>
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
-            Updates this handicap everywhere {selectedName} appears across the whole event, not just one day.
+            Updates this handicap and tee everywhere {selectedName} appears across the whole event, not just one day.
           </div>
         </div>
       </div>
@@ -2702,7 +2732,7 @@ function HandicapCheck({ players, onUpdate, headerColor, accentColor }) {
           >
             <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
             <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
-              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}
+              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.tee ? ` · ${p.tee}` : ""}
             </span>
           </button>
         ))
