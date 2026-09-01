@@ -178,7 +178,7 @@ function isValidCourse(c) {
 
 const DEFAULT_PIN = "1234";
 
-const MAX_ROUNDS = 3;
+const MAX_ROUNDS = 6;
 
 function formatRelToPar(rel) {
   if (rel === 0) return "E";
