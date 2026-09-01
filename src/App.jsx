@@ -314,6 +314,7 @@ function emptyRound(label, course) {
   return {
     id: crypto.randomUUID(),
     label,
+    date: "", // optional YYYY-MM-DD — when set, rounds sort chronologically by this
     course: course || DEFAULT_COURSE,
     players: [],
     draw: [],
@@ -331,6 +332,7 @@ function sanitizeRound(r, fallbackLabel) {
   return {
     id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
     label: typeof r.label === "string" && r.label ? r.label : fallbackLabel,
+    date: typeof r.date === "string" ? r.date : "",
     course: isValidCourse(r.course) ? r.course : DEFAULT_COURSE,
     players: Array.isArray(r.players) ? r.players : [],
     draw: Array.isArray(r.draw) ? r.draw : [],
@@ -342,6 +344,14 @@ function sanitizeRound(r, fallbackLabel) {
     drawStartTime: typeof r.drawStartTime === "string" && r.drawStartTime ? r.drawStartTime : "09:00",
     drawInterval: typeof r.drawInterval === "number" && r.drawInterval > 0 ? r.drawInterval : 8,
   };
+}
+
+// Sorts rounds by date when set — anyone without a date keeps their
+// existing relative position, pushed after the dated ones.
+function sortRoundsByDate(rounds) {
+  const dated = rounds.filter((r) => r.date).sort((a, b) => a.date.localeCompare(b.date));
+  const undated = rounds.filter((r) => !r.date);
+  return [...dated, ...undated];
 }
 
 const DEFAULT_STATE = {
@@ -378,6 +388,7 @@ function sanitizeState(parsed) {
   } else {
     rounds = [emptyRound("Day 1")];
   }
+  rounds = sortRoundsByDate(rounds);
 
   const activeRoundId = rounds.some((r) => r.id === parsed.activeRoundId) ? parsed.activeRoundId : rounds[0].id;
 
@@ -1189,6 +1200,11 @@ function AppInner() {
     save({ rounds: rounds.map((r) => (r.id === roundId ? { ...r, label } : r)) });
   };
 
+  const updateRoundDate = (roundId, date) => {
+    const updated = rounds.map((r) => (r.id === roundId ? { ...r, date } : r));
+    save({ rounds: sortRoundsByDate(updated) });
+  };
+
   const removeRound = (roundId) => {
     if (rounds.length <= 1) return;
     const next = rounds.filter((r) => r.id !== roundId);
@@ -1445,6 +1461,8 @@ function AppInner() {
           onUpdateDrawInterval={updateDrawInterval}
           roundLabel={activeRound.label}
           onRenameRound={(label) => renameRound(activeRoundId, label)}
+          roundDate={activeRound.date}
+          onUpdateRoundDate={(date) => updateRoundDate(activeRoundId, date)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
           onUpdatePlayerDetails={updatePlayerDetailsByName}
           onAddPlayerQuick={addPlayerQuick}
@@ -1869,7 +1887,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1911,7 +1929,17 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           value={roundLabel}
           onChange={(e) => onRenameRound(e.target.value)}
           placeholder="e.g. 15 June — Spring Foursomes"
-          style={{ width: "100%", fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
+          style={{ width: "100%", fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", marginBottom: 12, fontFamily: "inherit" }}
+        />
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+          Date <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional — set this on each day and they'll always sort in date order, whatever order you entered them in)</span>
+        </div>
+        <input
+          type="date"
+          value={roundDate}
+          onChange={(e) => onUpdateRoundDate(e.target.value)}
+          className="mono"
+          style={{ fontSize: 14, fontWeight: 600, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
       </div>
 
