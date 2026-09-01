@@ -824,7 +824,7 @@ function AppInner() {
     setActiveId(null);
     setShowCourseSetup(false);
     setScorerUnlocked(false);
-    setMode("board");
+    setMode("menu");
   }, [eventCode]);
 
   const enterEventCode = (raw) => {
