@@ -887,6 +887,19 @@ function AppInner() {
     });
   };
 
+  // Updates both handicap and tee for whoever matches this name in one
+  // write — used by the draw's slot editor, which edits both at once.
+  const updatePlayerDetailsByName = (name, newIndex, newTee) => {
+    const target = (name || "").trim().toLowerCase();
+    updateRound({
+      players: players.map((p) => {
+        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex, tee: newTee };
+        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee };
+        return p;
+      }),
+    });
+  };
+
   const updateScore = (id, holeIdx, val) => {
     const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
     updateRound({
@@ -1267,6 +1280,7 @@ function AppInner() {
           roundLabel={activeRound.label}
           onRenameRound={(label) => renameRound(activeRoundId, label)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
+          onUpdatePlayerDetails={updatePlayerDetailsByName}
           onAddPlayerQuick={addPlayerQuick}
         />
       ) : showLocalRulesSetup ? (
@@ -1673,7 +1687,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1884,7 +1898,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onAddPlayerQuick={onAddPlayerQuick} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -1948,7 +1962,7 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onAddPlayerQuick }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => {
@@ -1976,14 +1990,14 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     .filter((p) => p.name && !assignedNames.has(p.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const pickUp = (name) => setSelected(selected === name ? null : name);
+  // `selected` is now { name, from } — from is null when picked up from
+  // the pool, or { rowId, slotIdx } when picked up out of an existing
+  // slot (a move-in-progress).
+  const pickUp = (name) => setSelected((prev) => (prev && prev.name === name && !prev.from ? null : { name, from: null }));
 
-  const placeInSlot = (rowId, slotIdx) => {
-    if (!selected) return;
-    setRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, slots: r.slots.map((s, i) => (i === slotIdx ? selected : s)) } : r))
-    );
-    setSelected(null);
+  const pickUpFromSlot = (rowId, slotIdx, name) => {
+    setSelected({ name, from: { rowId, slotIdx } });
+    setEditingSlot(null);
   };
 
   const clearSlot = (rowId, slotIdx) => {
@@ -1992,15 +2006,46 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     );
   };
 
-  // First tap on a filled slot opens the handicap editor rather than
-  // clearing it straight away — clearing now happens via the explicit
-  // "Remove from pair" button inside that editor, which is far more
-  // reliable on touch screens than trying to detect a genuine double-tap.
+  // Places whoever's picked up into a slot — if a move was in progress
+  // (picked up from another slot) and the destination is occupied, the
+  // two players swap; the pool naturally reabsorbs anyone displaced from
+  // a pool-originated placement, since it's derived from who's assigned.
+  const placeOrSwap = (targetRowId, targetSlotIdx) => {
+    if (!selected) return;
+    const { name, from } = selected;
+    if (from && from.rowId === targetRowId && from.slotIdx === targetSlotIdx) {
+      setSelected(null);
+      return;
+    }
+    setRows((prev) => {
+      const targetRow = prev.find((r) => r.id === targetRowId);
+      const occupant = targetRow ? targetRow.slots[targetSlotIdx] : null;
+      return prev.map((r) => {
+        const touchesTarget = r.id === targetRowId;
+        const touchesOrigin = from && r.id === from.rowId;
+        if (!touchesTarget && !touchesOrigin) return r;
+        const slots = r.slots.map((s, i) => {
+          if (touchesTarget && i === targetSlotIdx) return name;
+          if (touchesOrigin && i === from.slotIdx) return occupant || null;
+          return s;
+        });
+        return { ...r, slots };
+      });
+    });
+    setSelected(null);
+  };
+
+  // Any slot tap: if someone's picked up (from the pool, or mid-move),
+  // that always takes priority and places/swaps them. Otherwise, tapping
+  // a filled slot opens its editor; an empty slot with nothing picked up
+  // does nothing.
   const tapSlot = (rowId, slotIdx, name) => {
+    if (selected) {
+      placeOrSwap(rowId, slotIdx);
+      return;
+    }
     if (name) {
       setEditingSlot({ rowId, slotIdx, name });
-    } else {
-      placeInSlot(rowId, slotIdx);
     }
   };
 
@@ -2075,8 +2120,22 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         }}
       >
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-          Tap a player below, then tap a slot to place them there. Tap a filled slot to send them back to the pool.
+          Tap a player below, then tap a slot to place them there. Tap a filled slot to view or edit them —
+          from there you can also move them to a different slot.
         </div>
+        {selected && (
+          <div
+            style={{
+              fontSize: 11.5, fontWeight: 600, color: accentColor, background: `${accentColor}14`,
+              borderRadius: 7, padding: "6px 9px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+            }}
+          >
+            <span>{selected.from ? "Moving" : "Placing"} {selected.name} — tap a slot</span>
+            <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: accentColor, fontWeight: 700, padding: 0 }}>
+              Cancel
+            </button>
+          </div>
+        )}
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
           Players {pool.length > 0 ? `(${pool.length} unplaced)` : "— all placed"}
         </div>
@@ -2092,9 +2151,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               onClick={() => pickUp(p.name)}
               style={{
                 padding: "6px 11px", borderRadius: 20, fontSize: 12.5, fontWeight: 600,
-                border: selected === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
-                background: selected === p.name ? `${accentColor}14` : "#FFFFFF",
-                color: selected === p.name ? accentColor : "#1B1B1B",
+                border: selected && selected.name === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
+                background: selected && selected.name === p.name ? `${accentColor}14` : "#FFFFFF",
+                color: selected && selected.name === p.name ? accentColor : "#1B1B1B",
               }}
             >
               {p.name}
@@ -2167,20 +2226,29 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             </button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
-            {row.slots.map((name, slotIdx) => (
-              <button
-                key={slotIdx}
-                onClick={() => tapSlot(row.id, slotIdx, name)}
-                style={{
-                  minHeight: 44, borderRadius: 7, fontSize: 11.5, fontWeight: 600, padding: "4px 4px",
-                  border: name ? `1px solid ${headerColor}` : selected ? `1px dashed ${accentColor}` : "1px dashed #D8D4C0",
-                  background: name ? `${headerColor}12` : "#FBFAF6",
-                  color: name ? headerColor : "#C2BEA9",
-                }}
-              >
-                {name || "—"}
-              </button>
-            ))}
+            {row.slots.map((name, slotIdx) => {
+              const isMoveOrigin = selected && selected.from && selected.from.rowId === row.id && selected.from.slotIdx === slotIdx;
+              return (
+                <button
+                  key={slotIdx}
+                  onClick={() => tapSlot(row.id, slotIdx, name)}
+                  style={{
+                    minHeight: 44, borderRadius: 7, fontSize: 11.5, fontWeight: 600, padding: "4px 4px",
+                    border: isMoveOrigin
+                      ? `2px solid ${accentColor}`
+                      : name
+                      ? `1px solid ${headerColor}`
+                      : selected
+                      ? `1px dashed ${accentColor}`
+                      : "1px dashed #D8D4C0",
+                    background: isMoveOrigin ? `${accentColor}14` : name ? `${headerColor}12` : "#FBFAF6",
+                    color: isMoveOrigin ? accentColor : name ? headerColor : "#C2BEA9",
+                  }}
+                >
+                  {name || "—"}
+                </button>
+              );
+            })}
           </div>
           {row.slots.some(Boolean) && (
             <div className="mono" style={{ fontSize: 10.5, color: "#8A8774", marginTop: 6 }}>
@@ -2211,16 +2279,19 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         <SlotHandicapEditor
           name={editingSlot.name}
           currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
+          currentTee={(findIndividualByName(players, editingSlot.name) || {}).tee || course.tees[0]?.label || ""}
+          course={course}
           headerColor={headerColor}
           accentColor={accentColor}
-          onSave={(newIndex) => {
-            onUpdatePlayerIndex(editingSlot.name, newIndex);
+          onSave={(newIndex, newTee) => {
+            onUpdatePlayerDetails(editingSlot.name, newIndex, newTee);
             setEditingSlot(null);
           }}
           onRemove={() => {
             clearSlot(editingSlot.rowId, editingSlot.slotIdx);
             setEditingSlot(null);
           }}
+          onMove={() => pickUpFromSlot(editingSlot.rowId, editingSlot.slotIdx, editingSlot.name)}
           onClose={() => setEditingSlot(null)}
         />
       )}
@@ -2228,8 +2299,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   );
 }
 
-function SlotHandicapEditor({ name, currentIndex, headerColor, accentColor, onSave, onRemove, onClose }) {
+function SlotHandicapEditor({ name, currentIndex, currentTee, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
   const [value, setValue] = useState(currentIndex);
+  const [tee, setTee] = useState(currentTee);
 
   return (
     <div
@@ -2254,11 +2326,27 @@ function SlotHandicapEditor({ name, currentIndex, headerColor, accentColor, onSa
           className="mono"
           style={{ width: "100%", fontSize: 18, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
         />
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Tee</div>
+        <select
+          value={tee}
+          onChange={(e) => setTee(e.target.value)}
+          style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
+        >
+          {course.tees.map((t) => (
+            <option key={t.id} value={t.label}>{t.label}</option>
+          ))}
+        </select>
         <button
-          onClick={() => onSave(value)}
+          onClick={() => onSave(value, tee)}
           style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
         >
           Save
+        </button>
+        <button
+          onClick={onMove}
+          style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid ${accentColor}`, background: "transparent", color: accentColor, fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
+        >
+          Move to another slot
         </button>
         <button
           onClick={onRemove}
