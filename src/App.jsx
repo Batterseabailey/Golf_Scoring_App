@@ -481,10 +481,40 @@ function parsePastedDraw(text) {
   return rows
     .map((cols) => {
       const time = (cols[0] || "").trim();
-      const players = cols.slice(1).map((c) => (c || "").trim()).filter(Boolean);
+      // Some draw sheets put each player's handicap in the column right
+      // next to their name (Time, Name, HCP, Name, HCP, ...) — a name is
+      // never *just* a number, so skip any column that parses as one,
+      // rather than treating handicap figures as extra "players".
+      const players = cols
+        .slice(1)
+        .map((c) => (c || "").trim())
+        .filter((c) => c && !/^-?\d+(\.\d+)?$/.test(c));
       return { id: crypto.randomUUID(), time, players };
     })
     .filter((r) => r.time || r.players.length > 0);
+}
+
+// Companion to parsePastedDraw — if a draw sheet has each player's
+// handicap in the column right after their name, this pulls out
+// {name, index} pairs so that data can populate the roster too, rather
+// than being discarded just because it arrived via the draw paste.
+function extractHandicapsFromDrawPaste(text) {
+  const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
+  let rows = parsed.data;
+  if (rows.length === 0) return [];
+  if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
+
+  const pairs = [];
+  rows.forEach((cols) => {
+    for (let i = 1; i < cols.length - 1; i++) {
+      const name = (cols[i] || "").trim();
+      const next = (cols[i + 1] || "").trim();
+      if (name && !/^-?\d+(\.\d+)?$/.test(name) && /^-?\d+(\.\d+)?$/.test(next)) {
+        pairs.push({ name, index: next });
+      }
+    }
+  });
+  return pairs;
 }
 
 function CodeGate({ onSubmit }) {
@@ -769,6 +799,25 @@ function AppInner() {
     if (!trimmed) return;
     const newPlayer = { id: crypto.randomUUID(), name: trimmed, index, tee: course.tees[0]?.id || "", scores: Array(18).fill("") };
     updateRound({ players: [...players, newPlayer] });
+  };
+
+  // Adds a new roster entry for any name not already present, and fills in
+  // a blank handicap for anyone who has one — never overwrites a value
+  // someone's already deliberately entered. Used when a draw paste also
+  // carries handicap figures alongside the names.
+  const importHandicapsFromDraw = (pairs) => {
+    if (!pairs || pairs.length === 0) return;
+    let next = [...players];
+    pairs.forEach(({ name, index }) => {
+      const target = normalizeName(name);
+      const existingIdx = next.findIndex((p) => normalizeName(p.name) === target);
+      if (existingIdx === -1) {
+        next.push({ id: crypto.randomUUID(), name: name.trim(), index, tee: course.tees[0]?.id || "", scores: Array(18).fill("") });
+      } else if (!next[existingIdx].index) {
+        next[existingIdx] = { ...next[existingIdx], index };
+      }
+    });
+    updateRound({ players: next });
   };
 
   const importPlayers = (newPlayers) => {
@@ -1169,6 +1218,7 @@ function AppInner() {
           onRenameRound={(label) => renameRound(activeRoundId, label)}
           onUpdatePlayerIndex={updatePlayerIndexByName}
           onAddPlayerQuick={addPlayerQuick}
+          onImportHandicapsFromDraw={importHandicapsFromDraw}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1574,7 +1624,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex, onAddPlayerQuick, onImportHandicapsFromDraw }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1587,7 +1637,14 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       return;
     }
     onUpdate(parsed);
-    setMsg(`Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}.`);
+    const hcpPairs = extractHandicapsFromDrawPaste(pasteText);
+    if (hcpPairs.length > 0) {
+      onImportHandicapsFromDraw(hcpPairs);
+    }
+    setMsg(
+      `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
+      (hcpPairs.length > 0 ? `, ${hcpPairs.length} handicap${hcpPairs.length === 1 ? "" : "s"} added to the roster.` : ".")
+    );
     setPasteText("");
   };
 
@@ -1784,12 +1841,13 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
               One tee time per line: Time, then each player in their own column (copy straight from your
-              spreadsheet). Pasting replaces the whole draw below.
+              spreadsheet). A handicap number right after a name is picked up too, and added to the roster
+              automatically. Pasting replaces the whole draw below.
             </div>
             <textarea
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
-              placeholder={"9:00\tSmith\tJones\tBrown\tWhite\n9:10\tOkonkwo\tPetrov"}
+              placeholder={"9:00\tSmith\t8.4\tJones\t14.1\tBrown\t9.9\tWhite\t22\n9:10\tOkonkwo\t12\tPetrov\t6"}
               rows={6}
               className="mono"
               style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit" }}
