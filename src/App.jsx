@@ -758,6 +758,20 @@ function AppInner() {
     updateRound({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
   };
 
+  // Lets a handicap be edited straight from the draw builder — looks up
+  // whoever has this name, whether they're currently a primary roster
+  // entry or stored as someone's partner, and updates the right field.
+  const updatePlayerIndexByName = (name, newIndex) => {
+    const target = (name || "").trim().toLowerCase();
+    updateRound({
+      players: players.map((p) => {
+        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex };
+        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex };
+        return p;
+      }),
+    });
+  };
+
   const updateScore = (id, holeIdx, val) => {
     const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
     updateRound({
@@ -1147,6 +1161,7 @@ function AppInner() {
           onUpdateDrawInterval={updateDrawInterval}
           roundLabel={activeRound.label}
           onRenameRound={(label) => renameRound(activeRoundId, label)}
+          onUpdatePlayerIndex={updatePlayerIndexByName}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -1552,7 +1567,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, onUpdatePlayerIndex }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -1755,7 +1770,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -1817,7 +1832,7 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => {
@@ -1832,6 +1847,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   });
   const [selected, setSelected] = useState(null); // player name currently picked up
   const [savedMsg, setSavedMsg] = useState(false);
+  const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
   // startTime/intervalMinutes are now saved as part of the round (passed in
   // as props) rather than local state — previously these reset to defaults
   // any time this screen was left and re-opened.
@@ -1855,6 +1871,18 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     setRows((prev) =>
       prev.map((r) => (r.id === rowId ? { ...r, slots: r.slots.map((s, i) => (i === slotIdx ? null : s)) } : r))
     );
+  };
+
+  // First tap on a filled slot opens the handicap editor rather than
+  // clearing it straight away — clearing now happens via the explicit
+  // "Remove from pair" button inside that editor, which is far more
+  // reliable on touch screens than trying to detect a genuine double-tap.
+  const tapSlot = (rowId, slotIdx, name) => {
+    if (name) {
+      setEditingSlot({ rowId, slotIdx, name });
+    } else {
+      placeInSlot(rowId, slotIdx);
+    }
   };
 
   const setTime = (rowId, time) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, time } : r)));
@@ -1974,7 +2002,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             {row.slots.map((name, slotIdx) => (
               <button
                 key={slotIdx}
-                onClick={() => (name ? clearSlot(row.id, slotIdx) : placeInSlot(row.id, slotIdx))}
+                onClick={() => tapSlot(row.id, slotIdx, name)}
                 style={{
                   minHeight: 44, borderRadius: 7, fontSize: 11.5, fontWeight: 600, padding: "4px 4px",
                   border: name ? `1px solid ${headerColor}` : selected ? `1px dashed ${accentColor}` : "1px dashed #D8D4C0",
@@ -2010,6 +2038,73 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
       >
         {savedMsg ? "Saved" : "Save draw"}
       </button>
+
+      {editingSlot && (
+        <SlotHandicapEditor
+          name={editingSlot.name}
+          currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
+          headerColor={headerColor}
+          accentColor={accentColor}
+          onSave={(newIndex) => {
+            onUpdatePlayerIndex(editingSlot.name, newIndex);
+            setEditingSlot(null);
+          }}
+          onRemove={() => {
+            clearSlot(editingSlot.rowId, editingSlot.slotIdx);
+            setEditingSlot(null);
+          }}
+          onClose={() => setEditingSlot(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SlotHandicapEditor({ name, currentIndex, headerColor, accentColor, onSave, onRemove, onClose }) {
+  const [value, setValue] = useState(currentIndex);
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(27,27,27,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#FFFFFF", borderRadius: 12, padding: 22, width: "100%", maxWidth: 300 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{name}</div>
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
+        <input
+          autoFocus
+          type="number"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="mono"
+          style={{ width: "100%", fontSize: 18, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
+        />
+        <button
+          onClick={() => onSave(value)}
+          style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
+        >
+          Save
+        </button>
+        <button
+          onClick={onRemove}
+          style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "1px solid #B5442E", background: "transparent", color: "#B5442E", fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
+        >
+          Remove from pair
+        </button>
+        <button
+          onClick={onClose}
+          style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: "transparent", color: "#8A8774", fontSize: 13 }}
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
