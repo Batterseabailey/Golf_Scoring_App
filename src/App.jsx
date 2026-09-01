@@ -2753,6 +2753,23 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
     onUpdate({ tees: course.tees.filter((t) => t.id !== id) });
   };
 
+  const parRefs = useRef({});
+  const siRefs = useRef({});
+
+  // Enter jumps to the next hole's box in the same column (Par → Par,
+  // SI → SI) and selects its existing value, so the next keystroke
+  // replaces it outright instead of needing a manual clear first.
+  const handleHoleKeyDown = (e, field, idx) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const refs = field === "par" ? parRefs : siRefs;
+    const next = refs.current[idx + 1];
+    if (next) {
+      next.focus();
+      next.select();
+    }
+  };
+
   const holeGrid = (holes, label) => (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>{label}</div>
@@ -2763,16 +2780,20 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             <div key={h} style={{ textAlign: "center" }}>
               <div className="mono" style={{ fontSize: 9, color: "#9B9885", marginBottom: 2 }}>{h}</div>
               <input
+                ref={(el) => (parRefs.current[idx] = el)}
                 className="mono scoreInput" type="number" inputMode="numeric"
                 value={course.holes[idx].par}
                 onChange={(e) => setHole(idx, "par", e.target.value)}
+                onKeyDown={(e) => handleHoleKeyDown(e, "par", idx)}
                 placeholder="Par"
                 style={{ width: "100%", textAlign: "center", padding: "4px 0", borderRadius: 5, border: "1px solid #D8D4C0", fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}
               />
               <input
+                ref={(el) => (siRefs.current[idx] = el)}
                 className="mono scoreInput" type="number" inputMode="numeric"
                 value={course.holes[idx].si}
                 onChange={(e) => setHole(idx, "si", e.target.value)}
+                onKeyDown={(e) => handleHoleKeyDown(e, "si", idx)}
                 placeholder="SI"
                 style={{ width: "100%", textAlign: "center", padding: "4px 0", borderRadius: 5, border: "1px solid #D8D4C0", fontSize: 11, color: "#6B6B5F" }}
               />
