@@ -1634,6 +1634,8 @@ function AppInner() {
         <PrintLabels
           course={course}
           players={players}
+          draw={draw}
+          roundDateDisplay={formatDisplayDate(activeRound.date)}
           handicapAllowance={handicapAllowance}
           isFoursomes={isFoursomes}
           roundLabel={activeRound.label}
@@ -2869,34 +2871,58 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
+function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
       .map((h, i) => strokesOnHole(course, ph, i))
       .map((s, i) => ({ hole: i + 1, strokes: s }))
       .filter((h) => h.strokes > 0);
 
+  // Finds whichever draw group this name appears in, returning the tee
+  // time and everyone else in that same group (their playing partner(s),
+  // as distinct from a Foursomes teammate — this is "who else tees off
+  // with me at this time", from the actual draw, not the roster.
+  const drawInfoFor = (name) => {
+    const target = normalizeName(name);
+    for (const entry of draw) {
+      const names = entry.players || [];
+      if (names.some((n) => normalizeName(n) === target)) {
+        return { time: entry.time, others: names.filter((n) => normalizeName(n) !== target) };
+      }
+    }
+    return null;
+  };
+
   const cards = players
     .filter((p) => p.name)
     .map((p) => {
       if (isFoursomes) {
         const ph = combinedHandicap(course, p, handicapAllowance);
+        // Exclude their own Foursomes partner from "others" — that's
+        // already shown in the title — leaving just the opposing pair.
+        const info = drawInfoFor(p.name);
+        const others = info ? info.others.filter((n) => normalizeName(n) !== normalizeName(p.partnerName || "")) : [];
         return {
           id: p.id,
           title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
           hcpLine: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
           ph,
           strokeHoles: strokeHolesFor(ph),
+          time: info ? info.time : "",
+          partners: others,
         };
       }
       const rawPh = playingHandicap(course, Number(p.index) || 0, p.tee);
       const ph = allowedHandicap(rawPh, handicapAllowance);
+      const info = drawInfoFor(p.name);
       return {
         id: p.id,
         title: p.name,
         hcpLine: `HCP ${p.index || "–"}`,
         ph,
         strokeHoles: strokeHolesFor(ph),
+        time: info ? info.time : "",
+        partners: info ? info.others : [],
       };
     });
 
@@ -2929,7 +2955,13 @@ function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLab
         <div className="label-grid">
           {cards.map((c) => (
             <div className="label-card" key={c.id}>
+              <div className="label-meta">
+                {roundDateDisplay}{roundDateDisplay && c.time ? " · " : ""}{c.time}
+              </div>
               <div className="label-name">{c.title}</div>
+              {c.partners.length > 0 && (
+                <div className="label-partners">({c.partners.join(", ")})</div>
+              )}
               <div className="label-hcp">{c.hcpLine} → Playing {c.ph}</div>
               <div className="label-shots">
                 {c.strokeHoles.length === 0
@@ -2948,6 +2980,8 @@ function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLab
           display: flex; flex-direction: column; justify-content: center;
         }
         .label-name { font-weight: 700; font-size: 12.5px; margin-bottom: 4px; line-height: 1.25; }
+        .label-meta { font-size: 9px; color: #8A8774; margin-bottom: 3px; font-family: 'Courier New', monospace; }
+        .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; font-family: 'Courier New', monospace; }
         .label-shots { font-size: 10.5px; font-family: 'Courier New', monospace; line-height: 1.4; }
 
@@ -2969,7 +3003,9 @@ function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLab
             box-sizing: border-box; overflow: hidden;
             break-inside: avoid;
           }
-          .label-name { font-size: 22px !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-meta { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-name { font-size: 22px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-partners { font-size: 9.5px !important; color: #000 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 18px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 3px !important; line-height: 1.1 !important; }
           .label-shots { font-size: 12px !important; color: #000 !important; line-height: 1.25 !important; }
         }
