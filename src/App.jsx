@@ -608,7 +608,7 @@ function extractTeesFromDrawPaste(text, knownAbbreviations) {
 
 }
 
-function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap }) {
+function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap }) {
   const sectionCard = (title, items) => (
     <div style={{ background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", marginBottom: 12, overflow: "hidden" }}>
       <div
@@ -623,18 +623,21 @@ function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLea
     </div>
   );
 
-  const row = (label, onClick, key, sublabel) => (
+  const row = (label, onClick, key, sublabel, isActive) => (
     <button
       key={key || label}
       onClick={onClick}
       style={{
         width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "14px 16px", background: "none", border: "none", borderTop: "1px solid #EFEDE0",
+        padding: "14px 16px", background: isActive ? `${accentColor}14` : "none", border: "none",
+        borderTop: "1px solid #EFEDE0", borderLeft: isActive ? `4px solid ${accentColor}` : "4px solid transparent",
         textAlign: "left",
       }}
     >
       <span>
-        <span style={{ fontSize: 15, fontWeight: 600, color: "#1B1B1B", display: "block" }}>{label}</span>
+        <span style={{ fontSize: 15, fontWeight: isActive ? 800 : 600, color: isActive ? accentColor : "#1B1B1B", display: "block" }}>
+          {label}{isActive ? " — viewing now" : ""}
+        </span>
         {sublabel && (
           <span className="mono" style={{ fontSize: 11.5, color: "#8A8774" }}>{sublabel}</span>
         )}
@@ -659,7 +662,7 @@ function PlayerMenu({ rounds, headerColor, accentColor, onSelectDay, onSelectLea
 
   return (
     <div style={{ padding: "14px 14px 40px" }}>
-      {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id, formatDisplayDate(r.date))))}
+      {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id, formatDisplayDate(r.date), r.id === activeRoundId)))}
       {sectionCard("Leaderboards", [
         row("Singles", () => onSelectLeaderboard("singles"), "singles"),
         row("Foursomes", () => onSelectLeaderboard("foursomes"), "foursomes"),
@@ -1427,15 +1430,16 @@ function AppInner() {
         {rounds.length > 1 && (
           <button
             onClick={() => setShowDaySwitcher(true)}
-            className="mono"
             style={{
-              marginTop: 8, fontSize: 13, fontWeight: 700, padding: "6px 10px", borderRadius: 7,
-              border: "1px solid rgba(241,239,227,0.4)", background: "rgba(241,239,227,0.12)", color: "#F1EFE3",
-              display: "inline-flex", alignItems: "center", gap: 6,
+              marginTop: 10, width: "100%", fontSize: 14, fontWeight: 800, padding: "10px 12px", borderRadius: 8,
+              border: `2px solid ${accentColor}`, background: accentColor, color: "#FFFFFF",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
             }}
           >
-            {activeRound.label}
-            <ChevronRight size={13} style={{ transform: "rotate(90deg)" }} />
+            <span>Day: {activeRound.label}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, opacity: 0.9 }}>
+              Switch <ChevronRight size={14} style={{ transform: "rotate(90deg)" }} />
+            </span>
           </button>
         )}
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -1543,6 +1547,7 @@ function AppInner() {
       ) : mode === "menu" ? (
         <PlayerMenu
           rounds={rounds}
+          activeRoundId={activeRoundId}
           headerColor={headerColor}
           accentColor={accentColor}
           onSelectDay={(roundId) => { setActiveRound(roundId); setMode("draw"); }}
@@ -2987,11 +2992,6 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
               <div className="label-hcp">{c.hcpLine} – Playing {c.ph}</div>
-              <div className="label-shots">
-                {c.strokeHoles.length === 0
-                  ? "No shots"
-                  : "Shots " + c.strokeHoles.flatMap((h) => (h.strokes === 2 ? [h.hole, h.hole] : [h.hole])).join(" ")}
-              </div>
             </div>
           ))}
         </div>
@@ -3009,7 +3009,6 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
-        .label-shots { font-size: 10.5px; line-height: 1.4; }
 
         /* Print output — matched exactly to Avery L7160's real measurements,
            so each card lands precisely on a real adhesive label. */
@@ -3035,7 +3034,6 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
           .label-name { font-size: 13px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
-          .label-shots { font-size: 11px !important; color: #000 !important; line-height: 1.2 !important; }
         }
       `}</style>
     </div>
