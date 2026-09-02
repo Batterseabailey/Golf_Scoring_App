@@ -2965,13 +2965,13 @@ function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLab
             gap: 2.75mm 0mm;
           }
           .label-card {
-            border: none; padding: 2mm 3mm; min-height: 0;
+            border: none; padding: 1.5mm 2.5mm; min-height: 0;
             box-sizing: border-box; overflow: hidden;
             break-inside: avoid;
           }
-          .label-name { font-size: 15px; margin-bottom: 3px; }
-          .label-hcp { font-size: 13px; color: #000; font-weight: 700; margin-bottom: 4px; }
-          .label-shots { font-size: 11px; color: #000; }
+          .label-name { font-size: 22px !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-hcp { font-size: 18px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 3px !important; line-height: 1.1 !important; }
+          .label-shots { font-size: 12px !important; color: #000 !important; line-height: 1.25 !important; }
         }
       `}</style>
     </div>
