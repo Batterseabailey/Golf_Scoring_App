@@ -3034,11 +3034,11 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
             break-inside: avoid;
             font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
           }
-          .label-meta { font-size: 8px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
-          .label-competition { font-size: 8.5px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.15 !important; }
-          .label-name { font-size: 22px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-meta { font-size: 11px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-competition { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.15 !important; }
+          .label-name { font-size: 13px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
-          .label-hcp { font-size: 18px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
           .label-shots { font-size: 11px !important; color: #000 !important; line-height: 1.2 !important; }
         }
       `}</style>
