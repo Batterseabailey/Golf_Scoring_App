@@ -2,8 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>See Your Score</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Lucifer Golfing Society</title>
+
+    <!-- iOS home-screen install support (Android/desktop picks up the
+         web manifest automatically, injected by vite-plugin-pwa) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Lucifer Score" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body style="margin:0;">
     <div id="root"></div>
