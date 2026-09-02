@@ -373,6 +373,15 @@ function formatDisplayDate(dateStr) {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// Full month name, used specifically on printed labels for a more formal look.
+function formatDisplayDateLong(dateStr) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
@@ -1635,7 +1644,8 @@ function AppInner() {
           course={course}
           players={players}
           draw={draw}
-          roundDateDisplay={formatDisplayDate(activeRound.date)}
+          roundDateDisplay={formatDisplayDateLong(activeRound.date)}
+          competitions={competitions}
           handicapAllowance={handicapAllowance}
           isFoursomes={isFoursomes}
           roundLabel={activeRound.label}
@@ -2871,7 +2881,7 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
+function PrintLabels({ course, players, draw, roundDateDisplay, competitions, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
       .map((h, i) => strokesOnHole(course, ph, i))
@@ -2893,6 +2903,16 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
     return null;
   };
 
+  // A player's own sub-competition (e.g. "Prince of Wales Cup"), falling
+  // back to the course's general event name if they're not tagged into one.
+  const competitionNameFor = (abbreviation) => {
+    if (abbreviation) {
+      const match = competitions.find((c) => c.abbreviation === abbreviation);
+      if (match) return match.fullName || match.abbreviation;
+    }
+    return course.eventName || "";
+  };
+
   const cards = players
     .filter((p) => p.name)
     .map((p) => {
@@ -2910,6 +2930,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
           strokeHoles: strokeHolesFor(ph),
           time: info ? info.time : "",
           partners: others,
+          competitionName: competitionNameFor(p.competition),
         };
       }
       const rawPh = playingHandicap(course, Number(p.index) || 0, p.tee);
@@ -2923,6 +2944,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
         strokeHoles: strokeHolesFor(ph),
         time: info ? info.time : "",
         partners: info ? info.others : [],
+        competitionName: competitionNameFor(p.competition),
       };
     });
 
@@ -2956,17 +2978,20 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
           {cards.map((c) => (
             <div className="label-card" key={c.id}>
               <div className="label-meta">
-                {roundDateDisplay}{roundDateDisplay && c.time ? " · " : ""}{c.time}
+                {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}
               </div>
+              {c.competitionName && (
+                <div className="label-competition">{c.competitionName}</div>
+              )}
               <div className="label-name">{c.title}</div>
               {c.partners.length > 0 && (
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
-              <div className="label-hcp">{c.hcpLine} → Playing {c.ph}</div>
+              <div className="label-hcp">{c.hcpLine} – Playing {c.ph}</div>
               <div className="label-shots">
                 {c.strokeHoles.length === 0
                   ? "No shots"
-                  : "Shots: " + c.strokeHoles.map((h) => `${h.hole}${h.strokes === 2 ? "(x2)" : ""}`).join(", ")}
+                  : "Shots " + c.strokeHoles.flatMap((h) => (h.strokes === 2 ? [h.hole, h.hole] : [h.hole])).join(" ")}
               </div>
             </div>
           ))}
@@ -2978,12 +3003,14 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
         .label-card {
           border: 1px dashed #B5AF9A; padding: 10px 12px; min-height: 92px;
           display: flex; flex-direction: column; justify-content: center;
+          font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
         }
         .label-name { font-weight: 700; font-size: 12.5px; margin-bottom: 4px; line-height: 1.25; }
-        .label-meta { font-size: 9px; color: #8A8774; margin-bottom: 3px; font-family: 'Courier New', monospace; }
+        .label-meta { font-size: 9px; color: #8A8774; margin-bottom: 3px; }
+        .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
-        .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; font-family: 'Courier New', monospace; }
-        .label-shots { font-size: 10.5px; font-family: 'Courier New', monospace; line-height: 1.4; }
+        .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
+        .label-shots { font-size: 10.5px; line-height: 1.4; }
 
         /* Print output — matched exactly to Avery L7160's real measurements,
            so each card lands precisely on a real adhesive label. */
@@ -2999,15 +3026,17 @@ function PrintLabels({ course, players, draw, roundDateDisplay, handicapAllowanc
             gap: 2.75mm 0mm;
           }
           .label-card {
-            border: none; padding: 1.5mm 2.5mm; min-height: 0;
+            border: none; padding: 1mm 2.5mm; min-height: 0;
             box-sizing: border-box; overflow: hidden;
             break-inside: avoid;
+            font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
           }
-          .label-meta { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-meta { font-size: 8px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-competition { font-size: 10px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-name { font-size: 22px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
-          .label-partners { font-size: 9.5px !important; color: #000 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
-          .label-hcp { font-size: 18px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 3px !important; line-height: 1.1 !important; }
-          .label-shots { font-size: 12px !important; color: #000 !important; line-height: 1.25 !important; }
+          .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-hcp { font-size: 18px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-shots { font-size: 11px !important; color: #000 !important; line-height: 1.2 !important; }
         }
       `}</style>
     </div>
