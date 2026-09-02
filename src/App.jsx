@@ -2969,8 +2969,9 @@ function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLab
             box-sizing: border-box; overflow: hidden;
             break-inside: avoid;
           }
-          .label-name { font-size: 11px; }
-          .label-hcp, .label-shots { font-size: 9px; }
+          .label-name { font-size: 15px; margin-bottom: 3px; }
+          .label-hcp { font-size: 13px; color: #000; font-weight: 700; margin-bottom: 4px; }
+          .label-shots { font-size: 11px; color: #000; }
         }
       `}</style>
     </div>
