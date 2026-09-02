@@ -2903,17 +2903,13 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
     return null;
   };
 
-  // Always shows the draw's own name (e.g. "Lucifer Foursomes") — that's
-  // what identifies which draw this card belongs to — with a player's
-  // specific sub-competition (e.g. "Prince of Wales Cup") added alongside
-  // it if they're tagged into one.
+  // Only the sub-competition this specific player is tagged into on the
+  // roster (e.g. "Prince of Wales Cup" or "Sir John Hay Bowl") — blank for
+  // anyone not tagged into one.
   const competitionNameFor = (abbreviation) => {
-    const parts = [roundLabel];
-    if (abbreviation) {
-      const match = competitions.find((c) => c.abbreviation === abbreviation);
-      if (match) parts.push(match.fullName || match.abbreviation);
-    }
-    return parts.filter(Boolean).join(" · ");
+    if (!abbreviation) return "";
+    const match = competitions.find((c) => c.abbreviation === abbreviation);
+    return match ? match.fullName || match.abbreviation : "";
   };
 
   const cards = players
