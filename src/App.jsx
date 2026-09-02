@@ -2296,7 +2296,18 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             min={1}
             max={100}
             value={handicapAllowance}
-            onChange={(e) => onUpdateHandicapAllowance(Math.max(1, Math.min(100, Number(e.target.value) || 100)))}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === "") {
+                onUpdateHandicapAllowance("");
+                return;
+              }
+              const num = Number(val);
+              if (!isNaN(num)) onUpdateHandicapAllowance(Math.max(1, Math.min(100, num)));
+            }}
+            onBlur={(e) => {
+              if (e.target.value === "") onUpdateHandicapAllowance(100);
+            }}
             className="mono"
             style={{ width: 80, fontSize: 14, fontWeight: 700, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0" }}
           />
