@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock, FileText, Upload } from "lucide-react";
+import { Flag, Users, ChevronRight, Radio, Settings, Plus, X, Clipboard, Lock, FileText, Upload, Printer } from "lucide-react";
 import Papa from "papaparse";
 
 // ---- Default course data (Denham GC, Spring Meeting) — fully editable in-app now ----
@@ -780,6 +780,7 @@ function AppInner() {
   const [showLocalRulesSetup, setShowLocalRulesSetup] = useState(false);
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
+  const [showPrintLabels, setShowPrintLabels] = useState(false);
   const [viewingDoc, setViewingDoc] = useState(null); // { name, blobUrl, loading, error } | null
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
@@ -1395,7 +1396,7 @@ function AppInner() {
       `}</style>
 
       {/* Header */}
-      <div style={{ background: headerColor, color: "#F1EFE3", padding: "18px 16px 22px" }}>
+      <div className="no-print" style={{ background: headerColor, color: "#F1EFE3", padding: "18px 16px 22px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Flag size={20} color={accentColor} />
@@ -1629,6 +1630,17 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
         />
+      ) : showPrintLabels ? (
+        <PrintLabels
+          course={course}
+          players={players}
+          handicapAllowance={handicapAllowance}
+          isFoursomes={isFoursomes}
+          roundLabel={activeRound.label}
+          onBack={() => setShowPrintLabels(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showCourseSetup ? (
         <CourseSetup
           orgName={orgName}
@@ -1680,11 +1692,12 @@ function AppInner() {
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
+          onOpenPrintLabels={() => setShowPrintLabels(true)}
           onImport={importPlayers}
           onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); }}
           rounds={rounds}
           activeRoundId={activeRoundId}
           onCopyPlayers={copyPlayersFromRound}
@@ -2856,6 +2869,114 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
+function PrintLabels({ course, players, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
+  const strokeHolesFor = (ph) =>
+    course.holes
+      .map((h, i) => strokesOnHole(course, ph, i))
+      .map((s, i) => ({ hole: i + 1, strokes: s }))
+      .filter((h) => h.strokes > 0);
+
+  const cards = players
+    .filter((p) => p.name)
+    .map((p) => {
+      if (isFoursomes) {
+        const ph = combinedHandicap(course, p, handicapAllowance);
+        return {
+          id: p.id,
+          title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+          hcpLine: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
+          ph,
+          strokeHoles: strokeHolesFor(ph),
+        };
+      }
+      const rawPh = playingHandicap(course, Number(p.index) || 0, p.tee);
+      const ph = allowedHandicap(rawPh, handicapAllowance);
+      return {
+        id: p.id,
+        title: p.name,
+        hcpLine: `HCP ${p.index || "–"}`,
+        ph,
+        strokeHoles: strokeHolesFor(ph),
+      };
+    });
+
+  const sheets = Math.ceil(cards.length / 21);
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
+          ← Back
+        </button>
+        <button
+          onClick={() => window.print()}
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5 }}
+        >
+          <Printer size={15} /> Print
+        </button>
+      </div>
+      <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+        {cards.length} label{cards.length === 1 ? "" : "s"} for {roundLabel} — {sheets} sheet{sheets === 1 ? "" : "s"}
+        of Avery L7160 (21 per sheet, 3×7, 63.5×38.1mm).
+      </div>
+      <div className="no-print" style={{ fontSize: 11, color: "#B5442E", marginBottom: 14, fontWeight: 600 }}>
+        In the print dialog, set Scale to "100%" or "Actual size" — not "Fit to page" — or the labels won't line up
+        with the sheet. Worth a test print on plain paper first, held up against a real sheet to check alignment.
+      </div>
+      {cards.length === 0 ? (
+        <div style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>No players yet on this day.</div>
+      ) : (
+        <div className="label-grid">
+          {cards.map((c) => (
+            <div className="label-card" key={c.id}>
+              <div className="label-name">{c.title}</div>
+              <div className="label-hcp">{c.hcpLine} → Playing {c.ph}</div>
+              <div className="label-shots">
+                {c.strokeHoles.length === 0
+                  ? "No shots"
+                  : "Shots: " + c.strokeHoles.map((h) => `${h.hole}${h.strokes === 2 ? "(x2)" : ""}`).join(", ")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <style>{`
+        /* On-screen preview only — doesn't need to be exact, just readable */
+        .label-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .label-card {
+          border: 1px dashed #B5AF9A; padding: 10px 12px; min-height: 92px;
+          display: flex; flex-direction: column; justify-content: center;
+        }
+        .label-name { font-weight: 700; font-size: 12.5px; margin-bottom: 4px; line-height: 1.25; }
+        .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; font-family: 'Courier New', monospace; }
+        .label-shots { font-size: 10.5px; font-family: 'Courier New', monospace; line-height: 1.4; }
+
+        /* Print output — matched exactly to Avery L7160's real measurements,
+           so each card lands precisely on a real adhesive label. */
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4; margin: 15.15mm 7mm; }
+          .label-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 63.5mm);
+            grid-auto-rows: 38.1mm;
+            column-gap: 2.75mm;
+            row-gap: 0mm;
+            gap: 2.75mm 0mm;
+          }
+          .label-card {
+            border: none; padding: 2mm 3mm; min-height: 0;
+            box-sizing: border-box; overflow: hidden;
+            break-inside: avoid;
+          }
+          .label-name { font-size: 11px; }
+          .label-hcp, .label-shots { font-size: 9px; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor }) {
   const [bulkTarget, setBulkTarget] = useState(""); // abbreviation being edited, or "" if none chosen
   const [selectedNames, setSelectedNames] = useState(new Set());
@@ -3264,7 +3385,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
+function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenPrintLabels, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -3363,6 +3484,19 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
       >
         <Flag size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Competitions</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenPrintLabels}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Printer size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Print scorecard labels</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
