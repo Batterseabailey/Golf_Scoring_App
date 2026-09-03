@@ -549,7 +549,10 @@ function looksLikeCompetitionCode(raw) {
 }
 
 function walkPastedDrawRows(text, knownAbbreviations) {
-  const parsed = Papa.parse(text.trim(), { delimiter: "\t", skipEmptyLines: true });
+  // Auto-detects the delimiter (rather than forcing tabs) so this works
+  // equally well with a tab-separated spreadsheet paste and a genuine
+  // comma-separated .csv file upload.
+  const parsed = Papa.parse(text.trim(), { skipEmptyLines: true });
   let rows = parsed.data;
   if (rows.length === 0) return [];
   if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
@@ -2182,6 +2185,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
   const [confirmLoadId, setConfirmLoadId] = useState(null);
+  const csvFileInputRef = useRef(null);
 
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
@@ -2425,11 +2429,38 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
               One tee time per line: Time, then each player in their own column (copy straight from your
-              spreadsheet). A handicap number right after a name is picked up automatically, so is a tee
-              column — write "Back" or "Front" (or just B/F) — and so is a competition abbreviation you've
-              already set up in Admin (e.g. "JHB"). All added straight to the roster. Pasting replaces the
-              whole draw below.
+              spreadsheet, or upload a .csv file below). A handicap number right after a name is picked up
+              automatically, so is a tee column — write "Back" or "Front" (or just B/F) — and so is a competition
+              abbreviation you've already set up in Admin (e.g. "JHB"). All added straight to the roster. Pasting
+              or uploading replaces the whole draw below.
             </div>
+            <input
+              ref={csvFileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setPasteText(String(reader.result || ""));
+                  setMsg(`Loaded ${file.name} — check it below, then tap Set draw.`);
+                };
+                reader.readAsText(file);
+                e.target.value = ""; // allow re-selecting the same file later
+              }}
+            />
+            <button
+              onClick={() => csvFileInputRef.current && csvFileInputRef.current.click()}
+              style={{
+                width: "100%", padding: "9px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+                background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5, marginBottom: 10,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}
+            >
+              <Upload size={14} /> Upload a .csv file instead
+            </button>
             <textarea
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
