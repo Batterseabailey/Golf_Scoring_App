@@ -1756,6 +1756,9 @@ function AppInner() {
           activeRoundId={activeRoundId}
           headerColor={headerColor}
           accentColor={accentColor}
+          isAdmin={scorerUnlocked}
+          onAdd={addRound}
+          onRemove={removeRound}
           onSelect={(id) => { setActiveRound(id); setShowDaySwitcher(false); }}
           onClose={() => setShowDaySwitcher(false)}
         />
@@ -1850,7 +1853,9 @@ function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel, title =
   );
 }
 
-function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect, onClose }) {
+function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, isAdmin, onAdd, onRemove, onSelect, onClose }) {
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+
   return (
     <div
       style={{
@@ -1868,31 +1873,75 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, onSelect
         </div>
         {rounds.map((r) => {
           const isActive = r.id === activeRoundId;
+          const confirming = confirmRemoveId === r.id;
           return (
-            <button
+            <div
               key={r.id}
-              onClick={() => onSelect(r.id)}
               style={{
-                width: "100%", textAlign: "left", padding: "12px 12px", borderRadius: 9, marginBottom: 6,
-                border: isActive ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
-                background: isActive ? `${accentColor}14` : "#FFFFFF",
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                display: "flex", alignItems: "center", gap: 6, marginBottom: 6,
+                borderRadius: 9, border: isActive ? `1px solid ${accentColor}` : "1px solid #E4E0D0",
+                background: isActive ? `${accentColor}14` : "#FFFFFF", overflow: "hidden",
               }}
             >
-              <span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: isActive ? accentColor : "#1B1B1B", display: "block" }}>
-                  {r.label}
+              <button
+                onClick={() => onSelect(r.id)}
+                style={{
+                  flex: 1, textAlign: "left", padding: "12px 12px", border: "none", background: "none",
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                }}
+              >
+                <span>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: isActive ? accentColor : "#1B1B1B", display: "block" }}>
+                    {r.label}
+                  </span>
+                  {r.date && (
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{formatDisplayDate(r.date)}</span>
+                  )}
                 </span>
-                {r.date && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{formatDisplayDate(r.date)}</span>
-                )}
-              </span>
-              <span className="mono" style={{ fontSize: 10.5, color: "#8A8774", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                {r.format === "foursomes" ? "Foursomes" : "Singles"}
-              </span>
-            </button>
+                <span className="mono" style={{ fontSize: 10.5, color: "#8A8774", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {r.format === "foursomes" ? "Foursomes" : "Singles"}
+                </span>
+              </button>
+              {isAdmin && rounds.length > 1 && (
+                confirming ? (
+                  <div style={{ display: "flex", gap: 3, paddingRight: 8 }}>
+                    <button
+                      onClick={() => { onRemove(r.id); setConfirmRemoveId(null); }}
+                      style={{ fontSize: 10.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px 5px" }}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemoveId(null)}
+                      style={{ fontSize: 10.5, color: "#9B9885", background: "none", border: "none", padding: "4px 5px" }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmRemoveId(r.id)}
+                    style={{ padding: "0 10px", alignSelf: "stretch", background: "none", border: "none", color: "#B5442E" }}
+                  >
+                    <X size={15} />
+                  </button>
+                )
+              )}
+            </div>
           );
         })}
+        {isAdmin && (
+          <button
+            onClick={onAdd}
+            style={{
+              width: "100%", padding: "10px 0", borderRadius: 9, border: `1px dashed ${headerColor}`,
+              background: "transparent", color: headerColor, fontWeight: 600, fontSize: 13, marginTop: 2, marginBottom: 4,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            }}
+          >
+            <Plus size={14} /> Add a new day
+          </button>
+        )}
         <button
           onClick={onClose}
           style={{ width: "100%", padding: "10px 0", borderRadius: 9, border: "none", background: "transparent", color: "#8A8774", fontSize: 13, marginTop: 4 }}
