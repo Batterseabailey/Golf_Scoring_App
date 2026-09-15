@@ -666,10 +666,7 @@ function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectD
   return (
     <div style={{ padding: "14px 14px 40px" }}>
       {sectionCard("Draw Sheets", rounds.map((r) => row(r.label, () => onSelectDay(r.id), r.id, formatDisplayDate(r.date), r.id === activeRoundId)))}
-      {sectionCard("Leaderboards", [
-        row("Singles", () => onSelectLeaderboard("singles"), "singles"),
-        row("Foursomes", () => onSelectLeaderboard("foursomes"), "foursomes"),
-      ])}
+      {standaloneRow("Leaderboard", () => onSelectLeaderboard())}
       {standaloneRow("Information", onSelectInfo)}
       {standaloneRow("Local Rules", onSelectRules)}
       {standaloneRow("Your Handicap", onSelectHandicap)}
@@ -775,7 +772,6 @@ function AppInner() {
   useEffect(() => { eventCodeRef.current = eventCode; }, [eventCode]);
 
   const [mode, setMode] = useState("menu"); // menu | board | draw | rules | docs | handicap | scorer
-  const [boardTab, setBoardTab] = useState("singles"); // singles | foursomes — lifted so the menu can jump straight to one
   // All persisted event state lives in one object now, saved with a single
   // functional update (setState(prev => ({...prev, ...patch}))) — this
   // avoids the class of bug where a stale positional argument silently
@@ -786,6 +782,15 @@ function AppInner() {
   const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
   const isMedal = scoring === "medal";
+  // The Leaderboard has no memory of its own — it's always exactly
+  // whichever format the currently-selected day actually is, computed
+  // fresh on every render. Previously this was a separate piece of state
+  // kept "in sync" with the active day via an effect, which is inherently
+  // fragile — there's a whole class of bug where the two drift apart, as
+  // happened here. A value that's directly derived, with nothing else to
+  // store or synchronize, can't have that problem.
+  const boardTab = isFoursomes ? "foursomes" : "singles";
+
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [syncError, setSyncError] = useState(false);
@@ -1554,13 +1559,13 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
           onSelectDay={(roundId) => { setActiveRound(roundId); setMode("draw"); }}
-          onSelectLeaderboard={(tab) => { setBoardTab(tab); setMode("board"); }}
+          onSelectLeaderboard={() => setMode("board")}
           onSelectRules={() => setMode("rules")}
           onSelectInfo={() => setMode("docs")}
           onSelectHandicap={handleHandicapTap}
         />
       ) : mode === "board" ? (
-        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
@@ -1584,7 +1589,7 @@ function AppInner() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board rounds={rounds} tab={boardTab} onTabChange={setBoardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1957,7 +1962,7 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, isAdmin,
   );
 }
 
-function Board({ rounds, tab, onTabChange, competitions, headerColor, accentColor }) {
+function Board({ rounds, tab, competitions, headerColor, accentColor }) {
   const [subFilter, setSubFilter] = useState(""); // competition abbreviation, or "" for all
   const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
   const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
@@ -1965,27 +1970,13 @@ function Board({ rounds, tab, onTabChange, competitions, headerColor, accentColo
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-        <button
-          onClick={() => onTabChange("singles")}
-          style={{
-            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-            background: tab === "singles" ? headerColor : "transparent",
-            color: tab === "singles" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
-          }}
-        >
-          Singles
-        </button>
-        <button
-          onClick={() => onTabChange("foursomes")}
-          style={{
-            flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-            background: tab === "foursomes" ? headerColor : "transparent",
-            color: tab === "foursomes" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
-          }}
-        >
-          Foursomes
-        </button>
+      <div
+        style={{
+          padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`, marginBottom: 12,
+          background: headerColor, color: "#FFFFFF", fontSize: 12.5, fontWeight: 700, textAlign: "center",
+        }}
+      >
+        {tab === "singles" ? "Singles" : "Foursomes"} — matches the day you're currently viewing
       </div>
       {tab === "singles" && competitions.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
