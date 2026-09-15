@@ -777,7 +777,18 @@ function AppInner() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId, documents, competitions } = state;
+  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, competitions } = state;
+  // Which day THIS device is currently looking at — deliberately kept
+  // separate from the shared/polled server state. If it lived inside
+  // `state`, the 5-second Leaderboard refresh could fetch a slightly
+  // stale server snapshot moments after you switch days and silently
+  // overwrite your choice back — which is exactly the "snaps back after
+  // a few seconds" bug. Seeded once from the server's last-saved value
+  // when an event first loads (falls back to that saved value until
+  // then), and never touched by later polls after that.
+  const [localActiveRoundId, setLocalActiveRoundId] = useState(null);
+  const hasSeededActiveRoundRef = useRef(false);
+  const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
@@ -826,7 +837,12 @@ function AppInner() {
       // including the very first load right after entering an event code,
       // should always get the real data.
       if (modeRef.current === "scorer") return;
-      setState(res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE);
+      const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
+      setState(loaded);
+      if (!hasSeededActiveRoundRef.current) {
+        setLocalActiveRoundId(loaded.activeRoundId);
+        hasSeededActiveRoundRef.current = true;
+      }
       setLive(true);
     } catch (err) {
       if (modeRef.current === "scorer") return;
@@ -862,6 +878,8 @@ function AppInner() {
     if (!eventCode) return;
     setLoading(true);
     setState(DEFAULT_STATE);
+    setLocalActiveRoundId(null);
+    hasSeededActiveRoundRef.current = false;
     setActiveId(null);
     setShowCourseSetup(false);
     setScorerUnlocked(false);
@@ -1341,6 +1359,7 @@ function AppInner() {
     if (rounds.length >= MAX_ROUNDS) return;
     const newRound = emptyRound(`Day ${rounds.length + 1}`, course);
     save({ rounds: [...rounds, newRound], activeRoundId: newRound.id });
+    setLocalActiveRoundId(newRound.id);
   };
 
   const renameRound = (roundId, label) => {
@@ -1359,10 +1378,12 @@ function AppInner() {
   const removeRound = (roundId) => {
     if (rounds.length <= 1) return;
     const next = rounds.filter((r) => r.id !== roundId);
-    save({ rounds: next, activeRoundId: activeRoundId === roundId ? next[0].id : activeRoundId });
+    const nextActiveId = activeRoundId === roundId ? next[0].id : activeRoundId;
+    save({ rounds: next, activeRoundId: nextActiveId });
+    if (activeRoundId === roundId) setLocalActiveRoundId(next[0].id);
   };
 
-  const setActiveRound = (roundId) => save({ activeRoundId: roundId });
+  const setActiveRound = (roundId) => setLocalActiveRoundId(roundId);
 
   const handleScorerTap = () => {
     if (scorerUnlocked) {
