@@ -1263,6 +1263,23 @@ function AppInner() {
     return [...labels];
   };
 
+  // Guarantees every name appearing anywhere in the draw has a roster
+  // entry — even one whose handicap/tee didn't get picked up correctly
+  // from the paste (e.g. depending on column order). The draw itself is
+  // always the source of truth for "who is actually playing"; a missing
+  // handicap should never mean a missing player.
+  const ensureAllDrawPlayersExist = (currentPlayers, newDraw) => {
+    let next = [...currentPlayers];
+    const allDrawNames = newDraw.flatMap((entry) => entry.players || []).filter(Boolean);
+    allDrawNames.forEach((name) => {
+      const target = normalizeName(name);
+      if (!next.some((p) => normalizeName(p.name) === target)) {
+        next.push({ id: crypto.randomUUID(), name: name.trim(), index: "", tee: course.tees[0]?.label || "", scores: Array(18).fill("") });
+      }
+    });
+    return next;
+  };
+
   const updateDraw = (newDraw, hcpPairs, teePairs, compPairs) => {
     // Everything the draw paste can touch (roster handicaps, tees,
     // competitions, then pairing) gets computed here in one pass from the
@@ -1272,11 +1289,12 @@ function AppInner() {
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs);
+    const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
     if (!isFoursomes) {
-      updateRound({ draw: newDraw, players: withComps });
+      updateRound({ draw: newDraw, players: withAllDrawPlayers });
       return;
     }
-    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withComps, newDraw, course) });
+    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withAllDrawPlayers, newDraw, course) });
   };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
@@ -2056,9 +2074,25 @@ function Board({ rounds, tab, competitions, headerColor, accentColor }) {
 }
 
 function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowLabel = "Player" }) {
-  const standings = (computeStandings || combinedStandings)(rounds);
+  const [sortAlpha, setSortAlpha] = useState(false);
+  const [search, setSearch] = useState("");
+  // Attach each row's real rank BEFORE any alphabetical resort, so the #
+  // column and top-3 highlight always reflect true standing regardless of
+  // which order the rows are currently displayed in.
+  const rankedStandings = (computeStandings || combinedStandings)(rounds).map((row, i) => ({ ...row, rank: i + 1 }));
+  // Rank order is the default (score-based, exactly as computed above).
+  // Alphabetical just reorders the same rows for quickly finding someone —
+  // the # column still shows their real rank either way. For a Foursomes
+  // pair, sorting is by whichever name happens to be first in the pair
+  // string — not a precise "by either player" sort, but a consistent one.
+  const sorted = sortAlpha
+    ? [...rankedStandings].sort((a, b) => a.name.localeCompare(b.name))
+    : rankedStandings;
+  const standings = search.trim()
+    ? sorted.filter((row) => row.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : sorted;
 
-  if (standings.length === 0) {
+  if (rankedStandings.length === 0) {
     return (
       <div style={{ padding: "40px 12px", textAlign: "center", color: "#6B6B5F" }}>
         <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
@@ -2068,12 +2102,29 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
   }
 
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={`Search ${rowLabel.toLowerCase()}…`}
+        style={{ width: "100%", fontSize: 14, padding: "9px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box" }}
+      />
+      {standings.length === 0 ? (
+        <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>
+          No {rowLabel.toLowerCase()} matching "{search.trim()}".
+        </div>
+      ) : (
+      <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
         <thead>
           <tr style={{ background: `${headerColor}12` }}>
             <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
-            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>{rowLabel}</th>
+            <th
+              onClick={() => setSortAlpha((v) => !v)}
+              style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none" }}
+            >
+              {rowLabel} {sortAlpha ? "▲ A–Z" : "⇅"}
+            </th>
             {rounds.map((r) => (
               <th key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>
                 {r.label}
@@ -2083,10 +2134,10 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
           </tr>
         </thead>
         <tbody>
-          {standings.map((row, i) => (
+          {standings.map((row) => (
             <tr key={row.name} style={{ borderTop: "1px solid #EFEDE0" }}>
-              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: i < 3 && row.anyPlayed ? headerColor : "#9B9885" }}>
-                {i + 1}
+              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: row.rank <= 3 && row.anyPlayed ? headerColor : "#9B9885" }}>
+                {row.rank}
               </td>
               <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
               {rounds.map((r) => {
@@ -2104,6 +2155,8 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
           ))}
         </tbody>
       </table>
+      </div>
+      )}
     </div>
   );
 }
