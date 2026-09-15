@@ -812,6 +812,7 @@ function AppInner() {
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
+  const [showEnterScores, setShowEnterScores] = useState(false);
   const [viewingDoc, setViewingDoc] = useState(null); // { name, blobUrl, loading, error } | null
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
@@ -882,6 +883,7 @@ function AppInner() {
     hasSeededActiveRoundRef.current = false;
     setActiveId(null);
     setShowCourseSetup(false);
+    setShowEnterScores(false);
     setScorerUnlocked(false);
     setMode("menu");
   }, [eventCode]);
@@ -1706,6 +1708,24 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
         />
+      ) : showEnterScores ? (
+        <EnterScores
+          course={course}
+          ranked={ranked}
+          onSelect={setActiveId}
+          onAdd={addPlayer}
+          onRemove={removePlayer}
+          onLoadExample={loadExample}
+          onImport={importPlayers}
+          onClearAll={clearAllPlayers}
+          onBack={() => setShowEnterScores(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+          rounds={rounds}
+          activeRoundId={activeRoundId}
+          onCopyPlayers={copyPlayersFromRound}
+          isFoursomes={isFoursomes}
+        />
       ) : showCourseSetup ? (
         <CourseSetup
           orgName={orgName}
@@ -1747,26 +1767,16 @@ function AppInner() {
       ) : (
         <ScorerList
           course={course}
-          ranked={ranked}
-          onSelect={setActiveId}
-          onAdd={addPlayer}
-          onRemove={removePlayer}
-          onLoadExample={loadExample}
+          onOpenEnterScores={() => setShowEnterScores(true)}
           onOpenCourseSetup={() => setShowCourseSetup(true)}
           onOpenDrawSetup={() => setShowDrawSetup(true)}
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
-          onImport={importPlayers}
-          onClearAll={clearAllPlayers}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); }}
-          rounds={rounds}
-          activeRoundId={activeRoundId}
-          onCopyPlayers={copyPlayersFromRound}
-          isFoursomes={isFoursomes}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); }}
         />
       )}
 
@@ -3613,34 +3623,11 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenPrintLabels, onImport, onClearAll, headerColor, accentColor, onLock, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [pasteText, setPasteText] = useState("");
-  const [importMsg, setImportMsg] = useState("");
-  const [confirmClear, setConfirmClear] = useState(false);
-  const rosterRef = useRef(null);
-
-  // The roster here is for finding/editing a player, not for ranking — sort
-  // it alphabetically rather than reusing the score-based leaderboard order.
-  const alphaSorted = [...ranked].sort((a, b) =>
-    (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
-  );
-  const doImport = () => {
-    const newPlayers = parsePastedPlayers(pasteText, course);
-    if (newPlayers.length === 0) {
-      setImportMsg("No player rows found — check there's a name in the first column.");
-      return;
-    }
-    onImport(newPlayers);
-    setImportMsg(`Imported ${newPlayers.length} player${newPlayers.length === 1 ? "" : "s"}.`);
-    setPasteText("");
-    setPasteOpen(false);
-  };
-
+function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenPrintLabels, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
-        onClick={() => rosterRef.current && rosterRef.current.scrollIntoView({ behavior: "smooth", block: "start" })}
+        onClick={onOpenEnterScores}
         style={{
           width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           padding: "13px 12px", borderRadius: 10, border: "none", background: accentColor,
@@ -3738,8 +3725,46 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         <span style={{ flex: 1, textAlign: "left" }}>Print scorecard labels</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
+    </div>
+  );
+}
 
-      <div ref={rosterRef} style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginTop: 4, marginBottom: 8 }}>
+// The actual roster — its own full screen now (reached via the "Enter
+// scores" button), rather than a section further down the Admin home
+// screen. Scrolling to a section on a shared page turned out to be
+// unreliable on some devices ("Enter scores" would land, but the page
+// then refused to scroll any further) — a genuine separate screen, which
+// every other Admin destination already is, sidesteps that class of bug
+// entirely rather than patching around it.
+function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [importMsg, setImportMsg] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // The roster here is for finding/editing a player, not for ranking — sort
+  // it alphabetically rather than reusing the score-based leaderboard order.
+  const alphaSorted = [...ranked].sort((a, b) =>
+    (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
+  );
+  const doImport = () => {
+    const newPlayers = parsePastedPlayers(pasteText, course);
+    if (newPlayers.length === 0) {
+      setImportMsg("No player rows found — check there's a name in the first column.");
+      return;
+    }
+    onImport(newPlayers);
+    setImportMsg(`Imported ${newPlayers.length} player${newPlayers.length === 1 ? "" : "s"}.`);
+    setPasteText("");
+    setPasteOpen(false);
+  };
+
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+      <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginTop: 4, marginBottom: 8 }}>
         Players — tap a name to enter their score
       </div>
       {ranked.length > 0 && (
