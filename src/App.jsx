@@ -392,6 +392,7 @@ const DEFAULT_STATE = {
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
   competitions: [], // event-wide sub-competitions (e.g. seniors' trophy) — [{ id, abbreviation, fullName }]
+  societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
 function sanitizeState(parsed) {
@@ -431,6 +432,9 @@ function sanitizeState(parsed) {
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
     competitions: Array.isArray(parsed.competitions) ? parsed.competitions : [],
+    societyRoster: Array.isArray(parsed.societyRoster)
+      ? parsed.societyRoster.filter((m) => m && typeof m.name === "string" && m.name.trim())
+      : [],
   };
 }
 
@@ -777,7 +781,7 @@ function AppInner() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, competitions } = state;
+  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, competitions, societyRoster } = state;
   // Which day THIS device is currently looking at — deliberately kept
   // separate from the shared/polled server state. If it lived inside
   // `state`, the 5-second Leaderboard refresh could fetch a slightly
@@ -813,6 +817,7 @@ function AppInner() {
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
+  const [showSocietyRoster, setShowSocietyRoster] = useState(false);
   const [viewingDoc, setViewingDoc] = useState(null); // { name, blobUrl, loading, error } | null
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
@@ -884,6 +889,7 @@ function AppInner() {
     setActiveId(null);
     setShowCourseSetup(false);
     setShowEnterScores(false);
+    setShowSocietyRoster(false);
     setScorerUnlocked(false);
     setMode("menu");
   }, [eventCode]);
@@ -1183,6 +1189,48 @@ function AppInner() {
     save({ competitions: competitions.filter((c) => c.id !== id) });
   };
 
+  // ---- Society roster: a persistent list of known members, separate from
+  // any single day's own player list — a source to pick from when building
+  // a draw, rather than re-typing/re-pasting names and handicaps fresh
+  // every time (which is where names could previously go missing if a
+  // handicap didn't parse correctly).
+  const addSocietyMember = () => {
+    save({ societyRoster: [...societyRoster, { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "" }] });
+  };
+
+  const updateSocietyMember = (id, patch) => {
+    save({ societyRoster: societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+  };
+
+  const removeSocietyMember = (id) => {
+    save({ societyRoster: societyRoster.filter((m) => m.id !== id) });
+  };
+
+  // Bulk-add via the same paste format used elsewhere (Name, Handicap,
+  // Tee) — duplicates (matched by name) are skipped rather than added
+  // twice.
+  const importSocietyMembers = (newMembers) => {
+    const existingNames = new Set(societyRoster.map((m) => normalizeName(m.name)));
+    const toAdd = newMembers.filter((m) => !existingNames.has(normalizeName(m.name)));
+    save({ societyRoster: [...societyRoster, ...toAdd] });
+    return toAdd.length;
+  };
+
+  // Adds a set of society-roster members into the CURRENT round's own
+  // player list, copying their handicap/tee as a starting point — this is
+  // the actual "pull known players into today's draw" step. Anyone already
+  // in this round's roster (matched by name) is left untouched rather than
+  // duplicated.
+  const addSocietyMembersToRound = (memberIds) => {
+    const toAdd = societyRoster.filter((m) => memberIds.includes(m.id));
+    const existingNames = new Set(players.map((p) => normalizeName(p.name)));
+    const newPlayers = toAdd
+      .filter((m) => !existingNames.has(normalizeName(m.name)))
+      .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: m.tee || course.tees[0]?.label || "", scores: Array(18).fill("") }));
+    if (newPlayers.length > 0) updateRound({ players: [...players, ...newPlayers] });
+    return newPlayers.length;
+  };
+
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
   // paste that isn't already in the Competitions list — so a code works
   // the moment it appears, with no requirement to set it up first. Returns
@@ -1292,11 +1340,23 @@ function AppInner() {
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs);
     const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
-    if (!isFoursomes) {
-      updateRound({ draw: newDraw, players: withAllDrawPlayers });
-      return;
-    }
-    updateRound({ draw: newDraw, players: mergedPairsFromDraw(withAllDrawPlayers, newDraw, course) });
+    const finalPlayers = isFoursomes
+      ? mergedPairsFromDraw(withAllDrawPlayers, newDraw, course)
+      : withAllDrawPlayers;
+
+    // Any brand-new name from this paste also joins the Society Roster —
+    // checked against the individual (pre-pairing) list, since the roster
+    // holds individuals even on a Foursomes day — so it builds itself up
+    // over time rather than needing separate upkeep.
+    const existingRosterNames = new Set(societyRoster.map((m) => normalizeName(m.name)));
+    const newRosterMembers = withAllDrawPlayers
+      .filter((p) => p.name && !existingRosterNames.has(normalizeName(p.name)))
+      .map((p) => ({ id: crypto.randomUUID(), name: p.name, index: p.index || "", tee: p.tee || course.tees[0]?.label || "" }));
+
+    save({
+      rounds: rounds.map((r) => (r.id === activeRoundId ? { ...r, draw: newDraw, players: finalPlayers } : r)),
+      societyRoster: newRosterMembers.length > 0 ? [...societyRoster, ...newRosterMembers] : societyRoster,
+    });
   };
 
   const updateLocalRules = (text) => updateRound({ localRules: text });
@@ -1640,6 +1700,8 @@ function AppInner() {
           onUpdateStartingHole={updateStartingHole}
           onBack={() => setShowDrawSetup(false)}
           roundKey={activeRoundId}
+          societyRoster={societyRoster}
+          onAddFromRoster={addSocietyMembersToRound}
           headerColor={headerColor}
           accentColor={accentColor}
           course={course}
@@ -1726,6 +1788,21 @@ function AppInner() {
           onCopyPlayers={copyPlayersFromRound}
           isFoursomes={isFoursomes}
         />
+      ) : showSocietyRoster ? (
+        <SocietyRosterSetup
+          roster={societyRoster}
+          onAdd={addSocietyMember}
+          onUpdate={updateSocietyMember}
+          onRemove={removeSocietyMember}
+          onImport={importSocietyMembers}
+          course={course}
+          roundPlayers={players}
+          roundLabel={activeRound.label}
+          onAddToRound={(id) => addSocietyMembersToRound([id])}
+          onBack={() => setShowSocietyRoster(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showCourseSetup ? (
         <CourseSetup
           orgName={orgName}
@@ -1773,10 +1850,11 @@ function AppInner() {
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
+          onOpenSocietyRoster={() => setShowSocietyRoster(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -2256,7 +2334,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist, roundKey }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2498,7 +2576,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} roundKey={roundKey} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -2604,7 +2682,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, roundKey }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, roundKey, societyRoster, onAddFromRoster }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -2613,6 +2691,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
   const [dragOverSlot, setDragOverSlot] = useState(null); // { rowId, slotIdx } | null — visual feedback for mouse drag-and-drop
   const [showAddPlayer, setShowAddPlayer] = useState(false);
+  const [showRosterPicker, setShowRosterPicker] = useState(false);
+  const [rosterSearch, setRosterSearch] = useState("");
+  const [selectedRosterIds, setSelectedRosterIds] = useState(new Set());
   const [newPlayerName, setNewPlayerName] = useState("");
   const [newPlayerIndex, setNewPlayerIndex] = useState("");
   // startTime/intervalMinutes are now saved as part of the round (passed in
@@ -2859,6 +2940,75 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           >
             <Plus size={13} /> Add player
           </button>
+        )}
+
+        {societyRoster && societyRoster.length > 0 && (
+          showRosterPicker ? (
+            <div style={{ background: "#FAF8F0", borderRadius: 8, padding: 10, border: `1px solid ${headerColor}`, marginTop: 10 }}>
+              <input
+                value={rosterSearch}
+                onChange={(e) => setRosterSearch(e.target.value)}
+                placeholder="Search society roster…"
+                style={{ width: "100%", fontSize: 13, padding: "7px 9px", borderRadius: 6, border: "1px solid #D8D4C0", marginBottom: 8, boxSizing: "border-box" }}
+              />
+              <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                {societyRoster
+                  .filter((m) => !players.some((p) => normalizeName(p.name) === normalizeName(m.name)))
+                  .filter((m) => !rosterSearch.trim() || m.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()))
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((m) => (
+                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 2px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedRosterIds.has(m.id)}
+                        onChange={() => setSelectedRosterIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(m.id)) next.delete(m.id);
+                          else next.add(m.id);
+                          return next;
+                        })}
+                      />
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.name}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{m.index || "no HCP"}</span>
+                    </label>
+                  ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button
+                  onClick={() => {
+                    onAddFromRoster([...selectedRosterIds]);
+                    setSelectedRosterIds(new Set());
+                    setRosterSearch("");
+                    setShowRosterPicker(false);
+                  }}
+                  disabled={selectedRosterIds.size === 0}
+                  style={{
+                    flex: 1, padding: "9px 0", borderRadius: 7, border: "none",
+                    background: selectedRosterIds.size === 0 ? "#D8D4C0" : headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 12.5,
+                  }}
+                >
+                  Add {selectedRosterIds.size || ""}
+                </button>
+                <button
+                  onClick={() => { setShowRosterPicker(false); setSelectedRosterIds(new Set()); setRosterSearch(""); }}
+                  style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontWeight: 600, fontSize: 12.5 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowRosterPicker(true)}
+              style={{
+                width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 7, border: `1px dashed ${accentColor}`,
+                background: "transparent", color: accentColor, fontWeight: 600, fontSize: 12.5,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+              }}
+            >
+              <Users size={13} /> Add from society roster
+            </button>
+          )
         )}
       </div>
 
@@ -3211,6 +3361,169 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
         }
       `}</style>
+    </div>
+  );
+}
+
+function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor }) {
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [importMsg, setImportMsg] = useState("");
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+
+  const alphaSorted = [...roster].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+  const doImport = () => {
+    const parsed = parsePastedPlayers(pasteText, course);
+    if (parsed.length === 0) {
+      setImportMsg("No rows found — check there's a name in the first column.");
+      return;
+    }
+    const added = onImport(parsed);
+    const skipped = parsed.length - added;
+    setImportMsg(
+      `Added ${added} member${added === 1 ? "" : "s"}.` + (skipped > 0 ? ` ${skipped} already on the roster, skipped.` : "")
+    );
+    setPasteText("");
+    setPasteOpen(false);
+  };
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Society roster</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
+          Every member of your society, entered once with their current handicap. When building a day's draw, pull
+          people straight in from here instead of re-typing or re-pasting names each time — this list is completely
+          separate from any single day's own player list, and updating it here doesn't change anyone already added
+          to a day.
+        </div>
+
+        {!pasteOpen ? (
+          <button
+            onClick={() => { setPasteOpen(true); setImportMsg(""); }}
+            style={{
+              width: "100%", padding: "11px 0", borderRadius: 8, border: `1px solid ${headerColor}`,
+              background: "transparent", color: headerColor, fontWeight: 600, fontSize: 13, marginBottom: 12,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}
+          >
+            <Clipboard size={14} /> Bulk-add (paste from spreadsheet)
+          </button>
+        ) : (
+          <div style={{ background: "#FAF8F0", borderRadius: 8, padding: 10, border: `1px solid ${headerColor}`, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 6 }}>
+              Name, Handicap Index, Tee — one member per line. Header row optional. Anyone already on the roster
+              (matched by name) is skipped, not duplicated.
+            </div>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder={"A. Whitmore\t8.4\tBack\nR. Okonkwo\t14.1\tFront"}
+              rows={6}
+              className="mono"
+              style={{ width: "100%", fontSize: 12, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={doImport}
+                style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 12.5 }}
+              >
+                Import
+              </button>
+              <button
+                onClick={() => { setPasteOpen(false); setImportMsg(""); }}
+                style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontWeight: 600, fontSize: 12.5 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {importMsg && !pasteOpen && (
+          <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginBottom: 8 }}>{importMsg}</div>
+        )}
+
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>
+          Tap <Plus size={11} style={{ verticalAlign: "middle" }} /> to add someone straight into <strong>{roundLabel}</strong>'s draw.
+        </div>
+
+        {alphaSorted.map((m) => (
+          <div
+            key={m.id}
+            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
+          >
+            <input
+              value={m.name}
+              onChange={(e) => onUpdate(m.id, { name: e.target.value })}
+              placeholder="Name"
+              style={{ flex: 2, fontSize: 13, fontWeight: 600, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0 }}
+            />
+            <input
+              value={m.index}
+              onChange={(e) => onUpdate(m.id, { index: e.target.value })}
+              placeholder="HCP"
+              inputMode="decimal"
+              className="mono"
+              style={{ width: 56, fontSize: 13, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+            />
+            <select
+              value={m.tee}
+              onChange={(e) => onUpdate(m.id, { tee: e.target.value })}
+              style={{ width: 76, fontSize: 12, padding: "7px 4px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+            >
+              {course.tees.map((t) => (
+                <option key={t.id} value={t.label}>{t.label}</option>
+              ))}
+            </select>
+            {roundPlayers.some((p) => normalizeName(p.name) === normalizeName(m.name)) ? (
+              <span
+                title={`Already in ${roundLabel}`}
+                style={{ width: 30, textAlign: "center", color: accentColor, fontSize: 15 }}
+              >
+                ✓
+              </span>
+            ) : (
+              <button
+                onClick={() => onAddToRound(m.id)}
+                title={`Add to ${roundLabel}`}
+                style={{ width: 30, background: "none", border: "none", color: headerColor, padding: "4px" }}
+              >
+                <Plus size={16} />
+              </button>
+            )}
+            {confirmRemoveId === m.id ? (
+              <div style={{ display: "flex", gap: 2 }}>
+                <button onClick={() => { onRemove(m.id); setConfirmRemoveId(null); }} style={{ fontSize: 10.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px" }}>
+                  Yes
+                </button>
+                <button onClick={() => setConfirmRemoveId(null)} style={{ fontSize: 10.5, color: "#9B9885", background: "none", border: "none", padding: "4px" }}>
+                  No
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmRemoveId(m.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: "4px" }}>
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        ))}
+
+        <button
+          onClick={onAdd}
+          style={{
+            width: "100%", padding: "9px 0", borderRadius: 7, border: `1px dashed ${headerColor}`,
+            background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12.5, marginTop: 10,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          }}
+        >
+          <Plus size={13} /> Add member
+        </button>
+      </div>
     </div>
   );
 }
@@ -3623,7 +3936,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenPrintLabels, headerColor, accentColor, onLock }) {
+function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -3710,6 +4023,19 @@ function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSe
       >
         <Flag size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Competitions</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenSocietyRoster}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Users size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Society roster</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
