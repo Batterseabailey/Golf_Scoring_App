@@ -1593,6 +1593,7 @@ function AppInner() {
           startingHole={startingHole}
           onUpdateStartingHole={updateStartingHole}
           onBack={() => setShowDrawSetup(false)}
+          roundKey={activeRoundId}
           headerColor={headerColor}
           accentColor={accentColor}
           course={course}
@@ -2075,7 +2076,7 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
               <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: i < 3 && row.anyPlayed ? headerColor : "#9B9885" }}>
                 {i + 1}
               </td>
-              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600 }}>{row.name}</td>
+              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
               {rounds.map((r) => {
                 const t = row.perRound[r.id];
                 return (
@@ -2180,7 +2181,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist, roundKey }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2422,7 +2423,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} roundKey={roundKey} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -2514,19 +2515,24 @@ function addMinutes(timeStr, minutesToAdd) {
   return `${hh}:${mm}`;
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick }) {
+// Turns a draw's stored groups into the working-copy shape DrawBuilder
+// edits — shared between the initial mount and the resync effect below,
+// so both use exactly the same logic.
+function buildRowsFromDraw(draw) {
+  if (draw.length > 0) {
+    return draw.map((entry) => ({
+      id: entry.id,
+      time: entry.time || "",
+      slots: [0, 1, 2, 3].map((i) => (entry.players && entry.players[i]) || null),
+    }));
+  }
+  return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
+}
+
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, roundKey }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
-  const [rows, setRows] = useState(() => {
-    if (draw.length > 0) {
-      return draw.map((entry) => ({
-        id: entry.id,
-        time: entry.time || "",
-        slots: [0, 1, 2, 3].map((i) => (entry.players && entry.players[i]) || null),
-      }));
-    }
-    return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
-  });
+  const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
   const [selected, setSelected] = useState(null); // player name currently picked up
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
@@ -2537,6 +2543,20 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   // startTime/intervalMinutes are now saved as part of the round (passed in
   // as props) rather than local state — previously these reset to defaults
   // any time this screen was left and re-opened.
+
+  // This screen doesn't unmount when you switch to a different day while
+  // staying on Draw setup — it just receives new props — so the working
+  // copy above (only ever set once, at mount) would otherwise keep showing
+  // whichever day was open when you first arrived here. Re-sync it (and
+  // clear any in-progress selection) whenever the actual round changes.
+  useEffect(() => {
+    setRows(buildRowsFromDraw(draw));
+    setSelected(null);
+    setEditingSlot(null);
+    setDragOverSlot(null);
+    setShowAddPlayer(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundKey]);
 
   const assignedNames = new Set(rows.flatMap((r) => r.slots.filter(Boolean)));
   const pool = players
