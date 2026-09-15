@@ -3533,6 +3533,7 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const rosterRef = useRef(null);
 
   // The roster here is for finding/editing a player, not for ranking — sort
   // it alphabetically rather than reusing the score-based leaderboard order.
@@ -3553,6 +3554,16 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
+      <button
+        onClick={() => rosterRef.current && rosterRef.current.scrollIntoView({ behavior: "smooth", block: "start" })}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          padding: "13px 12px", borderRadius: 10, border: "none", background: accentColor,
+          color: "#FFFFFF", fontWeight: 800, fontSize: 14.5, marginBottom: 12,
+        }}
+      >
+        <Clipboard size={16} /> Enter scores
+      </button>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <button
           onClick={onOpenCourseSetup}
@@ -3643,6 +3654,9 @@ function ScorerList({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, 
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
+      <div ref={rosterRef} style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginTop: 4, marginBottom: 8 }}>
+        Players — tap a name to enter their score
+      </div>
       {ranked.length > 0 && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
           {confirmClear ? (
