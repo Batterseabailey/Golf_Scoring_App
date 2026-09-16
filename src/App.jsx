@@ -71,6 +71,17 @@ function getTee(course, teeLabel) {
   return course.tees.find((t) => t.label.trim().toLowerCase() === target) || course.tees[0];
 }
 
+// True if a player's stored tee doesn't exactly match any of this
+// course's real tees — meaning getTee() is silently falling back to
+// whichever tee happens to be listed first, which may not be the tee
+// they're actually meant to be playing (and produces a wrong playing
+// handicap without any obvious sign of it).
+function teeMismatch(course, teeLabel) {
+  if (!teeLabel) return true;
+  const target = teeLabel.trim().toLowerCase();
+  return !course.tees.some((t) => t.label.trim().toLowerCase() === target);
+}
+
 function playingHandicap(course, index, teeId) {
   const t = getTee(course, teeId);
   if (!t) return 0;
@@ -4278,8 +4289,11 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
                   ? `${p.name || "New pair"}${p.partnerName ? ` & ${p.partnerName}` : " — add partner"}`
                   : p.name || "New player"}
               </div>
-              <div className="mono" style={{ fontSize: 11, color: "#8A8774" }}>
-                {getTee(course, p.tee)?.label} tee · thru {p.thru}/18 · {p.thru > 0 ? `${p.pts} pts` : "not started"}
+              <div className="mono" style={{ fontSize: 11, color: teeMismatch(course, p.tee) ? "#B5442E" : "#8A8774" }}>
+                {teeMismatch(course, p.tee)
+                  ? `⚠ Tee "${p.tee || "not set"}" doesn't match this course — check it`
+                  : `${getTee(course, p.tee)?.label} tee`}
+                {" "}· thru {p.thru}/18 · {p.thru > 0 ? `${p.pts} pts` : "not started"}
               </div>
             </div>
             <ChevronRight size={16} color="#9B9885" />
