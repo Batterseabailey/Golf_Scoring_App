@@ -1351,7 +1351,15 @@ function AppInner() {
           // an earlier round for this name has it blank.
           if (index) entry.index = index;
           if (competition) entry.competition = competition;
-          entry.rounds.push({ roundId: r.id, roundLabel: r.label, tee, teeOptions: r.course.tees.map((t) => t.label) });
+          // Never add a second entry for a round we've already recorded —
+          // this can otherwise happen if a stale partnerName field is
+          // still sitting on a different player's record (e.g. left over
+          // from a day that was briefly set to Foursomes format and then
+          // switched back), which would wrongly look like the same name
+          // appearing twice in one round.
+          if (!entry.rounds.some((rd) => rd.roundId === r.id)) {
+            entry.rounds.push({ roundId: r.id, roundLabel: r.label, tee, teeOptions: r.course.tees.map((t) => t.label) });
+          }
         };
         addEntry(p.name, p.index, p.tee, p.competition);
         addEntry(p.partnerName, p.partnerIndex, p.partnerTee, p.partnerCompetition);
@@ -1413,6 +1421,17 @@ function AppInner() {
   const updateFormat = (f) => {
     if (f === "foursomes" && draw.length > 0) {
       updateRound({ format: f, players: syncPairsFromDraw(players, draw) });
+      return;
+    }
+    if (f !== "foursomes") {
+      // Switching to Individual — clear out any partner fields left over
+      // from Foursomes pairing. Otherwise a stale partnerName can linger
+      // on a player's record indefinitely and get wrongly read elsewhere
+      // as a second, phantom entry for whoever that name belonged to.
+      updateRound({
+        format: f,
+        players: players.map((p) => ({ ...p, partnerName: "", partnerIndex: "", partnerTee: "", partnerCompetition: "" })),
+      });
       return;
     }
     updateRound({ format: f });
@@ -1738,6 +1757,18 @@ function AppInner() {
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
         <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
+      ) : active ? (
+        <ScoreEntry
+          course={course}
+          player={active}
+          onBack={() => setActiveId(null)}
+          onUpdate={(patch) => updatePlayer(active.id, patch)}
+          onScore={(hole, val) => updateScore(active.id, hole, val)}
+          headerColor={headerColor}
+          isFoursomes={format === "foursomes"}
+          isMedal={isMedal}
+          handicapAllowance={handicapAllowance}
+        />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1876,18 +1907,6 @@ function AppInner() {
           onRenameRound={renameRound}
           onRemoveRound={removeRound}
           onSetActiveRound={setActiveRound}
-        />
-      ) : active ? (
-        <ScoreEntry
-          course={course}
-          player={active}
-          onBack={() => setActiveId(null)}
-          onUpdate={(patch) => updatePlayer(active.id, patch)}
-          onScore={(hole, val) => updateScore(active.id, hole, val)}
-          headerColor={headerColor}
-          isFoursomes={format === "foursomes"}
-          isMedal={isMedal}
-          handicapAllowance={handicapAllowance}
         />
       ) : (
         <ScorerList
