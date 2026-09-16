@@ -626,7 +626,11 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
 function parsePastedDraw(text, knownAbbreviations, courseTeeLabels) {
   return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels)
     .map((r) => ({ id: crypto.randomUUID(), time: r.time, players: r.names }))
-    .filter((r) => r.time || r.players.length > 0);
+    // A genuine tee time always has an actual time — this also filters out
+    // trailing blank/noise rows further down a spreadsheet (e.g. a stray
+    // "Total" footer label sitting alone in an otherwise empty row), which
+    // would otherwise get swept up and added as a phantom player.
+    .filter((r) => r.time && r.time.trim());
 }
 
 // Pulls {name, index} handicap pairs out of the same draw paste, so that
