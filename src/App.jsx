@@ -525,16 +525,26 @@ function isNumericToken(raw) {
 // Strips everything except letters before comparing, so a hidden character
 // Excel sometimes inserts on copy/paste (a non-breaking space, a stray
 // mark) can't cause a real "Back"/"Front" to be missed.
-function isTeeToken(raw) {
+function isTeeToken(raw, courseTeeLabels) {
   const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
-  return cleaned === "back" || cleaned === "front" || cleaned === "b" || cleaned === "f";
+  if (!cleaned) return false;
+  if (cleaned === "back" || cleaned === "front" || cleaned === "b" || cleaned === "f") return true;
+  // Also matches whatever this specific course actually calls its own
+  // tees (e.g. "Club"/"Purple" at Royal Cinque Ports) — different courses
+  // routinely use completely different tee names/colours, so recognizing
+  // only "Back"/"Front" would miss every one of them.
+  return (courseTeeLabels || []).some((label) => (label || "").replace(/[^a-zA-Z]/g, "").toLowerCase() === cleaned);
 }
 
-function normalizeTeeIndicator(raw) {
+function normalizeTeeIndicator(raw, courseTeeLabels) {
   const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
   if (cleaned === "b" || cleaned === "back") return "Back";
   if (cleaned === "f" || cleaned === "front") return "Front";
-  return (raw || "").trim();
+  // Return the course's own actual label (correctly cased) if this token
+  // matches one, so the stored value exactly matches an entry in the
+  // course's tees list.
+  const match = (courseTeeLabels || []).find((label) => (label || "").replace(/[^a-zA-Z]/g, "").toLowerCase() === cleaned);
+  return match || (raw || "").trim();
 }
 
 // Single shared pass over a pasted draw sheet — classifies every column
@@ -552,7 +562,7 @@ function looksLikeCompetitionCode(raw) {
   return /^[A-Z]{2,6}$/.test((raw || "").trim());
 }
 
-function walkPastedDrawRows(text, knownAbbreviations) {
+function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
   // Auto-detects the delimiter (rather than forcing tabs) so this works
   // equally well with a tab-separated spreadsheet paste and a genuine
   // comma-separated .csv file upload.
@@ -575,8 +585,8 @@ function walkPastedDrawRows(text, knownAbbreviations) {
       if (!val) continue;
       if (isNumericToken(val)) {
         if (lastName) handicaps.push({ name: lastName, index: val });
-      } else if (isTeeToken(val)) {
-        if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val) });
+      } else if (isTeeToken(val, courseTeeLabels)) {
+        if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val, courseTeeLabels) });
       } else if (abbrevSet.has(val.toUpperCase()) || looksLikeCompetitionCode(val)) {
         if (lastName) comps.push({ name: lastName, abbreviation: val.toUpperCase() });
       } else {
@@ -588,8 +598,8 @@ function walkPastedDrawRows(text, knownAbbreviations) {
   });
 }
 
-function parsePastedDraw(text, knownAbbreviations) {
-  return walkPastedDrawRows(text, knownAbbreviations)
+function parsePastedDraw(text, knownAbbreviations, courseTeeLabels) {
+  return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels)
     .map((r) => ({ id: crypto.randomUUID(), time: r.time, players: r.names }))
     .filter((r) => r.time || r.players.length > 0);
 }
@@ -597,21 +607,21 @@ function parsePastedDraw(text, knownAbbreviations) {
 // Pulls {name, index} handicap pairs out of the same draw paste, so that
 // data can populate the roster too rather than being discarded just
 // because it arrived via the draw paste.
-function extractHandicapsFromDrawPaste(text, knownAbbreviations) {
-  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.handicaps);
+function extractHandicapsFromDrawPaste(text, knownAbbreviations, courseTeeLabels) {
+  return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels).flatMap((r) => r.handicaps);
 }
 
 // Pulls {name, abbreviation} sub-competition tags out of the same draw
 // paste — only recognized if the token exactly matches an abbreviation
 // already defined in Admin, so a genuine name can never be mistaken for one.
-function extractCompetitionsFromDrawPaste(text, knownAbbreviations) {
-  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.comps);
+function extractCompetitionsFromDrawPaste(text, knownAbbreviations, courseTeeLabels) {
+  return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels).flatMap((r) => r.comps);
 }
 
 // Pulls {name, tee} pairs out of the same draw paste, in any column order
 // relative to the handicap.
-function extractTeesFromDrawPaste(text, knownAbbreviations) {
-  return walkPastedDrawRows(text, knownAbbreviations).flatMap((r) => r.tees);
+function extractTeesFromDrawPaste(text, knownAbbreviations, courseTeeLabels) {
+  return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels).flatMap((r) => r.tees);
 
 }
 
@@ -1249,17 +1259,41 @@ function AppInner() {
   // day of the event — matches by name, checking both the primary name and
   // (for Foursomes pairs) the partner name, since it's the same portable
   // index either way.
-  const updatePlayerEverywhere = (name, newIndex, newTee, newCompetition) => {
+  // Index and competition are the same regardless of which course a
+  // player is on, so these stay synced everywhere the name appears.
+  const updateIndexAndCompetitionEverywhere = (name, newIndex, newCompetition) => {
     const target = normalizeName(name);
     save({
       rounds: rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
-          if (normalizeName(p.name) === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
-          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
+          if (normalizeName(p.name) === target) return { ...p, index: newIndex, competition: newCompetition };
+          if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerCompetition: newCompetition };
           return p;
         }),
       })),
+    });
+  };
+
+  // Tee is deliberately NOT synced across rounds — different courses
+  // often use entirely different tee names/colours for equivalent tees
+  // (e.g. "Club"/"Purple" at one course, "Back"/"Front" at another), so a
+  // single "this player's tee" choice doesn't make sense event-wide. Each
+  // round keeps its own tee for a player, set independently.
+  const updateTeeForRound = (roundId, name, newTee) => {
+    const target = normalizeName(name);
+    save({
+      rounds: rounds.map((r) => {
+        if (r.id !== roundId) return r;
+        return {
+          ...r,
+          players: r.players.map((p) => {
+            if (normalizeName(p.name) === target) return { ...p, tee: newTee };
+            if (normalizeName(p.partnerName) === target) return { ...p, partnerTee: newTee };
+            return p;
+          }),
+        };
+      }),
     });
   };
 
@@ -1296,21 +1330,23 @@ function AppInner() {
     const byName = new Map();
     rounds.forEach((r) => {
       r.players.forEach((p) => {
-        if (p.name) byName.set(normalizeName(p.name), { name: p.name, index: p.index, tee: p.tee, competition: p.competition });
-        if (p.partnerName) byName.set(normalizeName(p.partnerName), { name: p.partnerName, index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition });
+        const addEntry = (name, index, tee, competition) => {
+          if (!name) return;
+          const key = normalizeName(name);
+          if (!byName.has(key)) byName.set(key, { name, index, competition, rounds: [] });
+          const entry = byName.get(key);
+          // Index/competition are the same regardless of which round we
+          // saw them on last — but keep whichever is actually set, in case
+          // an earlier round for this name has it blank.
+          if (index) entry.index = index;
+          if (competition) entry.competition = competition;
+          entry.rounds.push({ roundId: r.id, roundLabel: r.label, tee, teeOptions: r.course.tees.map((t) => t.label) });
+        };
+        addEntry(p.name, p.index, p.tee, p.competition);
+        addEntry(p.partnerName, p.partnerIndex, p.partnerTee, p.partnerCompetition);
       });
     });
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-  };
-
-  // Every distinct tee label used across any day's course — since the
-  // whole point of naming tees consistently (e.g. always "Back"/"Front")
-  // is that the same choice works everywhere, this is what the
-  // handicap-check screen's tee dropdown offers.
-  const allTeeLabels = () => {
-    const labels = new Set();
-    rounds.forEach((r) => r.course.tees.forEach((t) => labels.add(t.label)));
-    return [...labels];
   };
 
   // Guarantees every name appearing anywhere in the draw has a roster
@@ -1679,9 +1715,9 @@ function AppInner() {
       ) : mode === "handicap" && handicapUnlocked ? (
         <HandicapCheck
           players={allPlayersAcrossRounds()}
-          teeOptions={allTeeLabels()}
           competitions={competitions}
-          onUpdate={updatePlayerEverywhere}
+          onUpdateIndexAndCompetition={updateIndexAndCompetitionEverywhere}
+          onUpdateTeeForRound={updateTeeForRound}
           headerColor={headerColor}
           accentColor={accentColor}
         />
@@ -1726,6 +1762,7 @@ function AppInner() {
           competitions={competitions}
           onEnsureCompetitionsExist={ensureCompetitionsExist}
           onAddPlayerQuick={addPlayerQuick}
+          onRemovePlayer={removePlayer}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -2334,7 +2371,7 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2343,14 +2380,15 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
 
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
-    const parsed = parsePastedDraw(pasteText, abbrevs);
+    const courseTeeLabels = course.tees.map((t) => t.label);
+    const parsed = parsePastedDraw(pasteText, abbrevs, courseTeeLabels);
     if (parsed.length === 0) {
       setMsg("No rows found — make sure each line starts with a time.");
       return;
     }
-    const hcpPairs = extractHandicapsFromDrawPaste(pasteText, abbrevs);
-    const teePairs = extractTeesFromDrawPaste(pasteText, abbrevs);
-    const compPairs = extractCompetitionsFromDrawPaste(pasteText, abbrevs);
+    const hcpPairs = extractHandicapsFromDrawPaste(pasteText, abbrevs, courseTeeLabels);
+    const teePairs = extractTeesFromDrawPaste(pasteText, abbrevs, courseTeeLabels);
+    const compPairs = extractCompetitionsFromDrawPaste(pasteText, abbrevs, courseTeeLabels);
     const newAbbrevs = onEnsureCompetitionsExist(compPairs.map((c) => c.abbreviation));
     onUpdate(parsed, hcpPairs, teePairs, compPairs);
     const extras = [];
@@ -2576,7 +2614,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -2682,7 +2720,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, roundKey, societyRoster, onAddFromRoster }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -2691,6 +2729,8 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [editingSlot, setEditingSlot] = useState(null); // { rowId, slotIdx, name } | null
   const [dragOverSlot, setDragOverSlot] = useState(null); // { rowId, slotIdx } | null — visual feedback for mouse drag-and-drop
   const [showAddPlayer, setShowAddPlayer] = useState(false);
+  const [confirmDeleteName, setConfirmDeleteName] = useState(null);
+  const [confirmClearRows, setConfirmClearRows] = useState(false);
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
   const [selectedRosterIds, setSelectedRosterIds] = useState(new Set());
@@ -2792,6 +2832,8 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
 
   const removeRow = (rowId) => setRows((prev) => prev.filter((r) => r.id !== rowId));
 
+  const clearAllRows = () => setRows([{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }]);
+
   const saveDraw = () => {
     const finalDraw = rows
 
@@ -2876,21 +2918,59 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             </div>
           )}
           {pool.map((p) => (
-            <button
-              key={p.id}
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ name: p.name, from: null }))}
-              onClick={() => pickUp(p.name)}
-              style={{
-                padding: "6px 11px", borderRadius: 20, fontSize: 12.5, fontWeight: 600,
-                border: selected && selected.name === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
-                background: selected && selected.name === p.name ? `${accentColor}14` : "#FFFFFF",
-                color: selected && selected.name === p.name ? accentColor : "#1B1B1B",
-                cursor: "grab",
-              }}
-            >
-              {p.name}
-            </button>
+            confirmDeleteName === p.name ? (
+              <div
+                key={p.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 20,
+                  border: "1px solid #B5442E", background: "#FDF2EF", fontSize: 12,
+                }}
+              >
+                <span>Remove {p.name}?</span>
+                <button
+                  onClick={() => { onRemovePlayer(p.id); setConfirmDeleteName(null); }}
+                  style={{ fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "2px 4px" }}
+                >
+                  Yes
+                </button>
+                <button
+                  onClick={() => setConfirmDeleteName(null)}
+                  style={{ color: "#9B9885", background: "none", border: "none", padding: "2px 4px" }}
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <div
+                key={p.id}
+                style={{
+                  display: "flex", alignItems: "center", borderRadius: 20,
+                  border: selected && selected.name === p.name ? `2px solid ${accentColor}` : "1px solid #D8D4C0",
+                  background: selected && selected.name === p.name ? `${accentColor}14` : "#FFFFFF",
+                  overflow: "hidden",
+                }}
+              >
+                <button
+                  draggable
+                  onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ name: p.name, from: null }))}
+                  onClick={() => pickUp(p.name)}
+                  style={{
+                    padding: "6px 4px 6px 11px", fontSize: 12.5, fontWeight: 600, border: "none", background: "none",
+                    color: selected && selected.name === p.name ? accentColor : "#1B1B1B",
+                    cursor: "grab",
+                  }}
+                >
+                  {p.name}
+                </button>
+                <button
+                  onClick={() => setConfirmDeleteName(p.name)}
+                  title={`Remove ${p.name} from the roster`}
+                  style={{ padding: "6px 9px 6px 3px", background: "none", border: "none", color: "#B5442E" }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )
           ))}
         </div>
 
@@ -3011,6 +3091,35 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           )
         )}
       </div>
+
+      {rows.length > 1 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          {confirmClearRows ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: "#8A8774" }}>Remove all {rows.length} tee times?</span>
+              <button
+                onClick={() => { clearAllRows(); setConfirmClearRows(false); }}
+                style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px 6px" }}
+              >
+                Yes, clear
+              </button>
+              <button
+                onClick={() => setConfirmClearRows(false)}
+                style={{ fontSize: 11.5, color: "#9B9885", background: "none", border: "none", padding: "4px 6px" }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmClearRows(true)}
+              style={{ fontSize: 11.5, color: "#B5442E", background: "none", border: "none", padding: "4px 2px" }}
+            >
+              Clear all tee times
+            </button>
+          )}
+        </div>
+      )}
 
       {rows.map((row, rowIdx) => (
         <div key={row.id} style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 8 }}>
@@ -3703,33 +3812,39 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColor, accentColor }) {
+function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onUpdateTeeForRound, headerColor, accentColor }) {
   const [query, setQuery] = useState("");
   const [selectedName, setSelectedName] = useState(null);
   const [value, setValue] = useState("");
-  const [tee, setTee] = useState("");
   const [competition, setCompetition] = useState("");
   const [savedMsg, setSavedMsg] = useState(false);
+  const [teeSavedRoundId, setTeeSavedRoundId] = useState(null);
 
   const filtered = query.trim()
     ? players.filter((p) => p.name.toLowerCase().includes(query.trim().toLowerCase()))
     : players;
+  const selectedPlayer = players.find((p) => p.name === selectedName);
 
   const selectPlayer = (p) => {
     setSelectedName(p.name);
     setValue(p.index || "");
-    setTee(p.tee || teeOptions[0] || "");
     setCompetition(p.competition || "");
     setSavedMsg(false);
   };
 
   const save = () => {
-    onUpdate(selectedName, value, tee, competition);
+    onUpdateIndexAndCompetition(selectedName, value, competition);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
   };
 
-  if (selectedName) {
+  const saveTee = (roundId, newTee) => {
+    onUpdateTeeForRound(roundId, selectedName, newTee);
+    setTeeSavedRoundId(roundId);
+    setTimeout(() => setTeeSavedRoundId(null), 1200);
+  };
+
+  if (selectedName && selectedPlayer) {
     return (
       <div style={{ padding: "14px 14px 40px" }}>
         <button
@@ -3738,7 +3853,7 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
         >
           ← Back to search
         </button>
-        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0" }}>
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{selectedName}</div>
           <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
           <input
@@ -3749,16 +3864,6 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
             className="mono"
             style={{ width: "100%", fontSize: 20, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
           />
-          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Tee</div>
-          <select
-            value={tee}
-            onChange={(e) => setTee(e.target.value)}
-            style={{ width: "100%", fontSize: 16, fontWeight: 600, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
-          >
-            {teeOptions.map((label) => (
-              <option key={label} value={label}>{label}</option>
-            ))}
-          </select>
           {competitions.length > 0 && (
             <>
               <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
@@ -3783,6 +3888,31 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
             Updates everywhere {selectedName} appears across the whole event, not just one day.
           </div>
+        </div>
+
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Tee</div>
+          <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 12 }}>
+            Set separately for each day — different courses often name their tees differently, so this doesn't
+            carry over automatically between days.
+          </div>
+          {selectedPlayer.rounds.map((r) => (
+            <div key={r.roundId} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginBottom: 4 }}>{r.roundLabel}</div>
+              <select
+                value={r.tee}
+                onChange={(e) => saveTee(r.roundId, e.target.value)}
+                style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 12px", borderRadius: 8, border: "1px solid #D8D4C0", background: "#FFF" }}
+              >
+                {r.teeOptions.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+              </select>
+              {teeSavedRoundId === r.roundId && (
+                <div style={{ fontSize: 10.5, color: headerColor, marginTop: 3 }}>Saved</div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -3816,7 +3946,7 @@ function HandicapCheck({ players, teeOptions, competitions, onUpdate, headerColo
           >
             <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
             <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
-              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.tee ? ` · ${p.tee}` : ""}{p.competition ? ` · ${p.competition}` : ""}
+              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.competition ? ` · ${p.competition}` : ""} · {p.rounds.length} day{p.rounds.length === 1 ? "" : "s"}
             </span>
           </button>
         ))
@@ -4677,9 +4807,9 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
           Tees
         </div>
         <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 10 }}>
-          Use the same labels across every course — e.g. always "Back" and "Front" — rather than each venue's own tee
-          names. A player's tee choice is matched by this label, so keeping it consistent means it follows them
-          automatically when you switch courses.
+          Use whichever names this course actually calls its tees (e.g. "Club" and "Purple") — there's no need to
+          keep labels consistent across different courses. Each day's players have their tee set independently for
+          that day's own course, so different naming from one venue to the next isn't a problem.
         </div>
         {course.tees.map((t) => (
           <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
