@@ -605,6 +605,20 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
         lastName = val;
       }
     }
+    // A tee column is often only stated once for a whole group sharing a
+    // tee time, rather than repeated for every name on the line — so
+    // anyone without their own explicit tee inherits whichever tee the
+    // nearest preceding name on this same line had, instead of being left
+    // to silently fall back to the course's first tee later.
+    let carryTee = null;
+    names.forEach((name) => {
+      const own = tees.find((t) => t.name === name);
+      if (own) {
+        carryTee = own.tee;
+      } else if (carryTee) {
+        tees.push({ name, tee: carryTee });
+      }
+    });
     return { time, names, handicaps, tees, comps };
   });
 }
