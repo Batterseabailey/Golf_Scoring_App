@@ -1413,16 +1413,26 @@ function AppInner() {
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs);
     const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
+    // On a Singles day, strip any partner fields that might be lingering
+    // on a player's record — e.g. leftover from a day that was briefly,
+    // incorrectly set to Foursomes at some point in the past. A stale
+    // partnerName can otherwise cause a completely different bug later:
+    // looking up "who is this person" can match the WRONG record (the
+    // stale partner entry) before ever reaching the player's own correct,
+    // freshly-imported one.
+    const cleanedDrawPlayers = isFoursomes
+      ? withAllDrawPlayers
+      : withAllDrawPlayers.map((p) => ({ ...p, partnerName: "", partnerIndex: "", partnerTee: "", partnerCompetition: "" }));
     const finalPlayers = isFoursomes
-      ? mergedPairsFromDraw(withAllDrawPlayers, newDraw, course)
-      : withAllDrawPlayers;
+      ? mergedPairsFromDraw(cleanedDrawPlayers, newDraw, course)
+      : cleanedDrawPlayers;
 
     // Any brand-new name from this paste also joins the Society Roster —
     // checked against the individual (pre-pairing) list, since the roster
     // holds individuals even on a Foursomes day — so it builds itself up
     // over time rather than needing separate upkeep.
     const existingRosterNames = new Set(societyRoster.map((m) => normalizeName(m.name)));
-    const newRosterMembers = withAllDrawPlayers
+    const newRosterMembers = cleanedDrawPlayers
       .filter((p) => p.name && !existingRosterNames.has(normalizeName(p.name)))
       .map((p) => ({ id: crypto.randomUUID(), name: p.name, index: p.index || "", tee: p.tee || course.tees[0]?.label || "" }));
 
