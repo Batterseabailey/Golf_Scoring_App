@@ -345,6 +345,7 @@ function emptyRound(label, course) {
     handicapAllowance: 100, // percentage of course handicap allowed
     drawStartTime: "09:00",
     drawInterval: 8,
+    drawNote: "", // short note to players, shown at the top of the Draw screen and printed on scorecard labels
   };
 }
 
@@ -363,6 +364,7 @@ function sanitizeRound(r, fallbackLabel) {
     handicapAllowance: typeof r.handicapAllowance === "number" && r.handicapAllowance > 0 ? r.handicapAllowance : 100,
     drawStartTime: typeof r.drawStartTime === "string" && r.drawStartTime ? r.drawStartTime : "09:00",
     drawInterval: typeof r.drawInterval === "number" && r.drawInterval > 0 ? r.drawInterval : 8,
+    drawNote: typeof r.drawNote === "string" ? r.drawNote : "",
   };
 }
 
@@ -584,7 +586,7 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
 
   const abbrevSet = new Set((knownAbbreviations || []).map((a) => a.trim().toUpperCase()).filter(Boolean));
 
-  return rows.map((cols) => {
+  const perRow = rows.map((cols) => {
     const time = (cols[0] || "").trim();
     const names = [];
     const handicaps = [];
@@ -621,6 +623,35 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
     });
     return { time, names, handicaps, tees, comps };
   });
+
+  // Merges consecutive rows that share the same tee time — or that have a
+  // blank time, inheriting whichever time the previous row had — into one
+  // combined group. This is what lets a spreadsheet be laid out with one
+  // player per row (several rows to a tee time, as in a typical exported
+  // tee sheet) rather than requiring every player for a group to be packed
+  // onto a single line. A sheet that already has multiple players per row
+  // is completely unaffected, since each of its rows already carries its
+  // own distinct time and so never merges with its neighbour.
+  const merged = [];
+  perRow.forEach((row) => {
+    const last = merged[merged.length - 1];
+    const sameGroup = last && (!row.time || row.time === last.time);
+    if (sameGroup) {
+      last.names.push(...row.names);
+      last.handicaps.push(...row.handicaps);
+      last.tees.push(...row.tees);
+      last.comps.push(...row.comps);
+    } else {
+      merged.push({
+        time: row.time || (last ? last.time : ""),
+        names: [...row.names],
+        handicaps: [...row.handicaps],
+        tees: [...row.tees],
+        comps: [...row.comps],
+      });
+    }
+  });
+  return merged;
 }
 
 function parsePastedDraw(text, knownAbbreviations, courseTeeLabels) {
@@ -1471,6 +1502,8 @@ function AppInner() {
 
   const updateDrawInterval = (mins) => updateRound({ drawInterval: mins });
 
+  const updateDrawNote = (note) => updateRound({ drawNote: note });
+
   const uploadDocument = async (file) => {
     const code = eventCodeRef.current;
     if (!code || !file) return { ok: false, error: "No event code." };
@@ -1763,7 +1796,7 @@ function AppInner() {
         <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
-        <DrawView draw={draw} startingHole={startingHole} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
+        <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -1823,6 +1856,8 @@ function AppInner() {
           onUpdateDrawStartTime={updateDrawStartTime}
           drawInterval={drawInterval}
           onUpdateDrawInterval={updateDrawInterval}
+          drawNote={activeRound.drawNote}
+          onUpdateDrawNote={updateDrawNote}
           roundLabel={activeRound.label}
           onRenameRound={(label) => renameRound(activeRoundId, label)}
           roundDate={activeRound.date}
@@ -1869,6 +1904,7 @@ function AppInner() {
           players={players}
           draw={draw}
           roundDateDisplay={formatDisplayDateLong(activeRound.date)}
+          drawNote={activeRound.drawNote}
           competitions={competitions}
           handicapAllowance={handicapAllowance}
           isFoursomes={isFoursomes}
@@ -2385,18 +2421,55 @@ function HoleByHole({ course, player, headerColor, isMedal }) {
   );
 }
 
-function DrawView({ draw, startingHole, headerColor, accentColor, course, players, handicapAllowance, isFoursomes }) {
+function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes }) {
+  const [viewMode, setViewMode] = useState("times"); // times | individual
+  const [filter, setFilter] = useState("");
+
+  const noteBanner = drawNote && drawNote.trim() && (
+    <div
+      style={{
+        background: `${accentColor}14`, border: `1px solid ${accentColor}`, borderRadius: 8,
+        padding: "10px 12px", marginBottom: 10, fontSize: 13, fontWeight: 600, color: "#1B1B1B",
+      }}
+    >
+      {drawNote}
+    </div>
+  );
+
   if (draw.length === 0) {
     return (
-      <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
-        <Clipboard size={28} color={accentColor} style={{ marginBottom: 10 }} />
-        <div style={{ fontSize: 15 }}>The draw hasn't been posted yet.</div>
-        <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once tee times have been added.</div>
+      <div style={{ padding: "14px 12px 40px" }}>
+        {noteBanner}
+        <div style={{ padding: "34px 24px", textAlign: "center", color: "#6B6B5F" }}>
+          <Clipboard size={28} color={accentColor} style={{ marginBottom: 10 }} />
+          <div style={{ fontSize: 15 }}>The draw hasn't been posted yet.</div>
+          <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once tee times have been added.</div>
+        </div>
       </div>
     );
   }
+
+  // One row per player, flattened out of every tee-time group — each
+  // showing their own tee time, their own tee, and everyone else sharing
+  // that tee time with them. This is what "By Individual" below is built
+  // from, and what the filter box searches against.
+  const individualRows = draw
+    .flatMap((entry) =>
+      (entry.players || []).map((name) => ({
+        name,
+        time: entry.time,
+        tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
+        others: (entry.players || []).filter((n) => n !== name),
+      }))
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const filteredRows = filter.trim()
+    ? individualRows.filter((r) => r.name.toLowerCase().includes(filter.trim().toLowerCase()))
+    : individualRows;
+
   return (
     <div style={{ padding: "14px 12px 40px" }}>
+      {noteBanner}
       {startingHole && startingHole.trim() && (
         <div
           style={{
@@ -2407,29 +2480,90 @@ function DrawView({ draw, startingHole, headerColor, accentColor, course, player
           Starting from the {startingHole} tee
         </div>
       )}
-      {draw.map((entry) => (
-        <div
-          key={entry.id}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <button
+          onClick={() => setViewMode("times")}
           style={{
-            display: "flex", gap: 12, background: "#FFFFFF", borderRadius: 10,
-            padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
+            flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: viewMode === "times" ? headerColor : "transparent",
+            color: viewMode === "times" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
           }}
         >
-          <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 14, minWidth: 66 }}>
-            {entry.time}
+          By Tee Times
+        </button>
+        <button
+          onClick={() => setViewMode("individual")}
+          style={{
+            flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+            background: viewMode === "individual" ? headerColor : "transparent",
+            color: viewMode === "individual" ? "#FFFFFF" : headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          By Individual
+        </button>
+      </div>
+
+      {viewMode === "individual" && (
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter players…"
+          style={{ width: "100%", fontSize: 14, padding: "9px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box" }}
+        />
+      )}
+
+      {viewMode === "times" ? (
+        draw.map((entry) => (
+          <div
+            key={entry.id}
+            style={{
+              display: "flex", gap: 12, background: "#FFFFFF", borderRadius: 10,
+              padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
+            }}
+          >
+            <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 14, minWidth: 66 }}>
+              {entry.time}
+            </div>
+            <div style={{ fontSize: 14, flex: 1 }}>
+              {entry.players && entry.players.length > 0
+                ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, isFoursomes)
+                : entry.group || "—"}
+            </div>
           </div>
-          <div style={{ fontSize: 14, flex: 1 }}>
-            {entry.players && entry.players.length > 0
-              ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, isFoursomes)
-              : entry.group || "—"}
-          </div>
+        ))
+      ) : filteredRows.length === 0 ? (
+        <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>
+          No players matching "{filter.trim()}".
         </div>
-      ))}
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
+            <thead>
+              <tr style={{ background: `${headerColor}12` }}>
+                <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Player</th>
+                <th className="mono" style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>Tee Time</th>
+                <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Tee</th>
+                <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Other Players</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => (
+                <tr key={r.name} style={{ borderTop: "1px solid #EFEDE0" }}>
+                  <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{r.name}</td>
+                  <td className="mono" style={{ padding: "9px 10px", fontSize: 12.5, whiteSpace: "nowrap" }}>{r.time}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.tee}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.others.join(" + ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2492,7 +2626,16 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           max="2035-12-31"
           onChange={(e) => onUpdateRoundDate(e.target.value)}
           className="mono"
-          style={{ fontSize: 14, fontWeight: 600, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
+          style={{ fontSize: 14, fontWeight: 600, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit", marginBottom: 12 }}
+        />
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
+          Note to competitors <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional — shows at the top of the Draw screen, and prints on scorecard labels for this day)</span>
+        </div>
+        <input
+          value={drawNote}
+          onChange={(e) => onUpdateDrawNote(e.target.value)}
+          placeholder="e.g. Stableford off white tees, buggies permitted"
+          style={{ width: "100%", fontSize: 14, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", fontFamily: "inherit" }}
         />
       </div>
 
@@ -2926,7 +3069,15 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               inputMode="numeric"
               min={1}
               value={intervalMinutes}
-              onChange={(e) => onUpdateInterval(Math.max(1, Number(e.target.value) || 1))}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "") { onUpdateInterval(""); return; }
+                const num = Number(val);
+                if (!isNaN(num)) onUpdateInterval(Math.max(1, num));
+              }}
+              onBlur={(e) => {
+                if (e.target.value === "") onUpdateInterval(1);
+              }}
               className="mono"
               style={{ fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
@@ -3378,7 +3529,7 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function PrintLabels({ course, players, draw, roundDateDisplay, competitions, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
+function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
       .map((h, i) => strokesOnHole(course, ph, i))
@@ -3484,6 +3635,9 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
               <div className="label-hcp">{c.hcpLine} – Playing {c.ph}</div>
+              {drawNote && drawNote.trim() && (
+                <div className="label-note">{drawNote}</div>
+              )}
             </div>
           ))}
         </div>
@@ -3501,6 +3655,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
+        .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
 
         /* Print output — matched exactly to Avery L7160's real measurements,
            so each card lands precisely on a real adhesive label. */
@@ -3526,6 +3681,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, competitions, ha
           .label-name { font-size: 13px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
         }
       `}</style>
     </div>
@@ -4883,14 +5039,26 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             <input
               className="mono" type="number" inputMode="decimal"
               value={t.cr}
-              onChange={(e) => setTee(t.id, "cr", Number(e.target.value))}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTee(t.id, "cr", val === "" ? "" : Number(val));
+              }}
+              onBlur={(e) => {
+                if (e.target.value === "") setTee(t.id, "cr", 72.0);
+              }}
               placeholder="CR"
               style={{ flex: 1, fontSize: 12.5, padding: "6px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
             <input
               className="mono" type="number" inputMode="numeric"
               value={t.slope}
-              onChange={(e) => setTee(t.id, "slope", Number(e.target.value))}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTee(t.id, "slope", val === "" ? "" : Number(val));
+              }}
+              onBlur={(e) => {
+                if (e.target.value === "") setTee(t.id, "slope", 125);
+              }}
               placeholder="Slope"
               style={{ flex: 1, fontSize: 12.5, padding: "6px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
