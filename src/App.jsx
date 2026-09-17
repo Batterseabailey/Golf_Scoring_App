@@ -330,6 +330,56 @@ function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, i
   return names.map(withIndex).join(" & ");
 }
 
+// Same calculation as formatGroupNamesWithShots, but returns an array of
+// separate lines to stack vertically instead of one line joined with "&" —
+// so a group of 3 or 4 never has to squeeze onto a single horizontal line,
+// which doesn't fit a phone screen width. Singles gets one line per
+// player; Foursomes gets one line per pair (still showing their combined
+// figure, since that's what's actually meaningful for a pair).
+function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursomes) {
+  if (!names || names.length === 0) return [];
+  const withIndex = (n) => {
+    const p = findIndividualByName(rosterPlayers, n);
+    const idx = p && p.index !== "" && p.index != null ? p.index : null;
+    if (idx === null) return n;
+    if (!isFoursomes) {
+      const ph = individualPH(course, p, allowancePct);
+      return ph !== null ? `${n} (${idx}/${ph})` : `${n} (${idx})`;
+    }
+    return `${n} (${idx})`;
+  };
+
+  // Tee and competition abbreviation, appended onto the same line — e.g.
+  // "Will Bailey (3.3/6) – Club – PWC".
+  const detailsFor = (n) => {
+    const p = findIndividualByName(rosterPlayers, n);
+    const parts = [];
+    if (p && p.tee) parts.push(p.tee);
+    if (p && p.competition) parts.push(p.competition);
+    return parts.join(" · ");
+  };
+  const withDetails = (n) => {
+    const details = detailsFor(n);
+    return details ? `${withIndex(n)} – ${details}` : withIndex(n);
+  };
+
+  if (names.length === 4 && isFoursomes) {
+    const phA = pairPH(course, rosterPlayers, allowancePct, names[0], names[1]);
+    const phB = pairPH(course, rosterPlayers, allowancePct, names[2], names[3]);
+    // If both partners share the same tee/competition, show it once rather
+    // than repeating it — otherwise show each partner's own.
+    const detailsA = [...new Set([detailsFor(names[0]), detailsFor(names[1])])].filter(Boolean).join(" / ");
+    const detailsB = [...new Set([detailsFor(names[2]), detailsFor(names[3])])].filter(Boolean).join(" / ");
+    const pairAMain = `${withIndex(names[0])} & ${withIndex(names[1])}${phA !== null ? ` (${phA})` : ""}`;
+    const pairBMain = `${withIndex(names[2])} & ${withIndex(names[3])}${phB !== null ? ` (${phB})` : ""}`;
+    return [
+      detailsA ? `${pairAMain} – ${detailsA}` : pairAMain,
+      detailsB ? `${pairBMain} – ${detailsB}` : pairBMain,
+    ];
+  }
+  return names.map(withDetails);
+}
+
 function emptyRound(label, course) {
   return {
     id: crypto.randomUUID(),
@@ -2526,7 +2576,9 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
             </div>
             <div style={{ fontSize: 14, flex: 1 }}>
               {entry.players && entry.players.length > 0
-                ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, isFoursomes)
+                ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes).map((line, i) => (
+                    <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
+                  ))
                 : entry.group || "—"}
             </div>
           </div>
@@ -2878,11 +2930,13 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                 <button onClick={clearAll} style={{ fontSize: 11, color: "#B5442E", background: "none", border: "none" }}>Clear all</button>
               </div>
               {draw.map((entry) => (
-                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
-                  <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56 }}>{entry.time}</div>
+                <div key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+                  <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56, paddingTop: 1 }}>{entry.time}</div>
                   <div style={{ flex: 1, fontSize: 12.5 }}>
                     {entry.players && entry.players.length > 0
-                      ? formatGroupNamesWithShots(entry.players, course, players, handicapAllowance, format === "foursomes")
+                      ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes").map((line, i) => (
+                          <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
+                        ))
                       : entry.group || "—"}
                   </div>
                   <button onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
