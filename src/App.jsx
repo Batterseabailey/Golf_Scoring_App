@@ -517,7 +517,9 @@ function sanitizeState(parsed) {
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
     competitions: Array.isArray(parsed.competitions) ? parsed.competitions : [],
     societyRoster: Array.isArray(parsed.societyRoster)
-      ? parsed.societyRoster.filter((m) => m && typeof m.name === "string" && m.name.trim())
+      ? parsed.societyRoster
+          .filter((m) => m && typeof m.name === "string" && m.name.trim())
+          .map((m) => ({ ...m, isLady: !!m.isLady }))
       : [],
   };
 }
@@ -1389,11 +1391,20 @@ function AppInner() {
     return newPlayers.length;
   };
 
-  // Sets the same tee for a whole batch of players on THIS day at once —
-  // e.g. for quickly fixing everyone up after dragging them in fresh from
-  // the Society Roster, which deliberately never carries a tee over.
-  const bulkSetTee = (playerIds, tee) => {
-    updateRound({ players: players.map((p) => (playerIds.includes(p.id) ? { ...p, tee } : p)) });
+  // Sets the same tee for a whole batch of INDIVIDUAL PEOPLE at once — not
+  // records. On a Foursomes day, one player record holds two people (a
+  // primary and a partner), so a selection is { recordId, role } and this
+  // writes to .tee for "primary" or .partnerTee for "partner" on the
+  // matching record, rather than assuming one row = one person.
+  const bulkSetTee = (selections, tee) => {
+    updateRound({
+      players: players.map((p) => {
+        const setsPrimary = selections.some((s) => s.recordId === p.id && s.role === "primary");
+        const setsPartner = selections.some((s) => s.recordId === p.id && s.role === "partner");
+        if (!setsPrimary && !setsPartner) return p;
+        return { ...p, ...(setsPrimary ? { tee } : {}), ...(setsPartner ? { partnerTee: tee } : {}) };
+      }),
+    });
   };
 
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
@@ -3178,20 +3189,34 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     .filter((p) => p.name && !assignedNames.has(p.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  // Flattened to one row per PERSON, not per record — on a Foursomes day
+  // a single player record holds two people (primary + partner), and each
+  // needs their own tee set independently.
+  const teeableePeople = (isFoursomes
+    ? players.flatMap((p) => {
+        const list = [];
+        if (p.name) list.push({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee });
+        if (p.partnerName) list.push({ key: `${p.id}:partner`, recordId: p.id, role: "partner", name: p.partnerName, tee: p.partnerTee });
+        return list;
+      })
+    : players.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee }))
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
   const chooseBulkTeeTarget = (tee) => {
     setBulkTeeTarget(tee);
-    setSelectedTeeIds(new Set(players.filter((p) => p.name && p.tee === tee).map((p) => p.id)));
+    setSelectedTeeIds(new Set(teeableePeople.filter((person) => person.tee === tee).map((person) => person.key)));
   };
-  const toggleTeeSelect = (id) => {
+  const toggleTeeSelect = (key) => {
     setSelectedTeeIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
   const applyBulkTee = () => {
-    onBulkSetTee([...selectedTeeIds], bulkTeeTarget);
+    const selections = teeableePeople.filter((person) => selectedTeeIds.has(person.key)).map(({ recordId, role }) => ({ recordId, role }));
+    onBulkSetTee(selections, bulkTeeTarget);
     setTeeSavedMsg(true);
     setTimeout(() => setTeeSavedMsg(false), 1500);
   };
@@ -3557,14 +3582,14 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           {bulkTeeTarget && (
             <>
               <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
-                {[...players].filter((p) => p.name).sort((a, b) => a.name.localeCompare(b.name)).map((p) => (
+                {teeableePeople.map((person) => (
                   <label
-                    key={p.id}
+                    key={person.key}
                     style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
                   >
-                    <input type="checkbox" checked={selectedTeeIds.has(p.id)} onChange={() => toggleTeeSelect(p.id)} />
-                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{p.name}</span>
-                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{p.tee ? p.tee : "no tee set"}</span>
+                    <input type="checkbox" checked={selectedTeeIds.has(person.key)} onChange={() => toggleTeeSelect(person.key)} />
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{person.tee ? person.tee : "no tee set"}</span>
                   </label>
                 ))}
               </div>
@@ -4064,8 +4089,11 @@ function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, cours
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const [genderFilter, setGenderFilter] = useState("all"); // all | ladies | gents
 
-  const alphaSorted = [...roster].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const alphaSorted = [...roster]
+    .filter((m) => genderFilter === "all" || (genderFilter === "ladies" ? m.isLady : !m.isLady))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 
   const doImport = () => {
     const parsed = parsePastedPlayers(pasteText, course);
@@ -4146,6 +4174,26 @@ function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, cours
           Tap <Plus size={11} style={{ verticalAlign: "middle" }} /> to add someone straight into <strong>{roundLabel}</strong>'s draw.
         </div>
 
+        <div style={{ display: "flex", gap: 6, margin: "10px 0" }}>
+          {[
+            { key: "all", label: "All" },
+            { key: "ladies", label: "Ladies" },
+            { key: "gents", label: "Gents" },
+          ].map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setGenderFilter(opt.key)}
+              style={{
+                flex: 1, padding: "7px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+                background: genderFilter === opt.key ? headerColor : "transparent",
+                color: genderFilter === opt.key ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12,
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {alphaSorted.map((m) => (
           <div
             key={m.id}
@@ -4174,6 +4222,19 @@ function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, cours
                 <option key={t.id} value={t.label}>{t.label}</option>
               ))}
             </select>
+            <button
+              onClick={() => onUpdate(m.id, { isLady: !m.isLady })}
+              title={m.isLady ? "Marked as a lady — tap to unmark" : "Tap to mark as a lady"}
+              style={{
+                width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+                border: `1px solid ${m.isLady ? accentColor : "#D8D4C0"}`,
+                background: m.isLady ? accentColor : "transparent",
+                color: m.isLady ? "#FFFFFF" : "#9B9885",
+                fontWeight: 700, fontSize: 13, lineHeight: "24px", padding: 0,
+              }}
+            >
+              L
+            </button>
             {roundPlayers.some((p) => normalizeName(p.name) === normalizeName(m.name)) ? (
               <span
                 title={`Already in ${roundLabel}`}
@@ -4806,21 +4867,35 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
     (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
   );
 
+  // Flattened to one row per PERSON, not per record — on a Foursomes day a
+  // single player record holds two people (primary + partner), and each
+  // needs their own tee set independently.
+  const teeableePeople = (isFoursomes
+    ? ranked.flatMap((p) => {
+        const list = [];
+        if (p.name) list.push({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee });
+        if (p.partnerName) list.push({ key: `${p.id}:partner`, recordId: p.id, role: "partner", name: p.partnerName, tee: p.partnerTee });
+        return list;
+      })
+    : ranked.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee }))
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
   const chooseBulkTeeTarget = (tee) => {
     setBulkTeeTarget(tee);
-    setSelectedTeeIds(new Set(ranked.filter((p) => p.tee === tee).map((p) => p.id)));
+    setSelectedTeeIds(new Set(teeableePeople.filter((person) => person.tee === tee).map((person) => person.key)));
   };
-  const toggleTeeSelect = (id) => {
+  const toggleTeeSelect = (key) => {
     setSelectedTeeIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
   const applyBulkTee = () => {
-    onBulkSetTee([...selectedTeeIds], bulkTeeTarget);
+    const selections = teeableePeople.filter((person) => selectedTeeIds.has(person.key)).map(({ recordId, role }) => ({ recordId, role }));
+    onBulkSetTee(selections, bulkTeeTarget);
     setTeeSavedMsg(true);
     setTimeout(() => setTeeSavedMsg(false), 1500);
   };
@@ -4863,14 +4938,14 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
           {bulkTeeTarget && (
             <>
               <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
-                {alphaSorted.map((p) => (
+                {teeableePeople.map((person) => (
                   <label
-                    key={p.id}
+                    key={person.key}
                     style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
                   >
-                    <input type="checkbox" checked={selectedTeeIds.has(p.id)} onChange={() => toggleTeeSelect(p.id)} />
-                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{p.name}</span>
-                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{p.tee ? p.tee : "no tee set"}</span>
+                    <input type="checkbox" checked={selectedTeeIds.has(person.key)} onChange={() => toggleTeeSelect(person.key)} />
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{person.tee ? person.tee : "no tee set"}</span>
                   </label>
                 ))}
               </div>
