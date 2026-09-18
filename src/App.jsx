@@ -3477,6 +3477,13 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
 
   return (
     <div>
+      <button
+        onClick={saveDraw}
+        style={{ width: "100%", padding: "11px 0", borderRadius: 10, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14, marginBottom: 12 }}
+      >
+        {savedMsg ? "Saved" : "Save draw"}
+      </button>
+
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Tee time settings
