@@ -52,6 +52,16 @@ function dataUrlToBlobUrl(dataUrl) {
   return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
 
+// iOS's WKWebView (Safari and, especially, an installed PWA's own
+// standalone webview) has a long-standing bug rendering multi-page PDFs
+// inside an <iframe> — it can silently show only the first page with no
+// scroll. iPadOS reports as "MacIntel" but is touch-capable, unlike an
+// actual Mac, so that combination is checked too.
+function isIOSDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 function codeFromUrl() {
   try {
     return sanitizeCode(new URLSearchParams(window.location.search).get("code"));
@@ -309,28 +319,34 @@ function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
 // looked up against the current roster + course each time this renders —
 // meaning it's always correct for whichever course this day is set to,
 // with no separate step to keep it in sync.
-function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes) {
+function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes, opts) {
   if (!names || names.length === 0) return "";
+  const { showIndex = true, showCH = true, showTee = true } = opts || {};
   // Each person's own raw handicap index, right after their name — lets a
   // player instantly spot-check that what's on file for them is correct.
   // For Singles specifically, also show their playing handicap for this
   // course (e.g. "3.3/6") — for Foursomes the combined figure after the
   // pair covers that instead, so just the raw index is shown per person.
+  // showIndex/showCH independently control the index and the course-
+  // handicap half of that, e.g. for a quicker admin-only view.
   const withIndex = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
     const idx = p && p.index !== "" && p.index != null ? p.index : null;
-    if (idx === null) return n;
+    const idxPart = showIndex && idx !== null ? idx : null;
     if (!isFoursomes) {
-      const ph = individualPH(course, p, allowancePct);
-      return ph !== null ? `${n} (${idx}/${ph})` : `${n} (${idx})`;
+      const ph = showCH ? individualPH(course, p, allowancePct) : null;
+      if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph})`;
+      if (idxPart !== null) return `${n} (${idxPart})`;
+      if (ph !== null) return `${n} (${ph})`;
+      return n;
     }
-    return `${n} (${idx})`;
+    return idxPart !== null ? `${n} (${idxPart})` : n;
   };
 
   if (names.length === 4) {
     if (isFoursomes) {
-      const phA = pairPH(course, rosterPlayers, allowancePct, names[0], names[1]);
-      const phB = pairPH(course, rosterPlayers, allowancePct, names[2], names[3]);
+      const phA = showCH ? pairPH(course, rosterPlayers, allowancePct, names[0], names[1]) : null;
+      const phB = showCH ? pairPH(course, rosterPlayers, allowancePct, names[2], names[3]) : null;
       const pairAStr = `${withIndex(names[0])} & ${withIndex(names[1])}${phA !== null ? ` (${phA})` : ""}`;
       const pairBStr = `${withIndex(names[2])} & ${withIndex(names[3])}${phB !== null ? ` (${phB})` : ""}`;
       return `${pairAStr} v ${pairBStr}`;
@@ -346,26 +362,31 @@ function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, i
 // which doesn't fit a phone screen width. Singles gets one line per
 // player; Foursomes gets one line per pair (still showing their combined
 // figure, since that's what's actually meaningful for a pair).
-function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursomes) {
+function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursomes, opts) {
   if (!names || names.length === 0) return [];
+  const { showIndex = true, showCH = true, showTee = true, showComp = true } = opts || {};
   const withIndex = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
     const idx = p && p.index !== "" && p.index != null ? p.index : null;
-    if (idx === null) return n;
+    const idxPart = showIndex && idx !== null ? idx : null;
     if (!isFoursomes) {
-      const ph = individualPH(course, p, allowancePct);
-      return ph !== null ? `${n} (${idx}/${ph})` : `${n} (${idx})`;
+      const ph = showCH ? individualPH(course, p, allowancePct) : null;
+      if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph})`;
+      if (idxPart !== null) return `${n} (${idxPart})`;
+      if (ph !== null) return `${n} (${ph})`;
+      return n;
     }
-    return `${n} (${idx})`;
+    return idxPart !== null ? `${n} (${idxPart})` : n;
   };
 
   // Tee and competition abbreviation, appended onto the same line — e.g.
-  // "Will Bailey (3.3/6) – Club – PWC".
+  // "Will Bailey (3.3/6) – Club – PWC". showTee/showComp independently
+  // control each half.
   const detailsFor = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
     const parts = [];
-    if (p && p.tee) parts.push(p.tee);
-    if (p && p.competition) parts.push(p.competition);
+    if (showTee && p && p.tee) parts.push(p.tee);
+    if (showComp && p && p.competition) parts.push(p.competition);
     return parts.join(" · ");
   };
   const withDetails = (n) => {
@@ -374,8 +395,8 @@ function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursome
   };
 
   if (names.length === 4 && isFoursomes) {
-    const phA = pairPH(course, rosterPlayers, allowancePct, names[0], names[1]);
-    const phB = pairPH(course, rosterPlayers, allowancePct, names[2], names[3]);
+    const phA = showCH ? pairPH(course, rosterPlayers, allowancePct, names[0], names[1]) : null;
+    const phB = showCH ? pairPH(course, rosterPlayers, allowancePct, names[2], names[3]) : null;
     // If both partners share the same tee/competition, show it once rather
     // than repeating it — otherwise show each partner's own.
     const detailsA = [...new Set([detailsFor(names[0]), detailsFor(names[1])])].filter(Boolean).join(" / ");
@@ -407,6 +428,10 @@ function emptyRound(label, course) {
     drawStartTime: "09:00",
     drawInterval: 8,
     drawNote: "", // short note to players, shown at the top of the Draw screen and printed on scorecard labels
+    publicShowIndex: true, // what the PUBLIC Draw tab shows — separate from the admin-only preview switches
+    publicShowCH: true,
+    publicShowTee: true,
+    publicShowComp: true,
   };
 }
 
@@ -436,6 +461,10 @@ function sanitizeRound(r, fallbackLabel) {
     drawStartTime: typeof r.drawStartTime === "string" && r.drawStartTime ? r.drawStartTime : "09:00",
     drawInterval: typeof r.drawInterval === "number" && r.drawInterval > 0 ? r.drawInterval : 8,
     drawNote: typeof r.drawNote === "string" ? r.drawNote : "",
+    publicShowIndex: r.publicShowIndex === false ? false : true,
+    publicShowCH: r.publicShowCH === false ? false : true,
+    publicShowTee: r.publicShowTee === false ? false : true,
+    publicShowComp: r.publicShowComp === false ? false : true,
   };
 }
 
@@ -1611,6 +1640,8 @@ function AppInner() {
 
   const updateDrawNote = (note) => updateRound({ drawNote: note });
 
+  const updatePublicVis = (patch) => updateRound(patch);
+
   // ---- Match Play: simple pairings with a free-text final result (e.g.
   // "3&2"), rather than hole-by-hole scoring.
   const addMatch = () => {
@@ -1664,6 +1695,26 @@ function AppInner() {
   const openDocument = (doc) => {
     const code = eventCodeRef.current;
     if (!code) return;
+    // On iOS, skip the in-app iframe viewer entirely — it can silently
+    // truncate a multi-page PDF to just the first page. Handing the file
+    // to iOS's own PDF viewer instead is fully reliable. The window has
+    // to be opened synchronously, right on the tap, or Safari's popup
+    // blocker kills it once the fetch below finishes asynchronously.
+    if (isIOSDevice()) {
+      const newWindow = window.open("", "_blank");
+      (async () => {
+        try {
+          const res = await window.storage.get(docStorageKey(code, doc.id), true);
+          const blobUrl = dataUrlToBlobUrl(res.value);
+          if (newWindow) newWindow.location.href = blobUrl;
+          else setViewingDoc({ name: doc.name, blobUrl, loading: false }); // popup was blocked — fall back to the in-app viewer rather than fail silently
+        } catch {
+          if (newWindow) newWindow.close();
+          setViewingDoc({ name: doc.name, blobUrl: null, loading: false, error: true });
+        }
+      })();
+      return;
+    }
     setViewingDoc({ name: doc.name, blobUrl: null, loading: true });
     (async () => {
       try {
@@ -1919,7 +1970,7 @@ function AppInner() {
         // Public, like the leaderboard — no PIN needed just to see the draw.
         isMatchPlay
           ? <MatchResultsView matches={matches} players={players} course={course} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} />
-          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
+          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} publicShowIndex={activeRound.publicShowIndex} publicShowCH={activeRound.publicShowCH} publicShowTee={activeRound.publicShowTee} publicShowComp={activeRound.publicShowComp} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -1976,6 +2027,11 @@ function AppInner() {
           societyRoster={societyRoster}
           onAddFromRoster={addSocietyMembersToRound}
           onBulkSetTee={bulkSetTee}
+          publicShowIndex={activeRound.publicShowIndex}
+          publicShowCH={activeRound.publicShowCH}
+          publicShowTee={activeRound.publicShowTee}
+          publicShowComp={activeRound.publicShowComp}
+          onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
           course={course}
@@ -2621,7 +2677,7 @@ function MatchResultsView({ matches, players, course, drawNote, headerColor, acc
   );
 }
 
-function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes }) {
+function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes, publicShowIndex, publicShowCH, publicShowTee, publicShowComp }) {
   const [viewMode, setViewMode] = useState("times"); // times | individual
   const [filter, setFilter] = useState("");
 
@@ -2726,7 +2782,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
             </div>
             <div style={{ fontSize: 14, flex: 1 }}>
               {entry.players && entry.players.length > 0
-                ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes).map((line, i) => (
+                ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex: publicShowIndex, showCH: publicShowCH, showTee: publicShowTee, showComp: publicShowComp }).map((line, i) => (
                     <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
                   ))
                 : entry.group || "—"}
@@ -2744,7 +2800,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
               <tr style={{ background: `${headerColor}12` }}>
                 <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Player</th>
                 <th className="mono" style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>Tee Time</th>
-                <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Tee</th>
+                {publicShowTee && <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Tee</th>}
                 <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>Other Players</th>
               </tr>
             </thead>
@@ -2753,7 +2809,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
                 <tr key={r.name} style={{ borderTop: "1px solid #EFEDE0" }}>
                   <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{r.name}</td>
                   <td className="mono" style={{ padding: "9px 10px", fontSize: 12.5, whiteSpace: "nowrap" }}>{r.time}</td>
-                  <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.tee}</td>
+                  {publicShowTee && <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.tee}</td>}
                   <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.others.join(" + ") || "—"}</td>
                 </tr>
               ))}
@@ -2765,12 +2821,19 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const csvFileInputRef = useRef(null);
+  // Admin-only visibility switches for the draw-building/preview displays
+  // (never affects what players see on the public draw screen).
+  const [showIndex, setShowIndex] = useState(true);
+  const [showCH, setShowCH] = useState(true);
+  const [showTee, setShowTee] = useState(true);
+  const [showComp, setShowComp] = useState(true);
+  const visOpts = { showIndex, showCH, showTee, showComp };
 
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
@@ -3015,6 +3078,58 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
         </div>
       </div>
 
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+          Show in draw preview (admin only)
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[
+            { key: "index", label: "Handicap index", value: showIndex, set: setShowIndex },
+            { key: "ch", label: "Course handicap", value: showCH, set: setShowCH },
+            { key: "tee", label: "Tee", value: showTee, set: setShowTee },
+            { key: "comp", label: "Competition", value: showComp, set: setShowComp },
+          ].map((sw) => (
+            <button
+              key={sw.key}
+              onClick={() => sw.set((v) => !v)}
+              style={{
+                flex: 1, padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? headerColor : "#D8D4C0"}`,
+                background: sw.value ? headerColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
+                fontWeight: 600, fontSize: 11.5,
+              }}
+            >
+              {sw.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${accentColor}`, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
+          Show on public draw tab (what players see)
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[
+            { key: "index", label: "Handicap index", value: publicShowIndex, field: "publicShowIndex" },
+            { key: "ch", label: "Course handicap", value: publicShowCH, field: "publicShowCH" },
+            { key: "tee", label: "Tee", value: publicShowTee, field: "publicShowTee" },
+            { key: "comp", label: "Competition", value: publicShowComp, field: "publicShowComp" },
+          ].map((sw) => (
+            <button
+              key={sw.key}
+              onClick={() => onUpdatePublicVis({ [sw.field]: !sw.value })}
+              style={{
+                flex: 1, padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
+                background: sw.value ? accentColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
+                fontWeight: 600, fontSize: 11.5,
+              }}
+            >
+              {sw.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
         <button
           onClick={() => setTab("build")}
@@ -3039,7 +3154,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} visOpts={visOpts} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -3106,7 +3221,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                   <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56, paddingTop: 1 }}>{entry.time}</div>
                   <div style={{ flex: 1, fontSize: 12.5 }}>
                     {entry.players && entry.players.length > 0
-                      ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes").map((line, i) => (
+                      ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes", visOpts).map((line, i) => (
                           <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
                         ))
                       : entry.group || "—"}
@@ -3147,7 +3262,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, visOpts }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -3718,7 +3833,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           </div>
           {row.slots.some(Boolean) && (
             <div className="mono" style={{ fontSize: 10.5, color: "#8A8774", marginTop: 6 }}>
-              {formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes)}
+              {formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts)}
             </div>
           )}
         </div>
