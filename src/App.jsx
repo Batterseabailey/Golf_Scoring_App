@@ -109,8 +109,8 @@ function allowedHandicap(rawCH, allowancePct) {
 function combinedHandicap(course, player, allowancePct) {
   const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
   const rawB = playingHandicap(course, Number(player.partnerIndex) || 0, player.partnerTee);
-  const allowedA = allowedHandicap(rawA, allowancePct);
-  const allowedB = allowedHandicap(rawB, allowancePct);
+  const allowedA = allowedHandicap(rawA, allowancePct) + (Number(player.handicapAdjustment) || 0);
+  const allowedB = allowedHandicap(rawB, allowancePct) + (Number(player.partnerHandicapAdjustment) || 0);
   return Math.floor((allowedA + allowedB) / 2 + 0.5);
 }
 
@@ -134,7 +134,7 @@ function holePoints(course, gross, holeIdx, ph) {
 function totals(course, player, allowancePct = 100, isFoursomes = false) {
   const ph = isFoursomes
     ? combinedHandicap(course, player, allowancePct)
-    : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct);
+    : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct) + (Number(player.handicapAdjustment) || 0);
   let pts = 0, thru = 0, netTotal = 0, parSoFar = 0;
   const scores = Array.isArray(player.scores) ? player.scores : Array(18).fill("");
   scores.forEach((g, i) => {
@@ -232,10 +232,10 @@ function findIndividualByName(rosterPlayers, name) {
   if (!target) return null;
   for (const p of rosterPlayers) {
     if (normalizeName(p.name) === target) {
-      return { index: p.index, tee: p.tee, competition: p.competition };
+      return { index: p.index, tee: p.tee, competition: p.competition, handicapAdjustment: p.handicapAdjustment };
     }
     if (normalizeName(p.partnerName) === target) {
-      return { index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition };
+      return { index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition, handicapAdjustment: p.partnerHandicapAdjustment };
     }
   }
   return null;
@@ -303,7 +303,8 @@ function mergedPairsFromDraw(players, draw, course) {
 
 function individualPH(course, rosterPlayer, allowancePct) {
   if (!rosterPlayer) return null;
-  return allowedHandicap(playingHandicap(course, Number(rosterPlayer.index) || 0, rosterPlayer.tee), allowancePct);
+  const base = allowedHandicap(playingHandicap(course, Number(rosterPlayer.index) || 0, rosterPlayer.tee), allowancePct);
+  return base + (Number(rosterPlayer.handicapAdjustment) || 0);
 }
 
 function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
@@ -432,6 +433,7 @@ function emptyRound(label, course) {
     publicShowCH: true,
     publicShowTee: true,
     publicShowComp: true,
+    publicShowStartTee: true,
   };
 }
 
@@ -465,6 +467,7 @@ function sanitizeRound(r, fallbackLabel) {
     publicShowCH: r.publicShowCH === false ? false : true,
     publicShowTee: r.publicShowTee === false ? false : true,
     publicShowComp: r.publicShowComp === false ? false : true,
+    publicShowStartTee: r.publicShowStartTee === false ? false : true,
   };
 }
 
@@ -1844,7 +1847,7 @@ function AppInner() {
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
             }}
           >
-            <span>Day: {activeRound.label}</span>
+            <span>{activeRound.label}</span>
             <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, opacity: 0.9 }}>
               Switch <ChevronRight size={14} style={{ transform: "rotate(90deg)" }} />
             </span>
@@ -1970,7 +1973,7 @@ function AppInner() {
         // Public, like the leaderboard — no PIN needed just to see the draw.
         isMatchPlay
           ? <MatchResultsView matches={matches} players={players} course={course} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} />
-          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} publicShowIndex={activeRound.publicShowIndex} publicShowCH={activeRound.publicShowCH} publicShowTee={activeRound.publicShowTee} publicShowComp={activeRound.publicShowComp} />
+          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} publicShowIndex={activeRound.publicShowIndex} publicShowCH={activeRound.publicShowCH} publicShowTee={activeRound.publicShowTee} publicShowComp={activeRound.publicShowComp} publicShowStartTee={activeRound.publicShowStartTee} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -2031,6 +2034,7 @@ function AppInner() {
           publicShowCH={activeRound.publicShowCH}
           publicShowTee={activeRound.publicShowTee}
           publicShowComp={activeRound.publicShowComp}
+          publicShowStartTee={activeRound.publicShowStartTee}
           onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -2677,7 +2681,7 @@ function MatchResultsView({ matches, players, course, drawNote, headerColor, acc
   );
 }
 
-function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes, publicShowIndex, publicShowCH, publicShowTee, publicShowComp }) {
+function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee }) {
   const [viewMode, setViewMode] = useState("times"); // times | individual
   const [filter, setFilter] = useState("");
 
@@ -2780,6 +2784,11 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
             <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 14, minWidth: 66 }}>
               {entry.time}
             </div>
+            {publicShowStartTee && entry.startTee && (
+              <div style={{ fontWeight: 700, color: accentColor, fontSize: 12, minWidth: 44, paddingTop: 2 }}>
+                {entry.startTee}
+              </div>
+            )}
             <div style={{ fontSize: 14, flex: 1 }}>
               {entry.players && entry.players.length > 0
                 ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex: publicShowIndex, showCH: publicShowCH, showTee: publicShowTee, showComp: publicShowComp }).map((line, i) => (
@@ -2821,7 +2830,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2833,7 +2842,8 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
   const [showCH, setShowCH] = useState(true);
   const [showTee, setShowTee] = useState(true);
   const [showComp, setShowComp] = useState(true);
-  const visOpts = { showIndex, showCH, showTee, showComp };
+  const [showStartTee, setShowStartTee] = useState(true);
+  const visOpts = { showIndex, showCH, showTee, showComp, showStartTee };
 
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
@@ -3082,18 +3092,19 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Show in draw preview (admin only)
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[
             { key: "index", label: "Handicap index", value: showIndex, set: setShowIndex },
             { key: "ch", label: "Course handicap", value: showCH, set: setShowCH },
             { key: "tee", label: "Tee", value: showTee, set: setShowTee },
             { key: "comp", label: "Competition", value: showComp, set: setShowComp },
+            { key: "starttee", label: "Start tee", value: showStartTee, set: setShowStartTee },
           ].map((sw) => (
             <button
               key={sw.key}
               onClick={() => sw.set((v) => !v)}
               style={{
-                flex: 1, padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? headerColor : "#D8D4C0"}`,
+                flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? headerColor : "#D8D4C0"}`,
                 background: sw.value ? headerColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
                 fontWeight: 600, fontSize: 11.5,
               }}
@@ -3108,18 +3119,19 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
           Show on public draw tab (what players see)
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[
             { key: "index", label: "Handicap index", value: publicShowIndex, field: "publicShowIndex" },
             { key: "ch", label: "Course handicap", value: publicShowCH, field: "publicShowCH" },
             { key: "tee", label: "Tee", value: publicShowTee, field: "publicShowTee" },
             { key: "comp", label: "Competition", value: publicShowComp, field: "publicShowComp" },
+            { key: "starttee", label: "Start tee", value: publicShowStartTee, field: "publicShowStartTee" },
           ].map((sw) => (
             <button
               key={sw.key}
               onClick={() => onUpdatePublicVis({ [sw.field]: !sw.value })}
               style={{
-                flex: 1, padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
+                flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
                 background: sw.value ? accentColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
                 fontWeight: 600, fontSize: 11.5,
               }}
@@ -3219,6 +3231,9 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
               {draw.map((entry) => (
                 <div key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
                   <div className="mono" style={{ fontWeight: 700, color: headerColor, fontSize: 12.5, minWidth: 56, paddingTop: 1 }}>{entry.time}</div>
+                  {showStartTee && entry.startTee && (
+                    <div style={{ fontWeight: 700, color: accentColor, fontSize: 11.5, minWidth: 40, paddingTop: 1 }}>{entry.startTee}</div>
+                  )}
                   <div style={{ flex: 1, fontSize: 12.5 }}>
                     {entry.players && entry.players.length > 0
                       ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes", visOpts).map((line, i) => (
@@ -3256,10 +3271,11 @@ function buildRowsFromDraw(draw) {
     return draw.map((entry) => ({
       id: entry.id,
       time: entry.time || "",
+      startTee: entry.startTee || "",
       slots: [0, 1, 2, 3].map((i) => (entry.players && entry.players[i]) || null),
     }));
   }
-  return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
+  return [{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }];
 }
 
 function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, visOpts }) {
@@ -3398,11 +3414,12 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   };
 
   const setTime = (rowId, time) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, time } : r)));
+  const setStartTee = (rowId, startTee) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, startTee } : r)));
 
   const addRow = () =>
     setRows((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), time: addMinutes(startTime, intervalMinutes * prev.length), slots: [null, null, null, null] },
+      { id: crypto.randomUUID(), time: addMinutes(startTime, intervalMinutes * prev.length), startTee: "", slots: [null, null, null, null] },
     ]);
 
   const fillAllTimes = () =>
@@ -3410,13 +3427,12 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
 
   const removeRow = (rowId) => setRows((prev) => prev.filter((r) => r.id !== rowId));
 
-  const clearAllRows = () => setRows([{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }]);
+  const clearAllRows = () => setRows([{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }]);
 
   const saveDraw = () => {
     const finalDraw = rows
-
       .filter((r) => r.time.trim() || r.slots.some(Boolean))
-      .map((r) => ({ id: r.id, time: r.time.trim(), players: r.slots.filter(Boolean) }));
+      .map((r) => ({ id: r.id, time: r.time.trim(), startTee: (r.startTee || "").trim(), players: r.slots.filter(Boolean) }));
     onUpdate(finalDraw);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
@@ -3780,6 +3796,12 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               className="mono"
               style={{ flex: 1, fontSize: 13, fontWeight: 700, padding: "6px 9px", borderRadius: 6, border: "1px solid #D8D4C0" }}
             />
+            <input
+              value={row.startTee}
+              onChange={(e) => setStartTee(row.id, e.target.value)}
+              placeholder="Tee (e.g. 10th)"
+              style={{ width: 96, fontSize: 12.5, fontWeight: 600, padding: "6px 8px", borderRadius: 6, border: "1px solid #D8D4C0" }}
+            />
             <button onClick={() => removeRow(row.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
               <X size={15} />
             </button>
@@ -3985,7 +4007,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
     for (const entry of draw) {
       const names = entry.players || [];
       if (names.some((n) => normalizeName(n) === target)) {
-        return { time: entry.time, others: names.filter((n) => normalizeName(n) !== target) };
+        return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => normalizeName(n) !== target) };
       }
     }
     return null;
@@ -4016,12 +4038,13 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           ph,
           strokeHoles: strokeHolesFor(ph),
           time: info ? info.time : "",
+          startTee: info ? info.startTee : "",
           partners: others,
           competitionName: competitionNameFor(p.competition),
         };
       }
       const rawPh = playingHandicap(course, Number(p.index) || 0, p.tee);
-      const ph = allowedHandicap(rawPh, handicapAllowance);
+      const ph = allowedHandicap(rawPh, handicapAllowance) + (Number(p.handicapAdjustment) || 0);
       const info = drawInfoFor(p.name);
       return {
         id: p.id,
@@ -4030,6 +4053,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         ph,
         strokeHoles: strokeHolesFor(ph),
         time: info ? info.time : "",
+        startTee: info ? info.startTee : "",
         partners: info ? info.others : [],
         competitionName: competitionNameFor(p.competition),
       };
@@ -4065,7 +4089,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           {cards.map((c) => (
             <div className="label-card" key={c.id}>
               <div className="label-meta">
-                {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}
+                {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
               </div>
               {c.competitionName && (
                 <div className="label-competition">{c.competitionName}</div>
@@ -5150,10 +5174,17 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
         >
           <button onClick={() => onSelect(p.id)} style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, textAlign: "left", background: "none", border: "none", padding: 0 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>
-                {isFoursomes
-                  ? `${p.name || "New pair"}${p.partnerName ? ` & ${p.partnerName}` : " — add partner"}`
-                  : p.name || "New player"}
+              <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                <span>
+                  {isFoursomes
+                    ? `${p.name || "New pair"}${p.partnerName ? ` & ${p.partnerName}` : " — add partner"}`
+                    : p.name || "New player"}
+                </span>
+                {(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)) ? (
+                  <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: headerColor, borderRadius: 4, padding: "1px 5px" }}>
+                    adj
+                  </span>
+                ) : null}
               </div>
               <div className="mono" style={{ fontSize: 11, color: teeMismatch(course, p.tee) ? "#B5442E" : "#8A8774" }}>
                 {teeMismatch(course, p.tee)
@@ -5242,12 +5273,46 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
   );
 }
 
+// A small +/- stepper for a one-off, per-day handicap adjustment — e.g. a
+// player who's won too many recent competitions getting shots deducted, or
+// a lady receiving extra shots for that specific event. Deliberately
+// stored on the player's record for THIS round only, never touching their
+// actual index, so it has no effect on any other day or on their Society
+// Roster entry.
+function HandicapAdjuster({ value, onChange, headerColor }) {
+  const v = Number(value) || 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button
+        onClick={() => onChange(v - 1)}
+        style={{ width: 30, height: 30, borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", fontSize: 16, fontWeight: 700, color: "#6B6B5F" }}
+      >
+        −
+      </button>
+      <span className="mono" style={{ minWidth: 34, textAlign: "center", fontSize: 14, fontWeight: 700, color: v !== 0 ? headerColor : "#9B9885" }}>
+        {v > 0 ? `+${v}` : v}
+      </span>
+      <button
+        onClick={() => onChange(v + 1)}
+        style={{ width: 30, height: 30, borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", fontSize: 16, fontWeight: 700, color: "#6B6B5F" }}
+      >
+        +
+      </button>
+      {v !== 0 && (
+        <button onClick={() => onChange(0)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11, fontWeight: 600, padding: "0 4px" }}>
+          Reset
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance }) {
   const { ph, pts, netTotal, relToPar } = totals(course, player, handicapAllowance, isFoursomes);
   const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
-  const allowedA = allowedHandicap(rawA, handicapAllowance);
+  const allowedA = allowedHandicap(rawA, handicapAllowance) + (Number(player.handicapAdjustment) || 0);
   const rawB = isFoursomes ? playingHandicap(course, Number(player.partnerIndex) || 0, player.partnerTee) : null;
-  const allowedB = isFoursomes ? allowedHandicap(rawB, handicapAllowance) : null;
+  const allowedB = isFoursomes ? allowedHandicap(rawB, handicapAllowance) + (Number(player.partnerHandicapAdjustment) || 0) : null;
   const strokeHoles = course.holes.map((h, i) => strokesOnHole(course, ph, i)).map((s, i) => ({ hole: i + 1, strokes: s })).filter((h) => h.strokes > 0);
   const inputRefs = useRef({});
   const timers = useRef({});
@@ -5425,6 +5490,24 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 8 }}>
           Playing HCP {ph} · {isMedal ? `net ${netTotal} (${formatRelToPar(relToPar)})` : `${pts} pts`} so far
         </div>
+
+        {isFoursomes ? (
+          <div style={{ display: "flex", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>{player.name || "Player A"} — adj. for this comp</div>
+              <HandicapAdjuster value={player.handicapAdjustment} onChange={(v) => onUpdate({ handicapAdjustment: v })} headerColor={headerColor} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>{player.partnerName || "Player B"} — adj. for this comp</div>
+              <HandicapAdjuster value={player.partnerHandicapAdjustment} onChange={(v) => onUpdate({ partnerHandicapAdjustment: v })} headerColor={headerColor} />
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
+            <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>Adjustment for this competition only</div>
+            <HandicapAdjuster value={player.handicapAdjustment} onChange={(v) => onUpdate({ handicapAdjustment: v })} headerColor={headerColor} />
+          </div>
+        )}
       </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
