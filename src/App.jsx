@@ -1469,6 +1469,19 @@ function AppInner() {
     });
   };
 
+  // Applies the SAME adjustment to a whole batch of people at once — e.g.
+  // "all ladies get +2 shots for this competition".
+  const bulkSetHandicapAdjustment = (selections, value) => {
+    updateRound({
+      players: players.map((p) => {
+        const setsPrimary = selections.some((s) => s.recordId === p.id && s.role === "primary");
+        const setsPartner = selections.some((s) => s.recordId === p.id && s.role === "partner");
+        if (!setsPrimary && !setsPartner) return p;
+        return { ...p, ...(setsPrimary ? { handicapAdjustment: value } : {}), ...(setsPartner ? { partnerHandicapAdjustment: value } : {}) };
+      }),
+    });
+  };
+
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
   // paste that isn't already in the Competitions list — so a code works
   // the moment it appears, with no requirement to set it up first. Returns
@@ -2061,6 +2074,7 @@ function AppInner() {
           onAddFromRoster={addSocietyMembersToRound}
           onBulkSetTee={bulkSetTee}
           onSetHandicapAdjustment={setHandicapAdjustment}
+          onBulkSetHandicapAdjustment={bulkSetHandicapAdjustment}
           publicShowIndex={activeRound.publicShowIndex}
           publicShowCH={activeRound.publicShowCH}
           publicShowTee={activeRound.publicShowTee}
@@ -2862,7 +2876,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -3198,7 +3212,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} visOpts={visOpts} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} onBulkSetHandicapAdjustment={onBulkSetHandicapAdjustment} visOpts={visOpts} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -3310,7 +3324,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, visOpts }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, visOpts }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -3324,7 +3338,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [bulkTeeTarget, setBulkTeeTarget] = useState("");
   const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
-  const [adjustKey, setAdjustKey] = useState(""); // which person's handicap adjustment is being edited
+  const [selectedAdjustKeys, setSelectedAdjustKeys] = useState(new Set()); // which people are ticked
+  const [adjustBulkValue, setAdjustBulkValue] = useState(0); // value to apply to all ticked
+  const [adjustSavedMsg, setAdjustSavedMsg] = useState(false);
   const [adjustGenderFilter, setAdjustGenderFilter] = useState("all"); // all | ladies | gents
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
@@ -3368,10 +3384,6 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     : players.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee }))
   ).sort((a, b) => a.name.localeCompare(b.name));
 
-  const adjustPerson = teeableePeople.find((p) => p.key === adjustKey) || null;
-  const adjustRecord = adjustPerson ? players.find((p) => p.id === adjustPerson.recordId) : null;
-  const adjustCurrentValue = adjustRecord ? (adjustPerson.role === "partner" ? adjustRecord.partnerHandicapAdjustment : adjustRecord.handicapAdjustment) : 0;
-
   // isLady lives on the Society Roster, not the day's own player record,
   // so it's looked up by name here rather than carried on teeableePeople.
   const isLadyByName = (name) => {
@@ -3382,6 +3394,21 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const adjustablePeople = teeableePeople.filter(
     (person) => adjustGenderFilter === "all" || (adjustGenderFilter === "ladies" ? isLadyByName(person.name) : !isLadyByName(person.name))
   );
+  const toggleAdjustSelect = (key) => {
+    setSelectedAdjustKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const selectAllAdjustable = () => setSelectedAdjustKeys(new Set(adjustablePeople.map((p) => p.key)));
+  const applyBulkAdjustment = () => {
+    const selections = adjustablePeople.filter((p) => selectedAdjustKeys.has(p.key)).map(({ recordId, role }) => ({ recordId, role }));
+    onBulkSetHandicapAdjustment(selections, adjustBulkValue);
+    setAdjustSavedMsg(true);
+    setTimeout(() => setAdjustSavedMsg(false), 1500);
+  };
 
   const chooseBulkTeeTarget = (tee) => {
     setBulkTeeTarget(tee);
@@ -3827,7 +3854,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             ].map((opt) => (
               <button
                 key={opt.key}
-                onClick={() => { setAdjustGenderFilter(opt.key); setAdjustKey(""); }}
+                onClick={() => setAdjustGenderFilter(opt.key)}
                 style={{
                   flex: 1, padding: "6px 0", borderRadius: 6, border: `1px solid ${headerColor}`,
                   background: adjustGenderFilter === opt.key ? headerColor : "transparent",
@@ -3838,22 +3865,33 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               </button>
             ))}
           </div>
-          <select
-            value={adjustKey}
-            onChange={(e) => setAdjustKey(e.target.value)}
-            style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
+          <button
+            onClick={selectAllAdjustable}
+            style={{ width: "100%", padding: "7px 0", borderRadius: 6, border: `1px dashed ${headerColor}`, background: "transparent", color: headerColor, fontWeight: 600, fontSize: 11.5, marginBottom: 8 }}
           >
-            <option value="">Choose a player…</option>
+            Select all {adjustGenderFilter === "all" ? "" : adjustGenderFilter} ({adjustablePeople.length})
+          </button>
+          <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
             {adjustablePeople.map((person) => (
-              <option key={person.key} value={person.key}>{person.name}</option>
+              <label
+                key={person.key}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
+              >
+                <input type="checkbox" checked={selectedAdjustKeys.has(person.key)} onChange={() => toggleAdjustSelect(person.key)} />
+                <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
+              </label>
             ))}
-          </select>
-          {adjustPerson && (
-            <HandicapAdjuster
-              value={adjustCurrentValue}
-              onChange={(v) => onSetHandicapAdjustment(adjustPerson.recordId, adjustPerson.role, v)}
-              headerColor={headerColor}
-            />
+          </div>
+          {selectedAdjustKeys.size > 0 && (
+            <>
+              <HandicapAdjuster value={adjustBulkValue} onChange={setAdjustBulkValue} headerColor={headerColor} />
+              <button
+                onClick={applyBulkAdjustment}
+                style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13, marginTop: 8 }}
+              >
+                {adjustSavedMsg ? "Saved" : `Apply to ${selectedAdjustKeys.size} player${selectedAdjustKeys.size === 1 ? "" : "s"}`}
+              </button>
+            </>
           )}
         </div>
       )}
