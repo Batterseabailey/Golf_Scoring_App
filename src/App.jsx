@@ -388,9 +388,10 @@ function emptyRound(label, course) {
     course: course || DEFAULT_COURSE,
     players: [],
     draw: [],
+    matches: [], // Match Play only — [{ id, playerA, playerB, result }]
     localRules: "",
     startingHole: "1st",
-    format: "individual", // individual | foursomes
+    format: "individual", // individual | foursomes | matchplay
     scoring: "stableford", // stableford | medal
     handicapAllowance: 100, // percentage of course handicap allowed
     drawStartTime: "09:00",
@@ -407,9 +408,19 @@ function sanitizeRound(r, fallbackLabel) {
     course: isValidCourse(r.course) ? r.course : DEFAULT_COURSE,
     players: Array.isArray(r.players) ? r.players : [],
     draw: Array.isArray(r.draw) ? r.draw : [],
+    matches: Array.isArray(r.matches)
+      ? r.matches.filter((m) => m && typeof m === "object").map((m) => ({
+          id: typeof m.id === "string" && m.id ? m.id : crypto.randomUUID(),
+          playerA: typeof m.playerA === "string" ? m.playerA : "",
+          partnerA: typeof m.partnerA === "string" ? m.partnerA : "", // optional — a second player makes this side's half of a Foursomes match
+          playerB: typeof m.playerB === "string" ? m.playerB : "",
+          partnerB: typeof m.partnerB === "string" ? m.partnerB : "",
+          result: typeof m.result === "string" ? m.result : "",
+        }))
+      : [],
     localRules: typeof r.localRules === "string" ? r.localRules : "",
     startingHole: typeof r.startingHole === "string" && r.startingHole ? r.startingHole : "1st",
-    format: r.format === "foursomes" ? "foursomes" : "individual",
+    format: r.format === "foursomes" ? "foursomes" : r.format === "matchplay" ? "matchplay" : "individual",
     scoring: r.scoring === "medal" ? "medal" : "stableford",
     handicapAllowance: typeof r.handicapAllowance === "number" && r.handicapAllowance > 0 ? r.handicapAllowance : 100,
     drawStartTime: typeof r.drawStartTime === "string" && r.drawStartTime ? r.drawStartTime : "09:00",
@@ -914,8 +925,9 @@ function AppInner() {
   const hasSeededActiveRoundRef = useRef(false);
   const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
-  const { course, players, draw, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
+  const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
   const isFoursomes = format === "foursomes";
+  const isMatchPlay = format === "matchplay";
   const isMedal = scoring === "medal";
   // The Leaderboard has no memory of its own — it's always exactly
   // whichever format the currently-selected day actually is, computed
@@ -938,6 +950,7 @@ function AppInner() {
   const [showPrintLabels, setShowPrintLabels] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
   const [showSocietyRoster, setShowSocietyRoster] = useState(false);
+  const [showMatchesSetup, setShowMatchesSetup] = useState(false);
   const [viewingDoc, setViewingDoc] = useState(null); // { name, blobUrl, loading, error } | null
   const [library, setLibrary] = useState([]);
   // Unlocking Admin is per-browser-tab, not persisted — anyone who
@@ -1010,6 +1023,7 @@ function AppInner() {
     setShowCourseSetup(false);
     setShowEnterScores(false);
     setShowSocietyRoster(false);
+    setShowMatchesSetup(false);
     setScorerUnlocked(false);
     setMode("menu");
   }, [eventCode]);
@@ -1162,15 +1176,22 @@ function AppInner() {
 
   // Same idea, for a sub-competition abbreviation straight from the draw
   // paste — runs before pairing, same as tees, for the same reason.
-  const mergeCompetitionsIntoPlayers = (currentPlayers, compPairs) => {
-    if (!compPairs || compPairs.length === 0) return currentPlayers;
-    let next = [...currentPlayers];
-    compPairs.forEach(({ name, abbreviation }) => {
-      const target = normalizeName(name);
-      const idx = next.findIndex((p) => normalizeName(p.name) === target);
-      if (idx !== -1) next[idx] = { ...next[idx], competition: abbreviation };
+  // For every name that appears anywhere in THIS paste, their competition
+  // is set to exactly whatever this paste says — including being cleared
+  // if this paste doesn't mention a competition for them at all. A day's
+  // own paste is always the source of truth for that day's tagging, so a
+  // tag from an earlier paste (or a different day entirely) never lingers
+  // just because this particular re-paste didn't repeat it. Anyone NOT
+  // part of this paste at all (a different, unrelated player already on
+  // the roster) is left completely untouched.
+  const mergeCompetitionsIntoPlayers = (currentPlayers, compPairs, namesInThisPaste) => {
+    const compMap = new Map((compPairs || []).map(({ name, abbreviation }) => [normalizeName(name), abbreviation]));
+    const pasteSet = new Set((namesInThisPaste || []).map(normalizeName));
+    return currentPlayers.map((p) => {
+      const target = normalizeName(p.name);
+      if (!pasteSet.has(target)) return p;
+      return { ...p, competition: compMap.get(target) || "" };
     });
-    return next;
   };
 
   const importPlayers = (newPlayers) => {
@@ -1344,11 +1365,25 @@ function AppInner() {
   const addSocietyMembersToRound = (memberIds) => {
     const toAdd = societyRoster.filter((m) => memberIds.includes(m.id));
     const existingNames = new Set(players.map((p) => normalizeName(p.name)));
+    // Deliberately does NOT carry over the member's stored tee — that tee
+    // is very likely from whichever course they were last added on, which
+    // may be a completely different venue with completely different tee
+    // names. Left blank here (rather than silently guessing a default),
+    // it'll show up flagged in the roster so it gets set correctly for
+    // THIS day's actual course — see the bulk "Set tee" tool for doing
+    // that quickly for everyone at once.
     const newPlayers = toAdd
       .filter((m) => !existingNames.has(normalizeName(m.name)))
-      .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: m.tee || course.tees[0]?.label || "", scores: Array(18).fill("") }));
+      .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: "", scores: Array(18).fill("") }));
     if (newPlayers.length > 0) updateRound({ players: [...players, ...newPlayers] });
     return newPlayers.length;
+  };
+
+  // Sets the same tee for a whole batch of players on THIS day at once —
+  // e.g. for quickly fixing everyone up after dragging them in fresh from
+  // the Society Roster, which deliberately never carries a tee over.
+  const bulkSetTee = (playerIds, tee) => {
+    updateRound({ players: players.map((p) => (playerIds.includes(p.id) ? { ...p, tee } : p)) });
   };
 
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
@@ -1492,7 +1527,8 @@ function AppInner() {
     // could work from stale data and silently undo an earlier one.
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
-    const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs);
+    const namesInThisPaste = newDraw.flatMap((entry) => entry.players || []);
+    const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs, namesInThisPaste);
     const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
     // On a Singles day, strip any partner fields that might be lingering
     // on a player's record — e.g. leftover from a day that was briefly,
@@ -1553,6 +1589,20 @@ function AppInner() {
   const updateDrawInterval = (mins) => updateRound({ drawInterval: mins });
 
   const updateDrawNote = (note) => updateRound({ drawNote: note });
+
+  // ---- Match Play: simple pairings with a free-text final result (e.g.
+  // "3&2"), rather than hole-by-hole scoring.
+  const addMatch = () => {
+    updateRound({ matches: [...matches, { id: crypto.randomUUID(), playerA: "", partnerA: "", playerB: "", partnerB: "", result: "" }] });
+  };
+
+  const updateMatch = (id, patch) => {
+    updateRound({ matches: matches.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+  };
+
+  const removeMatch = (id) => {
+    updateRound({ matches: matches.filter((m) => m.id !== id) });
+  };
 
   const uploadDocument = async (file) => {
     const code = eventCodeRef.current;
@@ -1846,7 +1896,9 @@ function AppInner() {
         <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
-        <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
+        isMatchPlay
+          ? <MatchResultsView matches={matches} players={players} course={course} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} />
+          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -1880,6 +1932,17 @@ function AppInner() {
           isMedal={isMedal}
           handicapAllowance={handicapAllowance}
         />
+      ) : showMatchesSetup ? (
+        <MatchesSetup
+          matches={matches}
+          players={players}
+          onAdd={addMatch}
+          onUpdate={updateMatch}
+          onRemove={removeMatch}
+          onBack={() => setShowMatchesSetup(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showDrawSetup ? (
         <DrawSetup
           draw={draw}
@@ -1891,6 +1954,7 @@ function AppInner() {
           roundKey={activeRoundId}
           societyRoster={societyRoster}
           onAddFromRoster={addSocietyMembersToRound}
+          onBulkSetTee={bulkSetTee}
           headerColor={headerColor}
           accentColor={accentColor}
           course={course}
@@ -1980,6 +2044,7 @@ function AppInner() {
           activeRoundId={activeRoundId}
           onCopyPlayers={copyPlayersFromRound}
           isFoursomes={isFoursomes}
+          onBulkSetTee={bulkSetTee}
         />
       ) : showSocietyRoster ? (
         <SocietyRosterSetup
@@ -2025,9 +2090,11 @@ function AppInner() {
       ) : (
         <ScorerList
           course={course}
+          isMatchPlay={format === "matchplay"}
           onOpenEnterScores={() => setShowEnterScores(true)}
           onOpenCourseSetup={() => setShowCourseSetup(true)}
           onOpenDrawSetup={() => setShowDrawSetup(true)}
+          onOpenMatchesSetup={() => setShowMatchesSetup(true)}
           onOpenLocalRulesSetup={() => setShowLocalRulesSetup(true)}
           onOpenDocumentsSetup={() => setShowDocumentsSetup(true)}
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
@@ -2035,7 +2102,7 @@ function AppInner() {
           onOpenPrintLabels={() => setShowPrintLabels(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -2471,6 +2538,68 @@ function HoleByHole({ course, player, headerColor, isMedal }) {
   );
 }
 
+// Public view of a Match Play day's results — each match as its own card,
+// showing both players (with their handicap index) and the result once
+// it's been entered, or "Not yet played" until then.
+function MatchResultsView({ matches, players, course, drawNote, headerColor, accentColor }) {
+  // Each player's own course handicap from their tee — never a combined
+  // or allowance-adjusted figure. Working out the actual match allowance
+  // between the two sides is left to the players themselves.
+  const nameWithCH = (name) => {
+    if (!name) return "";
+    const p = findIndividualByName(players, name);
+    if (!p || p.index === "" || p.index == null) return name;
+    const ch = playingHandicap(course, Number(p.index) || 0, p.tee);
+    return `${name} (${ch})`;
+  };
+  const sideLabel = (name, partner) => {
+    if (!name && !partner) return "TBC";
+    const parts = [nameWithCH(name)];
+    if (partner) parts.push(nameWithCH(partner));
+    return parts.filter(Boolean).join(" & ");
+  };
+  const realMatches = matches.filter((m) => m.playerA || m.playerB);
+
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      {drawNote && drawNote.trim() && (
+        <div
+          style={{
+            background: `${accentColor}14`, border: `1px solid ${accentColor}`, borderRadius: 8,
+            padding: "10px 12px", marginBottom: 10, fontSize: 13, fontWeight: 600, color: "#1B1B1B",
+          }}
+        >
+          {drawNote}
+        </div>
+      )}
+      {realMatches.length === 0 ? (
+        <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
+          <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
+          <div style={{ fontSize: 15 }}>The matches haven't been set up yet.</div>
+          <div style={{ fontSize: 12.5, marginTop: 4 }}>Check back once matches have been added.</div>
+        </div>
+      ) : (
+        realMatches.map((m) => (
+          <div
+            key={m.id}
+            style={{ background: "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0" }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{sideLabel(m.playerA, m.partnerA)}</div>
+            <div style={{ fontSize: 12, color: "#8A8774", fontWeight: 700, margin: "2px 0" }}>v</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{sideLabel(m.playerB, m.partnerB)}</div>
+            <div
+              className="mono"
+              style={{ fontSize: 13, fontWeight: 700, color: m.result ? headerColor : "#9B9885", marginTop: 6 }}
+            >
+              {m.result || "Not yet played"}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, course, players, handicapAllowance, isFoursomes }) {
   const [viewMode, setViewMode] = useState("times"); // times | individual
   const [filter, setFilter] = useState("");
@@ -2615,7 +2744,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -2776,42 +2905,64 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           >
             Foursomes
           </button>
+          <button
+            onClick={() => onUpdateFormat("matchplay")}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+              background: format === "matchplay" ? headerColor : "transparent",
+              color: format === "matchplay" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Match Play
+          </button>
         </div>
         {format === "foursomes" && (
           <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
             Each roster entry becomes a pair. Combined handicap = (Player A's + Player B's course handicap) ÷ 2, exact halves rounded up.
           </div>
         )}
-
-        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
-          Scoring
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <button
-            onClick={() => onUpdateScoring("stableford")}
-            style={{
-              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-              background: scoring === "stableford" ? headerColor : "transparent",
-              color: scoring === "stableford" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
-            }}
-          >
-            Stableford
-          </button>
-          <button
-            onClick={() => onUpdateScoring("medal")}
-            style={{
-              flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
-              background: scoring === "medal" ? headerColor : "transparent",
-              color: scoring === "medal" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
-            }}
-          >
-            Medal
-          </button>
-        </div>
-        {scoring === "medal" && (
+        {format === "matchplay" && (
           <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
-            Leaderboard sorts by lowest net score (relative to par), not points.
+            Add players with their handicap and tee (no competition needed) — different players can be on
+            different tees. Set up matches — Singles or Foursomes — and enter each result (e.g. "3&2") in the
+            Matches screen. Each player's own course handicap is shown from their tee; working out the actual
+            match allowance between the two sides is left to the players.
           </div>
+        )}
+
+        {format !== "matchplay" && (
+          <>
+            <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
+              Scoring
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <button
+                onClick={() => onUpdateScoring("stableford")}
+                style={{
+                  flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+                  background: scoring === "stableford" ? headerColor : "transparent",
+                  color: scoring === "stableford" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+                }}
+              >
+                Stableford
+              </button>
+              <button
+                onClick={() => onUpdateScoring("medal")}
+                style={{
+                  flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+                  background: scoring === "medal" ? headerColor : "transparent",
+                  color: scoring === "medal" ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12.5,
+                }}
+              >
+                Medal
+              </button>
+            </div>
+            {scoring === "medal" && (
+              <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
+                Leaderboard sorts by lowest net score (relative to par), not points.
+              </div>
+            )}
+          </>
         )}
 
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
@@ -2867,7 +3018,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -2975,7 +3126,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -2986,6 +3137,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [confirmDeleteName, setConfirmDeleteName] = useState(null);
   const [confirmClearRows, setConfirmClearRows] = useState(false);
+  const [bulkTeeTarget, setBulkTeeTarget] = useState("");
+  const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
+  const [teeSavedMsg, setTeeSavedMsg] = useState(false);
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
   const [selectedRosterIds, setSelectedRosterIds] = useState(new Set());
@@ -3013,6 +3167,24 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const pool = players
     .filter((p) => p.name && !assignedNames.has(p.name))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  const chooseBulkTeeTarget = (tee) => {
+    setBulkTeeTarget(tee);
+    setSelectedTeeIds(new Set(players.filter((p) => p.name && p.tee === tee).map((p) => p.id)));
+  };
+  const toggleTeeSelect = (id) => {
+    setSelectedTeeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const applyBulkTee = () => {
+    onBulkSetTee([...selectedTeeIds], bulkTeeTarget);
+    setTeeSavedMsg(true);
+    setTimeout(() => setTeeSavedMsg(false), 1500);
+  };
 
   // `selected` is now { name, from } — from is null when picked up from
   // the pool, or { rowId, slotIdx } when picked up out of an existing
@@ -3354,6 +3526,48 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           )
         )}
       </div>
+
+      {players.some((p) => p.name) && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Bulk-set tee</div>
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+            Handy right here after dragging people in from the Society Roster, since their tee never carries over
+            automatically. Pick a tee, tick everyone playing off it, apply.
+          </div>
+          <select
+            value={bulkTeeTarget}
+            onChange={(e) => chooseBulkTeeTarget(e.target.value)}
+            style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
+          >
+            <option value="">Choose a tee…</option>
+            {course.tees.map((t) => (
+              <option key={t.id} value={t.label}>{t.label}</option>
+            ))}
+          </select>
+          {bulkTeeTarget && (
+            <>
+              <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
+                {[...players].filter((p) => p.name).sort((a, b) => a.name.localeCompare(b.name)).map((p) => (
+                  <label
+                    key={p.id}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
+                  >
+                    <input type="checkbox" checked={selectedTeeIds.has(p.id)} onChange={() => toggleTeeSelect(p.id)} />
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{p.name}</span>
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{p.tee ? p.tee : "no tee set"}</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={applyBulkTee}
+                style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13 }}
+              >
+                {teeSavedMsg ? "Saved" : `Apply to ${selectedTeeIds.size} player${selectedTeeIds.size === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {rows.length > 1 && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
@@ -3738,6 +3952,99 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
         }
       `}</style>
+    </div>
+  );
+}
+
+function MatchesSetup({ matches, players, onAdd, onUpdate, onRemove, onBack, headerColor, accentColor }) {
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const namedPlayers = players.filter((p) => p.name);
+
+  const sideSelect = (label, value, onChange) => (
+    <select
+      value={value}
+      onChange={onChange}
+      style={{ flex: 1, fontSize: 13, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", minWidth: 0 }}
+    >
+      <option value="">{label}</option>
+      {namedPlayers.map((p) => (
+        <option key={p.id} value={p.name}>{p.name}{p.index ? ` (${p.index}${p.tee ? ` · ${p.tee}` : ""})` : ""}</option>
+      ))}
+    </select>
+  );
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Matches</div>
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
+          Pick each side's player (and, for a Foursomes match, their partner too — leave blank for a Singles
+          match), then type in the final result once it's known (e.g. "3&2", "1 up", "AS" for a halved match).
+          Leave the result blank until the match has been played. Each player's own course handicap is shown from
+          their tee — working out the actual match allowance between them is up to the players.
+        </div>
+
+        {namedPlayers.length < 2 && (
+          <div style={{ fontSize: 12, color: "#9B9885", marginBottom: 12 }}>
+            Add at least two players to this day first — via Enter scores, the Society Roster, or a paste/CSV
+            import — before setting up matches.
+          </div>
+        )}
+
+        {matches.map((m) => (
+          <div key={m.id} style={{ borderTop: "1px solid #EFEDE0", paddingTop: 10, marginTop: 10 }}>
+            <div style={{ fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8A8774", marginBottom: 3 }}>Side A</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              {sideSelect("Player…", m.playerA, (e) => onUpdate(m.id, { playerA: e.target.value }))}
+              {sideSelect("+ Partner (optional)…", m.partnerA, (e) => onUpdate(m.id, { partnerA: e.target.value }))}
+            </div>
+            <div style={{ textAlign: "center", fontSize: 12, color: "#8A8774", fontWeight: 700, marginBottom: 6 }}>v</div>
+            <div style={{ fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8A8774", marginBottom: 3 }}>Side B</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              {sideSelect("Player…", m.playerB, (e) => onUpdate(m.id, { playerB: e.target.value }))}
+              {sideSelect("+ Partner (optional)…", m.partnerB, (e) => onUpdate(m.id, { partnerB: e.target.value }))}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                value={m.result}
+                onChange={(e) => onUpdate(m.id, { result: e.target.value })}
+                placeholder="Result — e.g. 3&2, 1 up, AS"
+                style={{ flex: 1, fontSize: 13, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", fontFamily: "inherit" }}
+              />
+              {confirmRemoveId === m.id ? (
+                <div style={{ display: "flex", gap: 2 }}>
+                  <button onClick={() => { onRemove(m.id); setConfirmRemoveId(null); }} style={{ fontSize: 10.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px" }}>
+                    Yes
+                  </button>
+                  <button onClick={() => setConfirmRemoveId(null)} style={{ fontSize: 10.5, color: "#9B9885", background: "none", border: "none", padding: "4px" }}>
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setConfirmRemoveId(m.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: "4px" }}>
+                  <X size={15} />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <button
+          onClick={onAdd}
+          disabled={namedPlayers.length < 2}
+          style={{
+            width: "100%", padding: "9px 0", borderRadius: 7, border: `1px dashed ${namedPlayers.length < 2 ? "#D8D4C0" : headerColor}`,
+            background: "transparent", color: namedPlayers.length < 2 ? "#D8D4C0" : headerColor, fontWeight: 600, fontSize: 12.5, marginTop: 12,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          }}
+        >
+          <Plus size={13} /> Add match
+        </button>
+      </div>
     </div>
   );
 }
@@ -4334,7 +4641,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, headerColor, accentColor, onLock }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -4384,6 +4691,21 @@ function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSe
         <span style={{ flex: 1, textAlign: "left" }}>Draw / tee times</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
+
+      {isMatchPlay && (
+        <button
+          onClick={onOpenMatchesSetup}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+            borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+            color: headerColor, fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          <Users size={14} />
+          <span style={{ flex: 1, textAlign: "left" }}>Matches</span>
+          <ChevronRight size={15} color="#9B9885" />
+        </button>
+      )}
 
       <button
         onClick={onOpenLocalRulesSetup}
@@ -4460,17 +4782,39 @@ function ScorerList({ course, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSe
 // then refused to scroll any further) — a genuine separate screen, which
 // every other Admin destination already is, sidesteps that class of bug
 // entirely rather than patching around it.
-function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes }) {
+function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [bulkTeeTarget, setBulkTeeTarget] = useState("");
+  const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
 
   // The roster here is for finding/editing a player, not for ranking — sort
   // it alphabetically rather than reusing the score-based leaderboard order.
   const alphaSorted = [...ranked].sort((a, b) =>
     (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
   );
+
+  const chooseBulkTeeTarget = (tee) => {
+    setBulkTeeTarget(tee);
+    setSelectedTeeIds(new Set(ranked.filter((p) => p.tee === tee).map((p) => p.id)));
+  };
+  const toggleTeeSelect = (id) => {
+    setSelectedTeeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const [teeSavedMsg, setTeeSavedMsg] = useState(false);
+  const applyBulkTee = () => {
+    onBulkSetTee([...selectedTeeIds], bulkTeeTarget);
+    setTeeSavedMsg(true);
+    setTimeout(() => setTeeSavedMsg(false), 1500);
+  };
+
   const doImport = () => {
     const newPlayers = parsePastedPlayers(pasteText, course);
     if (newPlayers.length === 0) {
@@ -4488,6 +4832,49 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
         ← Back
       </button>
+
+      {ranked.length > 0 && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Bulk-set tee</div>
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+            Handy after dragging people in fresh from the Society Roster, since their tee never carries over
+            automatically. Pick a tee, tick everyone playing off it, apply.
+          </div>
+          <select
+            value={bulkTeeTarget}
+            onChange={(e) => chooseBulkTeeTarget(e.target.value)}
+            style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
+          >
+            <option value="">Choose a tee…</option>
+            {course.tees.map((t) => (
+              <option key={t.id} value={t.label}>{t.label}</option>
+            ))}
+          </select>
+          {bulkTeeTarget && (
+            <>
+              <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
+                {alphaSorted.map((p) => (
+                  <label
+                    key={p.id}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
+                  >
+                    <input type="checkbox" checked={selectedTeeIds.has(p.id)} onChange={() => toggleTeeSelect(p.id)} />
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{p.name}</span>
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{p.tee ? p.tee : "no tee set"}</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={applyBulkTee}
+                style={{ width: "100%", padding: "9px 0", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13 }}
+              >
+                {teeSavedMsg ? "Saved" : `Apply to ${selectedTeeIds.size} player${selectedTeeIds.size === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginTop: 4, marginBottom: 8 }}>
         Players — tap a name to enter their score
       </div>
