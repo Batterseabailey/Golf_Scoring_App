@@ -3163,6 +3163,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
+  const [rosterGenderFilter, setRosterGenderFilter] = useState("all"); // all | ladies | gents
   const [selectedRosterIds, setSelectedRosterIds] = useState(new Set());
   const [newPlayerName, setNewPlayerName] = useState("");
   const [newPlayerIndex, setNewPlayerIndex] = useState("");
@@ -3501,10 +3502,30 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                 placeholder="Search society roster…"
                 style={{ width: "100%", fontSize: 13, padding: "7px 9px", borderRadius: 6, border: "1px solid #D8D4C0", marginBottom: 8, boxSizing: "border-box" }}
               />
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {[
+                  { key: "all", label: "All" },
+                  { key: "ladies", label: "Ladies" },
+                  { key: "gents", label: "Gents" },
+                ].map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setRosterGenderFilter(opt.key)}
+                    style={{
+                      flex: 1, padding: "6px 0", borderRadius: 6, border: `1px solid ${headerColor}`,
+                      background: rosterGenderFilter === opt.key ? headerColor : "transparent",
+                      color: rosterGenderFilter === opt.key ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 11.5,
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
               <div style={{ maxHeight: 220, overflowY: "auto" }}>
                 {societyRoster
                   .filter((m) => !players.some((p) => normalizeName(p.name) === normalizeName(m.name)))
                   .filter((m) => !rosterSearch.trim() || m.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()))
+                  .filter((m) => rosterGenderFilter === "all" || (rosterGenderFilter === "ladies" ? m.isLady : !m.isLady))
                   .sort((a, b) => a.name.localeCompare(b.name))
                   .map((m) => (
                     <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 2px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}>
@@ -3529,6 +3550,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                     onAddFromRoster([...selectedRosterIds]);
                     setSelectedRosterIds(new Set());
                     setRosterSearch("");
+                    setRosterGenderFilter("all");
                     setShowRosterPicker(false);
                   }}
                   disabled={selectedRosterIds.size === 0}
@@ -3540,7 +3562,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                   Add {selectedRosterIds.size || ""}
                 </button>
                 <button
-                  onClick={() => { setShowRosterPicker(false); setSelectedRosterIds(new Set()); setRosterSearch(""); }}
+                  onClick={() => { setShowRosterPicker(false); setSelectedRosterIds(new Set()); setRosterSearch(""); setRosterGenderFilter("all"); }}
                   style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "transparent", color: "#6B6B5F", fontWeight: 600, fontSize: 12.5 }}
                 >
                   Cancel
