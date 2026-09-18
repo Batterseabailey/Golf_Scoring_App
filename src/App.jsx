@@ -3325,6 +3325,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
   const [adjustKey, setAdjustKey] = useState(""); // which person's handicap adjustment is being edited
+  const [adjustGenderFilter, setAdjustGenderFilter] = useState("all"); // all | ladies | gents
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
   const [rosterGenderFilter, setRosterGenderFilter] = useState("all"); // all | ladies | gents
@@ -3370,6 +3371,17 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const adjustPerson = teeableePeople.find((p) => p.key === adjustKey) || null;
   const adjustRecord = adjustPerson ? players.find((p) => p.id === adjustPerson.recordId) : null;
   const adjustCurrentValue = adjustRecord ? (adjustPerson.role === "partner" ? adjustRecord.partnerHandicapAdjustment : adjustRecord.handicapAdjustment) : 0;
+
+  // isLady lives on the Society Roster, not the day's own player record,
+  // so it's looked up by name here rather than carried on teeableePeople.
+  const isLadyByName = (name) => {
+    const target = normalizeName(name);
+    const m = societyRoster.find((r) => normalizeName(r.name) === target);
+    return m ? !!m.isLady : false;
+  };
+  const adjustablePeople = teeableePeople.filter(
+    (person) => adjustGenderFilter === "all" || (adjustGenderFilter === "ladies" ? isLadyByName(person.name) : !isLadyByName(person.name))
+  );
 
   const chooseBulkTeeTarget = (tee) => {
     setBulkTeeTarget(tee);
@@ -3807,13 +3819,32 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             A one-off shots adjustment for this competition only — e.g. shots deducted for winning too often, or
             extra shots for a lady. Never touches their actual index or any other day.
           </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[
+              { key: "all", label: "All" },
+              { key: "ladies", label: "Ladies" },
+              { key: "gents", label: "Gents" },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => { setAdjustGenderFilter(opt.key); setAdjustKey(""); }}
+                style={{
+                  flex: 1, padding: "6px 0", borderRadius: 6, border: `1px solid ${headerColor}`,
+                  background: adjustGenderFilter === opt.key ? headerColor : "transparent",
+                  color: adjustGenderFilter === opt.key ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 11.5,
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <select
             value={adjustKey}
             onChange={(e) => setAdjustKey(e.target.value)}
             style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
           >
             <option value="">Choose a player…</option>
-            {teeableePeople.map((person) => (
+            {adjustablePeople.map((person) => (
               <option key={person.key} value={person.key}>{person.name}</option>
             ))}
           </select>
