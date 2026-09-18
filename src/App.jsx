@@ -271,7 +271,7 @@ function pairPlayersFromDraw(players, draw, course) {
 // so it works for any round, not just the one currently being viewed.
 function mergedPairsFromDraw(players, draw, course) {
   const freshPairs = pairPlayersFromDraw(players, draw, course);
-  return freshPairs.map((np) => {
+  const merged = freshPairs.map((np) => {
     const existing = players.find(
       (p) => normalizeName(p.name) === normalizeName(np.name) && normalizeName(p.partnerName) === normalizeName(np.partnerName)
     );
@@ -279,6 +279,16 @@ function mergedPairsFromDraw(players, draw, course) {
       ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, scores: existing.scores }
       : np;
   });
+  // Preserve anyone on the roster who isn't part of the draw's groupings
+  // at all yet — still sitting unassigned in the pool, not yet dragged
+  // into a pairing. Without this, saving the draw would silently drop
+  // them from the roster entirely, since this function otherwise only
+  // ever returns pairs actually built from the draw itself.
+  const namesInDraw = new Set(draw.flatMap((entry) => entry.players || []).map(normalizeName));
+  const unassigned = players.filter(
+    (p) => p.name && !namesInDraw.has(normalizeName(p.name)) && !namesInDraw.has(normalizeName(p.partnerName))
+  );
+  return [...merged, ...unassigned];
 }
 
 function individualPH(course, rosterPlayer, allowancePct) {
