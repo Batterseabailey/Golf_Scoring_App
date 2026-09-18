@@ -1349,6 +1349,25 @@ function AppInner() {
 
   const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
+  // A tee's label is just a plain string on each player record (not a
+  // reference to the tee object), so renaming it in Course setup would
+  // otherwise silently orphan everyone already set to the old name —
+  // getTee() would stop finding a match and quietly fall back to
+  // whichever tee is listed first, producing a wrong handicap with no
+  // obvious sign anything's changed. This brings every current player
+  // (and Foursomes partner) on the old label across to the new one.
+  const renameTeeEverywhere = (oldLabel, newLabel) => {
+    if (!oldLabel || !newLabel || oldLabel === newLabel) return;
+    const target = normalizeName(oldLabel);
+    updateRound({
+      players: players.map((p) => ({
+        ...p,
+        ...(normalizeName(p.tee) === target ? { tee: newLabel } : {}),
+        ...(normalizeName(p.partnerTee) === target ? { partnerTee: newLabel } : {}),
+      })),
+    });
+  };
+
   const updateOrgName = (name) => save({ orgName: name });
 
   const updateAccentColor = (color) => save({ accentColor: color });
@@ -1435,6 +1454,17 @@ function AppInner() {
         const setsPartner = selections.some((s) => s.recordId === p.id && s.role === "partner");
         if (!setsPrimary && !setsPartner) return p;
         return { ...p, ...(setsPrimary ? { tee } : {}), ...(setsPartner ? { partnerTee: tee } : {}) };
+      }),
+    });
+  };
+
+  // Sets ONE person's per-day handicap adjustment — addressed the same way
+  // as bulkSetTee, since a Foursomes record holds two people.
+  const setHandicapAdjustment = (recordId, role, value) => {
+    updateRound({
+      players: players.map((p) => {
+        if (p.id !== recordId) return p;
+        return role === "partner" ? { ...p, partnerHandicapAdjustment: value } : { ...p, handicapAdjustment: value };
       }),
     });
   };
@@ -2030,6 +2060,7 @@ function AppInner() {
           societyRoster={societyRoster}
           onAddFromRoster={addSocietyMembersToRound}
           onBulkSetTee={bulkSetTee}
+          onSetHandicapAdjustment={setHandicapAdjustment}
           publicShowIndex={activeRound.publicShowIndex}
           publicShowCH={activeRound.publicShowCH}
           publicShowTee={activeRound.publicShowTee}
@@ -2156,6 +2187,7 @@ function AppInner() {
           onUpdateHandicapPin={updateHandicapPin}
           course={course}
           onUpdate={updateCourse}
+          onRenameTee={renameTeeEverywhere}
           onBack={() => setShowCourseSetup(false)}
           library={library}
           onSaveToLibrary={saveCourseToLibrary}
@@ -2830,7 +2862,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -3166,7 +3198,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} visOpts={visOpts} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} visOpts={visOpts} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -3278,7 +3310,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, visOpts }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, visOpts }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -3292,6 +3324,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [bulkTeeTarget, setBulkTeeTarget] = useState("");
   const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
+  const [adjustKey, setAdjustKey] = useState(""); // which person's handicap adjustment is being edited
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
   const [rosterGenderFilter, setRosterGenderFilter] = useState("all"); // all | ladies | gents
@@ -3333,6 +3366,10 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
       })
     : players.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee }))
   ).sort((a, b) => a.name.localeCompare(b.name));
+
+  const adjustPerson = teeableePeople.find((p) => p.key === adjustKey) || null;
+  const adjustRecord = adjustPerson ? players.find((p) => p.id === adjustPerson.recordId) : null;
+  const adjustCurrentValue = adjustRecord ? (adjustPerson.role === "partner" ? adjustRecord.partnerHandicapAdjustment : adjustRecord.handicapAdjustment) : 0;
 
   const chooseBulkTeeTarget = (tee) => {
     setBulkTeeTarget(tee);
@@ -3753,6 +3790,32 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                 {teeSavedMsg ? "Saved" : `Apply to ${selectedTeeIds.size} player${selectedTeeIds.size === 1 ? "" : "s"}`}
               </button>
             </>
+          )}
+        </div>
+      )}
+      {players.some((p) => p.name) && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Adjust handicap</div>
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+            A one-off shots adjustment for this competition only — e.g. shots deducted for winning too often, or
+            extra shots for a lady. Never touches their actual index or any other day.
+          </div>
+          <select
+            value={adjustKey}
+            onChange={(e) => setAdjustKey(e.target.value)}
+            style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
+          >
+            <option value="">Choose a player…</option>
+            {teeableePeople.map((person) => (
+              <option key={person.key} value={person.key}>{person.name}</option>
+            ))}
+          </select>
+          {adjustPerson && (
+            <HandicapAdjuster
+              value={adjustCurrentValue}
+              onChange={(v) => onSetHandicapAdjustment(adjustPerson.recordId, adjustPerson.role, v)}
+              headerColor={headerColor}
+            />
           )}
         </div>
       )}
@@ -5542,7 +5605,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -5555,6 +5618,10 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
   const setTee = (id, field, val) => {
     const tees = course.tees.map((t) => (t.id === id ? { ...t, [field]: val } : t));
     onUpdate({ tees });
+    if (field === "label") {
+      const existing = course.tees.find((t) => t.id === id);
+      if (existing && existing.label !== val) onRenameTee(existing.label, val);
+    }
   };
 
   const addTee = () => {
