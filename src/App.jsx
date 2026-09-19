@@ -2568,7 +2568,6 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
     activeRound.publicShowDayBoard &&
     activeRound.format !== "matchplay" &&
     ((tab === "singles" && activeRound.format !== "foursomes") || (tab === "foursomes" && activeRound.format === "foursomes"));
-  const [viewMode, setViewMode] = useState("today"); // combined | today — "today" is the common case; multi-day "combined" is for a later, rarer tournament format
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
@@ -2580,31 +2579,7 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
       >
         {tab === "singles" ? "Singles" : "Foursomes"} — matches the day you're currently viewing
       </div>
-      {todayAvailable && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <button
-            onClick={() => setViewMode("combined")}
-            style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${accentColor}`,
-              background: viewMode === "combined" ? accentColor : "transparent",
-              color: viewMode === "combined" ? "#FFFFFF" : accentColor, fontWeight: 600, fontSize: 12.5,
-            }}
-          >
-            Combined
-          </button>
-          <button
-            onClick={() => setViewMode("today")}
-            style={{
-              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${accentColor}`,
-              background: viewMode === "today" ? accentColor : "transparent",
-              color: viewMode === "today" ? "#FFFFFF" : accentColor, fontWeight: 600, fontSize: 12.5,
-            }}
-          >
-            This day
-          </button>
-        </div>
-      )}
-      {todayAvailable && viewMode === "today" ? (
+      {todayAvailable ? (
         <SingleDayBoard round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : (
         <>
