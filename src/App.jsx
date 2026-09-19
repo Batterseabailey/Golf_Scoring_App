@@ -1079,7 +1079,20 @@ function AppInner() {
     const code = eventCodeRef.current;
     if (!code) return;
     setState((prev) => {
-      const next = { ...prev, ...patch };
+      // Accepting a function here (rather than only a plain object) means
+      // the patch is computed from the ACTUAL latest state at the moment
+      // this update applies, not from whatever "rounds"/"players" closure
+      // variable happened to be captured back when the click handler that
+      // triggered this call was created. Two updates fired in quick
+      // succession — e.g. tapping two switches back-to-back, before React
+      // has re-rendered in between — would otherwise each build their
+      // patch from the SAME pre-update snapshot, and the second call's
+      // save would silently overwrite (undo) the first's, since both
+      // "start from" the same old data. Passing a function closes that
+      // gap entirely, for every caller, rather than requiring each one to
+      // be manually combined into a single call.
+      const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
+      const next = { ...prev, ...resolvedPatch };
       window.storage.set(storageKeyFor(code), JSON.stringify(next), true)
         .then(() => setSyncError(false))
         .catch(() => setSyncError(true));
@@ -1192,7 +1205,9 @@ function AppInner() {
   // localRules, startingHole) now belongs to a specific round — this merges
   // a patch onto the currently active round and leaves the others untouched.
   const updateRound = (patch) => {
-    save({ rounds: rounds.map((r) => (r.id === activeRoundId ? { ...r, ...patch } : r)) });
+    save((prevState) => ({
+      rounds: prevState.rounds.map((r) => (r.id === activeRoundId ? { ...r, ...(typeof patch === "function" ? patch(r) : patch) } : r)),
+    }));
   };
 
   const addPlayer = () => {
@@ -1427,15 +1442,15 @@ function AppInner() {
   // trophies change through the year. Just an abbreviation + full name;
   // players get tagged with the abbreviation, same idea as the tee field.
   const addCompetition = () => {
-    save({ competitions: [...competitions, { id: crypto.randomUUID(), abbreviation: "", fullName: "" }] });
+    save((prev) => ({ competitions: [...prev.competitions, { id: crypto.randomUUID(), abbreviation: "", fullName: "" }] }));
   };
 
   const updateCompetition = (id, patch) => {
-    save({ competitions: competitions.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+    save((prev) => ({ competitions: prev.competitions.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   };
 
   const removeCompetition = (id) => {
-    save({ competitions: competitions.filter((c) => c.id !== id) });
+    save((prev) => ({ competitions: prev.competitions.filter((c) => c.id !== id) }));
   };
 
   // ---- Society roster: a persistent list of known members, separate from
@@ -1444,25 +1459,29 @@ function AppInner() {
   // every time (which is where names could previously go missing if a
   // handicap didn't parse correctly).
   const addSocietyMember = () => {
-    save({ societyRoster: [...societyRoster, { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "" }] });
+    save((prev) => ({ societyRoster: [...prev.societyRoster, { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "" }] }));
   };
 
   const updateSocietyMember = (id, patch) => {
-    save({ societyRoster: societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+    save((prev) => ({ societyRoster: prev.societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
   };
 
   const removeSocietyMember = (id) => {
-    save({ societyRoster: societyRoster.filter((m) => m.id !== id) });
+    save((prev) => ({ societyRoster: prev.societyRoster.filter((m) => m.id !== id) }));
   };
 
   // Bulk-add via the same paste format used elsewhere (Name, Handicap,
   // Tee) — duplicates (matched by name) are skipped rather than added
   // twice.
   const importSocietyMembers = (newMembers) => {
-    const existingNames = new Set(societyRoster.map((m) => normalizeName(m.name)));
-    const toAdd = newMembers.filter((m) => !existingNames.has(normalizeName(m.name)));
-    save({ societyRoster: [...societyRoster, ...toAdd] });
-    return toAdd.length;
+    let addedCount = 0;
+    save((prev) => {
+      const existingNames = new Set(prev.societyRoster.map((m) => normalizeName(m.name)));
+      const toAdd = newMembers.filter((m) => !existingNames.has(normalizeName(m.name)));
+      addedCount = toAdd.length;
+      return { societyRoster: [...prev.societyRoster, ...toAdd] };
+    });
+    return addedCount;
   };
 
   // Adds a set of society-roster members into the CURRENT round's own
@@ -1533,11 +1552,13 @@ function AppInner() {
   // the list of genuinely new abbreviations, so the caller can tell the
   // user what still needs a proper full name.
   const ensureCompetitionsExist = (abbreviations) => {
-    const existing = new Set(competitions.map((c) => c.abbreviation.toUpperCase()));
-    const fresh = [...new Set(abbreviations.map((a) => a.toUpperCase()))].filter((a) => !existing.has(a));
-    if (fresh.length > 0) {
-      save({ competitions: [...competitions, ...fresh.map((abbreviation) => ({ id: crypto.randomUUID(), abbreviation, fullName: "" }))] });
-    }
+    let fresh = [];
+    save((prev) => {
+      const existing = new Set(prev.competitions.map((c) => c.abbreviation.toUpperCase()));
+      fresh = [...new Set(abbreviations.map((a) => a.toUpperCase()))].filter((a) => !existing.has(a));
+      if (fresh.length === 0) return {};
+      return { competitions: [...prev.competitions, ...fresh.map((abbreviation) => ({ id: crypto.randomUUID(), abbreviation, fullName: "" }))] };
+    });
     return fresh;
   };
 
@@ -1549,8 +1570,8 @@ function AppInner() {
   // player is on, so these stay synced everywhere the name appears.
   const updateIndexAndCompetitionEverywhere = (name, newIndex, newCompetition) => {
     const target = normalizeName(name);
-    save({
-      rounds: rounds.map((r) => ({
+    save((prev) => ({
+      rounds: prev.rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
           if (normalizeName(p.name) === target) return { ...p, index: newIndex, competition: newCompetition };
@@ -1558,7 +1579,7 @@ function AppInner() {
           return p;
         }),
       })),
-    });
+    }));
   };
 
   // Tee is deliberately NOT synced across rounds — different courses
@@ -1568,8 +1589,8 @@ function AppInner() {
   // round keeps its own tee for a player, set independently.
   const updateTeeForRound = (roundId, name, newTee) => {
     const target = normalizeName(name);
-    save({
-      rounds: rounds.map((r) => {
+    save((prev) => ({
+      rounds: prev.rounds.map((r) => {
         if (r.id !== roundId) return r;
         return {
           ...r,
@@ -1580,7 +1601,7 @@ function AppInner() {
           }),
         };
       }),
-    });
+    }));
   };
 
   // Sets a competition tag for a whole set of players at once, everywhere
@@ -1590,8 +1611,8 @@ function AppInner() {
   // touches a different tag they might already have).
   const bulkTagCompetition = (selectedNames, abbreviation) => {
     const selectedSet = new Set(selectedNames.map(normalizeName));
-    save({
-      rounds: rounds.map((r) => ({
+    save((prev) => ({
+      rounds: prev.rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
           let patch = {};
@@ -1606,7 +1627,7 @@ function AppInner() {
           return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
         }),
       })),
-    });
+    }));
   };
 
   // Every distinct player name across every day, each with whatever
@@ -1689,14 +1710,15 @@ function AppInner() {
     // checked against the individual (pre-pairing) list, since the roster
     // holds individuals even on a Foursomes day — so it builds itself up
     // over time rather than needing separate upkeep.
-    const existingRosterNames = new Set(societyRoster.map((m) => normalizeName(m.name)));
-    const newRosterMembers = cleanedDrawPlayers
-      .filter((p) => p.name && !existingRosterNames.has(normalizeName(p.name)))
-      .map((p) => ({ id: crypto.randomUUID(), name: p.name, index: p.index || "", tee: p.tee || course.tees[0]?.label || "" }));
-
-    save({
-      rounds: rounds.map((r) => (r.id === activeRoundId ? { ...r, draw: newDraw, players: finalPlayers } : r)),
-      societyRoster: newRosterMembers.length > 0 ? [...societyRoster, ...newRosterMembers] : societyRoster,
+    save((prev) => {
+      const existingRosterNames = new Set(prev.societyRoster.map((m) => normalizeName(m.name)));
+      const newRosterMembers = cleanedDrawPlayers
+        .filter((p) => p.name && !existingRosterNames.has(normalizeName(p.name)))
+        .map((p) => ({ id: crypto.randomUUID(), name: p.name, index: p.index || "", tee: p.tee || course.tees[0]?.label || "" }));
+      return {
+        rounds: prev.rounds.map((r) => (r.id === activeRoundId ? { ...r, draw: newDraw, players: finalPlayers } : r)),
+        societyRoster: newRosterMembers.length > 0 ? [...prev.societyRoster, ...newRosterMembers] : prev.societyRoster,
+      };
     });
   };
 
@@ -1766,13 +1788,13 @@ function AppInner() {
       return { ok: false, error: "Upload failed — check your connection and try again." };
     }
     const entry = { id: docId, name: file.name, sizeKB: Math.round(file.size / 1024) };
-    save({ documents: [...documents, entry] });
+    save((prev) => ({ documents: [...prev.documents, entry] }));
     return { ok: true };
   };
 
   const removeDocument = async (docId) => {
     const code = eventCodeRef.current;
-    save({ documents: documents.filter((d) => d.id !== docId) });
+    save((prev) => ({ documents: prev.documents.filter((d) => d.id !== docId) }));
     if (code) {
       try {
         await window.storage.delete(docStorageKey(code, docId), true);
@@ -1828,12 +1850,12 @@ function AppInner() {
   const addRound = () => {
     if (rounds.length >= MAX_ROUNDS) return;
     const newRound = emptyRound(`Day ${rounds.length + 1}`, course);
-    save({ rounds: [...rounds, newRound], activeRoundId: newRound.id });
+    save((prev) => ({ rounds: [...prev.rounds, newRound], activeRoundId: newRound.id }));
     setLocalActiveRoundId(newRound.id);
   };
 
   const renameRound = (roundId, label) => {
-    save({ rounds: rounds.map((r) => (r.id === roundId ? { ...r, label } : r)) });
+    save((prev) => ({ rounds: prev.rounds.map((r) => (r.id === roundId ? { ...r, label } : r)) }));
   };
 
   const updateRoundDate = (roundId, date) => {
@@ -1841,16 +1863,18 @@ function AppInner() {
     // producing something like a 5-digit year, which would otherwise sort
     // to a bizarre position without any obvious error.
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-    const updated = rounds.map((r) => (r.id === roundId ? { ...r, date } : r));
-    save({ rounds: sortRoundsByDate(updated) });
+    save((prev) => ({ rounds: sortRoundsByDate(prev.rounds.map((r) => (r.id === roundId ? { ...r, date } : r))) }));
   };
 
   const removeRound = (roundId) => {
     if (rounds.length <= 1) return;
-    const next = rounds.filter((r) => r.id !== roundId);
-    const nextActiveId = activeRoundId === roundId ? next[0].id : activeRoundId;
-    save({ rounds: next, activeRoundId: nextActiveId });
-    if (activeRoundId === roundId) setLocalActiveRoundId(next[0].id);
+    let nextActiveId = activeRoundId;
+    save((prev) => {
+      const next = prev.rounds.filter((r) => r.id !== roundId);
+      nextActiveId = prev.activeRoundId === roundId ? next[0].id : prev.activeRoundId;
+      return { rounds: next, activeRoundId: nextActiveId };
+    });
+    if (activeRoundId === roundId) setLocalActiveRoundId(nextActiveId);
   };
 
   const setActiveRound = (roundId) => setLocalActiveRoundId(roundId);
