@@ -652,6 +652,29 @@ function isNumericToken(raw) {
 // Strips everything except letters before comparing, so a hidden character
 // Excel sometimes inserts on copy/paste (a non-breaking space, a stray
 // mark) can't cause a real "Back"/"Front" to be missed.
+// Finds which of the course's own tees a raw token refers to, if any —
+// shared by isTeeToken and normalizeTeeIndicator so both match the exact
+// same way. Checks two things: the token against the label's letters as a
+// whole (handles hidden characters Excel sometimes inserts on copy/paste,
+// and single-word labels like "Purple"), AND the token against each
+// individual word of the label (handles a multi-word label like "Purple
+// Tee" or "Tee Club", where the CSV/paste only gives the meaningful word
+// — "Purple" — not the whole label). Concatenating the whole label into
+// one string before comparing, with no word-boundary check at all, would
+// turn "Purple Tee" into "purpletee", which "Purple" alone can never
+// match.
+function matchCourseTeeLabel(raw, courseTeeLabels) {
+  const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
+  if (!cleaned) return null;
+  for (const label of courseTeeLabels || []) {
+    const labelWhole = (label || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
+    if (labelWhole === cleaned) return label;
+    const words = (label || "").split(/\s+/).map((w) => w.replace(/[^a-zA-Z]/g, "").toLowerCase()).filter(Boolean);
+    if (words.includes(cleaned)) return label;
+  }
+  return null;
+}
+
 function isTeeToken(raw, courseTeeLabels) {
   const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
   if (!cleaned) return false;
@@ -660,17 +683,18 @@ function isTeeToken(raw, courseTeeLabels) {
   // tees (e.g. "Club"/"Purple" at Royal Cinque Ports) — different courses
   // routinely use completely different tee names/colours, so recognizing
   // only "Back"/"Front" would miss every one of them.
-  return (courseTeeLabels || []).some((label) => (label || "").replace(/[^a-zA-Z]/g, "").toLowerCase() === cleaned);
+  return matchCourseTeeLabel(raw, courseTeeLabels) !== null;
 }
 
 function normalizeTeeIndicator(raw, courseTeeLabels) {
   const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
   if (cleaned === "b" || cleaned === "back") return "Back";
   if (cleaned === "f" || cleaned === "front") return "Front";
-  // Return the course's own actual label (correctly cased) if this token
-  // matches one, so the stored value exactly matches an entry in the
-  // course's tees list.
-  const match = (courseTeeLabels || []).find((label) => (label || "").replace(/[^a-zA-Z]/g, "").toLowerCase() === cleaned);
+  // Return the course's own actual label (correctly cased, and in full —
+  // e.g. "Purple Tee" even though the token itself was just "Purple") if
+  // this token matches one, so the stored value exactly matches an entry
+  // in the course's tees list.
+  const match = matchCourseTeeLabel(raw, courseTeeLabels);
   return match || (raw || "").trim();
 }
 
