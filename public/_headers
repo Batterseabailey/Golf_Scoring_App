@@ -1,1 +1,26 @@
+# Without this file, Netlify falls back to default caching for every
+# static file — including the service worker script itself. If a
+# visitor's browser caches sw.js (or index.html, which is what points at
+# each new build's hashed asset filenames), it won't even check for a
+# newer version until that cache expires on its own — no amount of
+# clearing Netlify's own deploy cache fixes that, since the problem is
+# sitting in the browser, not on Netlify. These rules force the browser
+# to always revalidate the files that matter for picking up a new
+# deploy, while still letting the actual hashed JS/CSS bundles (which
+# get a new filename on every build, so they're always safe to cache
+# hard) load fast for returning visitors.
 
+/sw.js
+  Cache-Control: no-cache
+
+/registerSW.js
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
