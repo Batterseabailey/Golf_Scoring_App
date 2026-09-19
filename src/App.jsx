@@ -4143,7 +4143,12 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                   >
                     <input type="checkbox" checked={selectedTeeIds.has(person.key)} onChange={() => toggleTeeSelect(person.key)} />
                     <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
-                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{person.tee ? person.tee : "no tee set"}</span>
+                    <span
+                      className="mono"
+                      style={{ fontSize: 10.5, fontWeight: person.tee && teeMismatch(course, person.tee) ? 700 : 400, color: person.tee && teeMismatch(course, person.tee) ? "#B5442E" : "#8A8774" }}
+                    >
+                      {person.tee ? (teeMismatch(course, person.tee) ? `⚠ ${person.tee}` : person.tee) : "no tee set"}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -5577,7 +5582,12 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
                   >
                     <input type="checkbox" checked={selectedTeeIds.has(person.key)} onChange={() => toggleTeeSelect(person.key)} />
                     <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
-                    <span className="mono" style={{ fontSize: 10.5, color: "#8A8774" }}>{person.tee ? person.tee : "no tee set"}</span>
+                    <span
+                      className="mono"
+                      style={{ fontSize: 10.5, fontWeight: person.tee && teeMismatch(course, person.tee) ? 700 : 400, color: person.tee && teeMismatch(course, person.tee) ? "#B5442E" : "#8A8774" }}
+                    >
+                      {person.tee ? (teeMismatch(course, person.tee) ? `⚠ ${person.tee}` : person.tee) : "no tee set"}
+                    </span>
                   </label>
                 ))}
               </div>
