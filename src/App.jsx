@@ -3650,6 +3650,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [adjustBulkValue, setAdjustBulkValue] = useState(0); // value to apply to all ticked
   const [adjustSavedMsg, setAdjustSavedMsg] = useState(false);
   const [showAdjustPanel, setShowAdjustPanel] = useState(false); // closed by default — rarely used
+  const [showBulkTeePanel, setShowBulkTeePanel] = useState(false); // closed by default — rarely used
   const [adjustGenderFilter, setAdjustGenderFilter] = useState("all"); // all | ladies | gents
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
@@ -4109,8 +4110,16 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
 
       {players.some((p) => p.name) && (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Bulk-set tee</div>
-          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+          <button
+            onClick={() => setShowBulkTeePanel((v) => !v)}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, cursor: "pointer" }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 700 }}>Bulk-set tee</span>
+            <ChevronRight size={15} color="#9B9885" style={{ transform: showBulkTeePanel ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+          </button>
+          {showBulkTeePanel && (
+            <>
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 6, marginBottom: 8 }}>
             Handy right here after dragging people in from the Society Roster, since their tee never carries over
             automatically. Pick a tee, tick everyone playing off it, apply.
           </div>
@@ -4144,6 +4153,8 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               >
                 {teeSavedMsg ? "Saved" : `Apply to ${selectedTeeIds.size} player${selectedTeeIds.size === 1 ? "" : "s"}`}
               </button>
+            </>
+          )}
             </>
           )}
         </div>
