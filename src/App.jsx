@@ -2597,10 +2597,11 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
         // these rounds — showing every competition ever registered
         // globally, even ones nobody currently playing is tagged with
         // (e.g. one only used on a different day), is misleading. Same
-        // stale-partnerCompetition guard as This day's own filter: only
-        // counts when a genuine partner name is actually attached.
+        // guards as This day's own filter: a record needs an actual name
+        // (not a blank leftover) to count its competition tag, and
+        // partnerCompetition only counts with a genuine partner name.
         const combinedAbbrsInUse = new Set(
-          activeRounds.flatMap((r) => r.players.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null])).filter(Boolean)
+          activeRounds.flatMap((r) => r.players.flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null])).filter(Boolean)
         );
         const combinedCompsInUse = competitions.filter((c) => combinedAbbrsInUse.has(c.abbreviation));
         if (combinedCompsInUse.length === 0) return null;
@@ -2683,16 +2684,18 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   // Which competition tags actually appear on this day's roster — only
   // offer filter pills for ones that are actually in use here, in case
   // a day only uses a subset of the event's overall competition list.
-  // partnerCompetition only counts when there's a genuine partner name
-  // attached — otherwise it's a stale leftover on a record with no real
-  // partner (e.g. from a past Foursomes pairing that's since been
-  // undone), and would phantom-show a filter pill for a competition
-  // nobody currently visible on this day is actually in.
+  // Both halves are gated on there being an actual person there: a
+  // record with no name at all could still carry a stale competition
+  // tag from before it was cleared out, and partnerCompetition only
+  // counts when there's a genuine partner name attached — otherwise
+  // either is a leftover with nobody really behind it, and would
+  // phantom-show a filter pill for a competition nobody currently
+  // visible on this day is actually in.
   const compsInUse = [...new Set(
-    effectivePlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean)
+    effectivePlayers.flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null]).filter(Boolean)
   )];
   const filteredPlayers = subFilter
-    ? effectivePlayers.filter((p) => p.competition === subFilter || (p.partnerName && p.partnerCompetition === subFilter))
+    ? effectivePlayers.filter((p) => (p.name && p.competition === subFilter) || (p.partnerName && p.partnerCompetition === subFilter))
     : effectivePlayers;
 
   const rows = filteredPlayers
