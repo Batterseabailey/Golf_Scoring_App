@@ -1000,6 +1000,14 @@ function AppInner() {
   // then), and never touched by later polls after that.
   const [localActiveRoundId, setLocalActiveRoundId] = useState(null);
   const hasSeededActiveRoundRef = useRef(false);
+  // Tracks when this device last wrote a change locally — the background
+  // poll checks this before trusting a fetch over what's already on
+  // screen, since a save's write and the very next poll's read can race:
+  // if the poll's fetch happens to land on the backend a moment before
+  // this device's own write has fully propagated, it would otherwise
+  // silently overwrite a genuinely newer local change with a stale
+  // server copy.
+  const lastLocalSaveAtRef = useRef(0);
   const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
@@ -1053,6 +1061,13 @@ function AppInner() {
       // including the very first load right after entering an event code,
       // should always get the real data.
       if (modeRef.current === "scorer") return;
+      // Also skip it for a few seconds right after this device's own
+      // save — the write and this poll's read can otherwise race, and a
+      // fetch that lands a moment before that write has fully propagated
+      // would silently undo a genuinely newer local change. A brief
+      // window is enough for the backend to catch up without meaningfully
+      // delaying real updates from other devices.
+      if (Date.now() - lastLocalSaveAtRef.current < 4000) return;
       const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
       setState(loaded);
       if (!hasSeededActiveRoundRef.current) {
@@ -1093,6 +1108,7 @@ function AppInner() {
       // be manually combined into a single call.
       const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
       const next = { ...prev, ...resolvedPatch };
+      lastLocalSaveAtRef.current = Date.now();
       window.storage.set(storageKeyFor(code), JSON.stringify(next), true)
         .then(() => setSyncError(false))
         .catch(() => setSyncError(true));
