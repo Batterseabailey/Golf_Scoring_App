@@ -2592,7 +2592,19 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
         <SingleDayBoard round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : (
         <>
-      {tab === "singles" && competitions.length > 0 && (
+      {tab === "singles" && competitions.length > 0 && (() => {
+        // Only offer a pill for a competition actually in use across
+        // these rounds — showing every competition ever registered
+        // globally, even ones nobody currently playing is tagged with
+        // (e.g. one only used on a different day), is misleading. Same
+        // stale-partnerCompetition guard as This day's own filter: only
+        // counts when a genuine partner name is actually attached.
+        const combinedAbbrsInUse = new Set(
+          activeRounds.flatMap((r) => r.players.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null])).filter(Boolean)
+        );
+        const combinedCompsInUse = competitions.filter((c) => combinedAbbrsInUse.has(c.abbreviation));
+        if (combinedCompsInUse.length === 0) return null;
+        return (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
           <button
             onClick={() => setSubFilter("")}
@@ -2605,7 +2617,7 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
           >
             All
           </button>
-          {competitions.map((c) => (
+          {combinedCompsInUse.map((c) => (
             <button
               key={c.id}
               onClick={() => setSubFilter(c.abbreviation)}
@@ -2620,7 +2632,8 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
             </button>
           ))}
         </div>
-      )}
+        );
+      })()}
       {activeRounds.length === 0 ? (
         <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
           <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
