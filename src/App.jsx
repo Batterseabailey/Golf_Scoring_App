@@ -2291,6 +2291,7 @@ function AppInner() {
           competitions={competitions}
           handicapAllowance={handicapAllowance}
           isFoursomes={isFoursomes}
+          scoring={scoring}
           roundLabel={activeRound.label}
           onBack={() => setShowPrintLabels(false)}
           headerColor={headerColor}
@@ -4497,7 +4498,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
 function SlotHandicapEditor({ name, currentIndex, currentTee, currentCompetition, competitions, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
   const [value, setValue] = useState(currentIndex);
   const [tee, setTee] = useState(currentTee);
-  const [competition, setCompetition] = useState(currentCompetition);
+  const [competition, setCompetition] = useState(currentCompetition || (competitions[0] && competitions[0].abbreviation) || "");
 
   return (
     <div
@@ -4539,7 +4540,6 @@ function SlotHandicapEditor({ name, currentIndex, currentTee, currentCompetition
               onChange={(e) => setCompetition(e.target.value)}
               style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
             >
-              <option value="">Main competition (no sub-trophy)</option>
               {competitions.map((c) => (
                 <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
               ))}
@@ -4599,7 +4599,7 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, roundLabel, onBack, headerColor, accentColor }) {
+function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
       .map((h, i) => strokesOnHole(course, ph, i))
@@ -4648,6 +4648,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           strokeHoles: strokeHolesFor(ph),
           time: info ? info.time : "",
           startTee: info ? info.startTee : "",
+          teeLine: [...new Set([p.tee, p.partnerTee].filter(Boolean))].join(" / "),
           partners: others,
           competitionName: competitionNameFor(p.competition),
         };
@@ -4664,6 +4665,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         strokeHoles: strokeHolesFor(ph),
         time: info ? info.time : "",
         startTee: info ? info.startTee : "",
+        teeLine: p.tee || "",
         partners: info ? info.others : [],
         competitionName: competitionNameFor(p.competition),
       };
@@ -4698,17 +4700,20 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         <div className="label-grid">
           {cards.map((c) => (
             <div className="label-card" key={c.id}>
-              <div className="label-meta">
-                {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
-              </div>
               {c.competitionName && (
                 <div className="label-competition">{c.competitionName}</div>
               )}
+              <div className="label-meta">
+                {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
+              </div>
               <div className="label-name">{c.title}</div>
               {c.partners.length > 0 && (
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
               <div className="label-hcp">{c.hcpLine} – Playing {c.ph}{c.adjusted ? "*" : ""}</div>
+              <div className="label-format">
+                {scoring === "medal" ? "Medal" : "Stableford"} - {handicapAllowance}% allowance{c.teeLine ? ` - ${c.teeLine} Tees` : ""}
+              </div>
               {drawNote && drawNote.trim() && (
                 <div className="label-note">{drawNote}</div>
               )}
@@ -4724,11 +4729,12 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           display: flex; flex-direction: column; justify-content: center;
           font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
         }
-        .label-name { font-weight: 700; font-size: 12.5px; margin-bottom: 4px; line-height: 1.25; }
-        .label-meta { font-size: 9px; color: #8A8774; margin-bottom: 3px; }
+        .label-name { font-weight: 700; font-size: 10.5px; margin-bottom: 3px; line-height: 1.25; }
+        .label-meta { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin: 5px 0; }
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
+        .label-format { font-size: 9px; color: #6B6B5F; margin-bottom: 4px; }
         .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
 
         /* Print output — matched exactly to Avery L7160's real measurements,
@@ -4750,11 +4756,12 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
             break-inside: avoid;
             font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
           }
-          .label-meta { font-size: 11px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-meta { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin: 2.5px 0 !important; line-height: 1.1 !important; }
           .label-competition { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.15 !important; }
-          .label-name { font-size: 13px !important; font-weight: 800 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-name { font-size: 11px !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
+          .label-format { font-size: 8px !important; color: #000 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
           .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
         }
       `}</style>
