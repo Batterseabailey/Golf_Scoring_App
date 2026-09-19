@@ -3649,6 +3649,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [selectedAdjustKeys, setSelectedAdjustKeys] = useState(new Set()); // which people are ticked
   const [adjustBulkValue, setAdjustBulkValue] = useState(0); // value to apply to all ticked
   const [adjustSavedMsg, setAdjustSavedMsg] = useState(false);
+  const [showAdjustPanel, setShowAdjustPanel] = useState(false); // closed by default — rarely used
   const [adjustGenderFilter, setAdjustGenderFilter] = useState("all"); // all | ladies | gents
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
@@ -4149,8 +4150,16 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
       )}
       {players.some((p) => p.name) && (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Adjust handicap</div>
-          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+          <button
+            onClick={() => setShowAdjustPanel((v) => !v)}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, cursor: "pointer" }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 700 }}>Adjust handicap</span>
+            <ChevronRight size={15} color="#9B9885" style={{ transform: showAdjustPanel ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+          </button>
+          {showAdjustPanel && (
+            <>
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 6, marginBottom: 8 }}>
             A one-off shots adjustment for this competition only — e.g. shots deducted for winning too often, or
             extra shots for a lady. Never touches their actual index or any other day.
           </div>
@@ -4199,6 +4208,8 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               >
                 {adjustSavedMsg ? "Saved" : `Apply to ${selectedAdjustKeys.size} player${selectedAdjustKeys.size === 1 ? "" : "s"}`}
               </button>
+            </>
+          )}
             </>
           )}
         </div>
