@@ -2670,11 +2670,16 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   // Which competition tags actually appear on this day's roster — only
   // offer filter pills for ones that are actually in use here, in case
   // a day only uses a subset of the event's overall competition list.
+  // partnerCompetition only counts when there's a genuine partner name
+  // attached — otherwise it's a stale leftover on a record with no real
+  // partner (e.g. from a past Foursomes pairing that's since been
+  // undone), and would phantom-show a filter pill for a competition
+  // nobody currently visible on this day is actually in.
   const compsInUse = [...new Set(
-    effectivePlayers.flatMap((p) => [p.competition, p.partnerCompetition]).filter(Boolean)
+    effectivePlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean)
   )];
   const filteredPlayers = subFilter
-    ? effectivePlayers.filter((p) => p.competition === subFilter || p.partnerCompetition === subFilter)
+    ? effectivePlayers.filter((p) => p.competition === subFilter || (p.partnerName && p.partnerCompetition === subFilter))
     : effectivePlayers;
 
   const rows = filteredPlayers
