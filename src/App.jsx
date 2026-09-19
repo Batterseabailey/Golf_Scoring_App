@@ -1328,12 +1328,12 @@ function AppInner() {
 
   // Updates both handicap and tee for whoever matches this name in one
   // write — used by the draw's slot editor, which edits both at once.
-  const updatePlayerDetailsByName = (name, newIndex, newTee) => {
+  const updatePlayerDetailsByName = (name, newIndex, newTee, newCompetition) => {
     const target = (name || "").trim().toLowerCase();
     updateRound({
       players: players.map((p) => {
-        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex, tee: newTee };
-        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee };
+        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
+        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
         return p;
       }),
     });
@@ -1353,6 +1353,59 @@ function AppInner() {
   const removePlayer = (id) => updateRound({ players: players.filter((p) => p.id !== id) });
 
   const clearAllPlayers = () => updateRound({ players: [], draw: [] });
+
+  // Removes anyone from the roster who isn't currently placed in the draw
+  // at all — for cleaning up after restructuring a draw (e.g. pulling a
+  // whole group out into its own separate day), where their roster
+  // records would otherwise be left behind as invisible leftovers.
+  // Deliberately does NOT touch anyone still sitting unassigned in the
+  // pool who's genuinely mid-setup — only ones with neither their name
+  // nor (for a Foursomes pair) their partner's name anywhere in the
+  // saved draw.
+  const removePlayersNotInDraw = () => {
+    const namesInDraw = new Set(draw.flatMap((entry) => entry.players || []).map(normalizeName));
+    updateRound({
+      players: players.filter(
+        (p) => namesInDraw.has(normalizeName(p.name)) || namesInDraw.has(normalizeName(p.partnerName))
+      ),
+    });
+  };
+
+  // A full withdrawal — for someone pulling out on the day. Removes them
+  // from wherever they are in the draw AND from the roster/leaderboard,
+  // in one persisted action, so nothing needs a separate "Save draw" tap
+  // or a re-upload to fully reflect it. On a Foursomes day, a record
+  // holds two people sharing one row: if the person leaving is the
+  // primary and has a partner, the partner is promoted into the primary
+  // slot (rather than deleting the whole record, which would wrongly
+  // remove the partner too); if they're the partner, just their half is
+  // cleared, leaving the primary in place.
+  const withdrawPlayer = (name) => {
+    const target = normalizeName(name);
+    const newDraw = draw.map((entry) => ({
+      ...entry,
+      players: (entry.players || []).filter((n) => normalizeName(n) !== target),
+    }));
+    const newPlayers = players
+      .map((p) => {
+        if (normalizeName(p.name) === target) {
+          if (p.partnerName) {
+            return {
+              ...p,
+              name: p.partnerName, index: p.partnerIndex, tee: p.partnerTee, competition: p.partnerCompetition, handicapAdjustment: p.partnerHandicapAdjustment,
+              partnerName: "", partnerIndex: "", partnerTee: "", partnerCompetition: "", partnerHandicapAdjustment: 0,
+            };
+          }
+          return null;
+        }
+        if (normalizeName(p.partnerName) === target) {
+          return { ...p, partnerName: "", partnerIndex: "", partnerTee: "", partnerCompetition: "", partnerHandicapAdjustment: 0 };
+        }
+        return p;
+      })
+      .filter(Boolean);
+    updateRound({ draw: newDraw, players: newPlayers });
+  };
 
   const copyPlayersFromRound = (sourceRoundId) => {
     const source = rounds.find((r) => r.id === sourceRoundId);
@@ -2159,6 +2212,7 @@ function AppInner() {
           onAddFromRoster={addSocietyMembersToRound}
           onBulkSetTee={bulkSetTee}
           onSetHandicapAdjustment={setHandicapAdjustment}
+          onWithdrawPlayer={withdrawPlayer}
           onBulkSetHandicapAdjustment={bulkSetHandicapAdjustment}
           publicShowIndex={activeRound.publicShowIndex}
           publicShowCH={activeRound.publicShowCH}
@@ -2252,6 +2306,7 @@ function AppInner() {
           onLoadExample={loadExample}
           onImport={importPlayers}
           onClearAll={clearAllPlayers}
+          onRemoveNotInDraw={removePlayersNotInDraw}
           onBack={() => setShowEnterScores(false)}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -3204,7 +3259,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -3580,7 +3635,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} onBulkSetHandicapAdjustment={onBulkSetHandicapAdjustment} visOpts={visOpts} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} onBulkSetHandicapAdjustment={onBulkSetHandicapAdjustment} onWithdrawPlayer={onWithdrawPlayer} competitions={competitions} visOpts={visOpts} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -3692,7 +3747,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, visOpts }) {
+function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, competitions, visOpts }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -4417,15 +4472,18 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           name={editingSlot.name}
           currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
           currentTee={getTee(course, (findIndividualByName(players, editingSlot.name) || {}).tee).label}
+          currentCompetition={(findIndividualByName(players, editingSlot.name) || {}).competition || ""}
+          competitions={competitions}
           course={course}
           headerColor={headerColor}
           accentColor={accentColor}
-          onSave={(newIndex, newTee) => {
-            onUpdatePlayerDetails(editingSlot.name, newIndex, newTee);
+          onSave={(newIndex, newTee, newCompetition) => {
+            onUpdatePlayerDetails(editingSlot.name, newIndex, newTee, newCompetition);
             setEditingSlot(null);
           }}
           onRemove={() => {
             clearSlot(editingSlot.rowId, editingSlot.slotIdx);
+            onWithdrawPlayer(editingSlot.name);
             setEditingSlot(null);
           }}
           onMove={() => pickUpFromSlot(editingSlot.rowId, editingSlot.slotIdx, editingSlot.name)}
@@ -4436,9 +4494,10 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   );
 }
 
-function SlotHandicapEditor({ name, currentIndex, currentTee, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
+function SlotHandicapEditor({ name, currentIndex, currentTee, currentCompetition, competitions, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
   const [value, setValue] = useState(currentIndex);
   const [tee, setTee] = useState(currentTee);
+  const [competition, setCompetition] = useState(currentCompetition);
 
   return (
     <div
@@ -4472,8 +4531,23 @@ function SlotHandicapEditor({ name, currentIndex, currentTee, course, headerColo
             <option key={t.id} value={t.label}>{t.label}</option>
           ))}
         </select>
+        {competitions.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
+            <select
+              value={competition}
+              onChange={(e) => setCompetition(e.target.value)}
+              style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
+            >
+              <option value="">Main competition (no sub-trophy)</option>
+              {competitions.map((c) => (
+                <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+              ))}
+            </select>
+          </>
+        )}
         <button
-          onClick={() => onSave(value, tee)}
+          onClick={() => onSave(value, tee, competition)}
           style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
         >
           Save
@@ -4488,7 +4562,7 @@ function SlotHandicapEditor({ name, currentIndex, currentTee, course, headerColo
           onClick={onRemove}
           style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: "1px solid #B5442E", background: "transparent", color: "#B5442E", fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}
         >
-          Remove from pair
+          Withdrawn — remove entirely
         </button>
         <button
           onClick={onClose}
@@ -5550,11 +5624,12 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
 // then refused to scroll any further) — a genuine separate screen, which
 // every other Admin destination already is, sidesteps that class of bug
 // entirely rather than patching around it.
-function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
+function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onRemoveNotInDraw, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [bulkTeeTarget, setBulkTeeTarget] = useState("");
   const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
 
@@ -5689,6 +5764,34 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
               style={{ fontSize: 11.5, color: "#B5442E", background: "none", border: "none", padding: "4px 2px" }}
             >
               Clear all players
+            </button>
+          )}
+        </div>
+      )}
+      {ranked.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          {confirmCleanup ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <span style={{ fontSize: 11, color: "#8A8774" }}>Remove anyone not currently placed in the draw?</span>
+              <button
+                onClick={() => { onRemoveNotInDraw(); setConfirmCleanup(false); }}
+                style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px 6px" }}
+              >
+                Yes, remove
+              </button>
+              <button
+                onClick={() => setConfirmCleanup(false)}
+                style={{ fontSize: 11.5, color: "#9B9885", background: "none", border: "none", padding: "4px 6px" }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmCleanup(true)}
+              style={{ fontSize: 11.5, color: "#8A8774", background: "none", border: "none", padding: "4px 2px" }}
+            >
+              Remove players not in the draw
             </button>
           )}
         </div>
