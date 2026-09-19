@@ -135,18 +135,19 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
   const ph = isFoursomes
     ? combinedHandicap(course, player, allowancePct)
     : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct) + (Number(player.handicapAdjustment) || 0);
-  let pts = 0, thru = 0, netTotal = 0, parSoFar = 0;
+  let pts = 0, thru = 0, netTotal = 0, parSoFar = 0, grossTotal = 0;
   const scores = Array.isArray(player.scores) ? player.scores : Array(18).fill("");
   scores.forEach((g, i) => {
     if (g == null || g === "") return;
     thru += 1;
     const strokes = strokesOnHole(course, ph, i);
     netTotal += Number(g) - strokes;
+    grossTotal += Number(g);
     parSoFar += course.holes[i].par;
     const p = holePoints(course, g, i, ph);
     if (p !== null) pts += p;
   });
-  return { ph, pts, thru, netTotal, relToPar: netTotal - parSoFar };
+  return { ph, pts, thru, netTotal, grossTotal, relToPar: netTotal - parSoFar };
 }
 
 function emptyPlayer(course, isFoursomes = false) {
@@ -434,6 +435,9 @@ function emptyRound(label, course) {
     publicShowTee: true,
     publicShowComp: true,
     publicShowStartTee: true,
+    publicShowGross: true, // this day's leaderboard — gross/net/points columns
+    publicShowNet: true,
+    publicShowPoints: true,
   };
 }
 
@@ -468,6 +472,9 @@ function sanitizeRound(r, fallbackLabel) {
     publicShowTee: r.publicShowTee === false ? false : true,
     publicShowComp: r.publicShowComp === false ? false : true,
     publicShowStartTee: r.publicShowStartTee === false ? false : true,
+    publicShowGross: r.publicShowGross === false ? false : true,
+    publicShowNet: r.publicShowNet === false ? false : true,
+    publicShowPoints: r.publicShowPoints === false ? false : true,
   };
 }
 
@@ -1355,11 +1362,23 @@ function AppInner() {
   // getTee() would stop finding a match and quietly fall back to
   // whichever tee is listed first, producing a wrong handicap with no
   // obvious sign anything's changed. This brings every current player
-  // (and Foursomes partner) on the old label across to the new one.
-  const renameTeeEverywhere = (oldLabel, newLabel) => {
-    if (!oldLabel || !newLabel || oldLabel === newLabel) return;
+  // (and Foursomes partner) on the old label across to the new one —
+  // in the SAME updateRound call as the tee list change itself, since
+  // two separate calls fired back-to-back would each build their patch
+  // from the same pre-update snapshot of the round, and the second one
+  // would silently overwrite (undo) the first.
+  const renameTee = (teeId, newLabel) => {
+    const existing = course.tees.find((t) => t.id === teeId);
+    if (!existing) return;
+    const oldLabel = existing.label;
+    const tees = course.tees.map((t) => (t.id === teeId ? { ...t, label: newLabel } : t));
+    if (!oldLabel || oldLabel === newLabel) {
+      updateRound({ course: { ...course, tees } });
+      return;
+    }
     const target = normalizeName(oldLabel);
     updateRound({
+      course: { ...course, tees },
       players: players.map((p) => ({
         ...p,
         ...(normalizeName(p.tee) === target ? { tee: newLabel } : {}),
@@ -2011,7 +2030,7 @@ function AppInner() {
           onSelectHandicap={handleHandicapTap}
         />
       ) : mode === "board" ? (
-        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         isMatchPlay
@@ -2037,7 +2056,7 @@ function AppInner() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
+        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
       ) : active ? (
         <ScoreEntry
           course={course}
@@ -2080,6 +2099,9 @@ function AppInner() {
           publicShowTee={activeRound.publicShowTee}
           publicShowComp={activeRound.publicShowComp}
           publicShowStartTee={activeRound.publicShowStartTee}
+          publicShowGross={activeRound.publicShowGross}
+          publicShowNet={activeRound.publicShowNet}
+          publicShowPoints={activeRound.publicShowPoints}
           onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -2201,7 +2223,7 @@ function AppInner() {
           onUpdateHandicapPin={updateHandicapPin}
           course={course}
           onUpdate={updateCourse}
-          onRenameTee={renameTeeEverywhere}
+          onRenameTee={renameTee}
           onBack={() => setShowCourseSetup(false)}
           library={library}
           onSaveToLibrary={saveCourseToLibrary}
@@ -2464,11 +2486,20 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, isAdmin,
   );
 }
 
-function Board({ rounds, tab, competitions, headerColor, accentColor }) {
+function Board({ rounds, tab, competitions, headerColor, accentColor, activeRound }) {
   const [subFilter, setSubFilter] = useState(""); // competition abbreviation, or "" for all
   const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
   const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
   const activeRounds = tab === "singles" ? singlesRounds : foursomesRounds;
+
+  // "This day" is only offered when the currently-active round is a
+  // scored (Individual/Foursomes) day matching the tab being viewed —
+  // Match Play days have no gross/net/points to show here at all.
+  const todayAvailable =
+    activeRound &&
+    activeRound.format !== "matchplay" &&
+    ((tab === "singles" && activeRound.format !== "foursomes") || (tab === "foursomes" && activeRound.format === "foursomes"));
+  const [viewMode, setViewMode] = useState("combined"); // combined | today
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
@@ -2480,6 +2511,34 @@ function Board({ rounds, tab, competitions, headerColor, accentColor }) {
       >
         {tab === "singles" ? "Singles" : "Foursomes"} — matches the day you're currently viewing
       </div>
+      {todayAvailable && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button
+            onClick={() => setViewMode("combined")}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${accentColor}`,
+              background: viewMode === "combined" ? accentColor : "transparent",
+              color: viewMode === "combined" ? "#FFFFFF" : accentColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            Combined
+          </button>
+          <button
+            onClick={() => setViewMode("today")}
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${accentColor}`,
+              background: viewMode === "today" ? accentColor : "transparent",
+              color: viewMode === "today" ? "#FFFFFF" : accentColor, fontWeight: 600, fontSize: 12.5,
+            }}
+          >
+            This day
+          </button>
+        </div>
+      )}
+      {todayAvailable && viewMode === "today" ? (
+        <SingleDayBoard round={activeRound} headerColor={headerColor} accentColor={accentColor} />
+      ) : (
+        <>
       {tab === "singles" && competitions.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
           <button
@@ -2531,6 +2590,153 @@ function Board({ rounds, tab, competitions, headerColor, accentColor }) {
           }
           rowLabel={tab === "foursomes" ? "Pair" : "Player"}
         />
+      )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// A single day's own leaderboard — as opposed to OverallBoard's running
+// total across every day — with gross, net, and Stableford points each
+// shown as their own independently switchable, independently sortable
+// column. Which columns actually show is controlled by that round's own
+// publicShowGross/Net/Points settings (set in Draw setup), same pattern
+// as the public draw-tab switches.
+function SingleDayBoard({ round, headerColor, accentColor }) {
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState(round.scoring === "medal" ? "net" : "points");
+  const [sortDir, setSortDir] = useState(round.scoring === "medal" ? "asc" : "desc"); // lower net is better; higher points is better
+
+  const isFoursomes = round.format === "foursomes";
+  const effectivePlayers =
+    isFoursomes && round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
+
+  const rows = effectivePlayers
+    .filter((p) => p.name)
+    .map((p) => {
+      const t = totals(round.course, p, round.handicapAllowance, isFoursomes);
+      return {
+        name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+        gross: t.thru > 0 ? t.grossTotal : null,
+        net: t.thru > 0 ? t.netTotal : null,
+        points: t.thru > 0 ? t.pts : null,
+        thru: t.thru,
+      };
+    });
+
+  const sortField = (row) => (sortBy === "name" ? row.name.toLowerCase() : row[sortBy]);
+  const sorted = [...rows].sort((a, b) => {
+    const av = sortField(a), bv = sortField(b);
+    // Anyone who hasn't started always sorts to the bottom, regardless of
+    // sort direction — an empty score is never meaningfully "first".
+    if (sortBy !== "name") {
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+    }
+    if (av < bv) return sortDir === "asc" ? -1 : 1;
+    if (av > bv) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  }).map((row, i) => ({ ...row, rank: i + 1 }));
+
+  const standings = search.trim()
+    ? sorted.filter((row) => row.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : sorted;
+
+  const clickSort = (field) => {
+    if (sortBy === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(field);
+      setSortDir(field === "net" || field === "name" ? "asc" : "desc"); // net's default is ascending (lower is better); points/gross default varies by convention, but ascending name reads naturally A-Z
+    }
+  };
+  const sortArrow = (field) => (sortBy === field ? (sortDir === "asc" ? " ▲" : " ▼") : "");
+
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: "40px 12px", textAlign: "center", color: "#6B6B5F" }}>
+        <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15 }}>No players on this day yet.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={`Search ${isFoursomes ? "pair" : "player"}…`}
+        style={{ width: "100%", fontSize: 14, padding: "9px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box" }}
+      />
+      {standings.length === 0 ? (
+        <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>
+          No {isFoursomes ? "pair" : "player"} matching "{search.trim()}".
+        </div>
+      ) : (
+      <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
+        <thead>
+          <tr style={{ background: `${headerColor}12` }}>
+            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
+            <th
+              onClick={() => clickSort("name")}
+              style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none" }}
+            >
+              {isFoursomes ? "Pair" : "Player"}{sortArrow("name")}
+            </th>
+            {round.publicShowGross !== false && (
+              <th
+                onClick={() => clickSort("gross")}
+                className="mono"
+                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+              >
+                Gross{sortArrow("gross")}
+              </th>
+            )}
+            {round.publicShowNet !== false && (
+              <th
+                onClick={() => clickSort("net")}
+                className="mono"
+                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+              >
+                Net{sortArrow("net")}
+              </th>
+            )}
+            {round.publicShowPoints !== false && (
+              <th
+                onClick={() => clickSort("points")}
+                className="mono"
+                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+              >
+                Pts{sortArrow("points")}
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {standings.map((row) => (
+            <tr key={row.name} style={{ borderTop: "1px solid #EFEDE0" }}>
+              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: row.rank <= 3 && row.thru > 0 ? headerColor : "#9B9885" }}>
+                {row.rank}
+              </td>
+              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
+              {round.publicShowGross !== false && (
+                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.gross ?? "–"}</td>
+              )}
+              {round.publicShowNet !== false && (
+                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.net ?? "–"}</td>
+              )}
+              {round.publicShowPoints !== false && (
+                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13, fontWeight: 700, color: headerColor }}>{row.points ?? "–"}</td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
       )}
     </div>
   );
@@ -2876,7 +3082,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -3172,6 +3378,31 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             { key: "tee", label: "Tee", value: publicShowTee, field: "publicShowTee" },
             { key: "comp", label: "Competition", value: publicShowComp, field: "publicShowComp" },
             { key: "starttee", label: "Start tee", value: publicShowStartTee, field: "publicShowStartTee" },
+          ].map((sw) => (
+            <button
+              key={sw.key}
+              onClick={() => onUpdatePublicVis({ [sw.field]: !sw.value })}
+              style={{
+                flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
+                background: sw.value ? accentColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
+                fontWeight: 600, fontSize: 11.5,
+              }}
+            >
+              {sw.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${accentColor}`, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
+          Show on this day's leaderboard (what players see)
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[
+            { key: "gross", label: "Gross", value: publicShowGross, field: "publicShowGross" },
+            { key: "net", label: "Net", value: publicShowNet, field: "publicShowNet" },
+            { key: "points", label: "Stableford points", value: publicShowPoints, field: "publicShowPoints" },
           ].map((sw) => (
             <button
               key={sw.key}
@@ -4175,6 +4406,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
           hcpLine: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
           ph,
+          adjusted: !!(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)),
           strokeHoles: strokeHolesFor(ph),
           time: info ? info.time : "",
           startTee: info ? info.startTee : "",
@@ -4190,6 +4422,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         title: p.name,
         hcpLine: `HCP ${p.index || "–"}`,
         ph,
+        adjusted: !!Number(p.handicapAdjustment),
         strokeHoles: strokeHolesFor(ph),
         time: info ? info.time : "",
         startTee: info ? info.startTee : "",
@@ -4237,7 +4470,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
               {c.partners.length > 0 && (
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
-              <div className="label-hcp">{c.hcpLine} – Playing {c.ph}</div>
+              <div className="label-hcp">{c.hcpLine} – Playing {c.ph}{c.adjusted ? "*" : ""}</div>
               {drawNote && drawNote.trim() && (
                 <div className="label-note">{drawNote}</div>
               )}
@@ -5692,12 +5925,12 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
   };
 
   const setTee = (id, field, val) => {
+    if (field === "label") {
+      onRenameTee(id, val);
+      return;
+    }
     const tees = course.tees.map((t) => (t.id === id ? { ...t, [field]: val } : t));
     onUpdate({ tees });
-    if (field === "label") {
-      const existing = course.tees.find((t) => t.id === id);
-      if (existing && existing.label !== val) onRenameTee(existing.label, val);
-    }
   };
 
   const addTee = () => {
