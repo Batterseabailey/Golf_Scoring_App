@@ -4340,7 +4340,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         <SlotHandicapEditor
           name={editingSlot.name}
           currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
-          currentTee={(findIndividualByName(players, editingSlot.name) || {}).tee || course.tees[0]?.label || ""}
+          currentTee={getTee(course, (findIndividualByName(players, editingSlot.name) || {}).tee).label}
           course={course}
           headerColor={headerColor}
           accentColor={accentColor}
