@@ -27,6 +27,7 @@ export default defineConfig({
         // own storage function, so scores/draws/rules always come in fresh
         // rather than serving stale cached data.
         navigateFallbackDenylist: [/^\/\.netlify\/functions\//],
+                cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^\/\.netlify\/functions\//,
