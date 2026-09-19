@@ -4711,9 +4711,6 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
               <div className="label-hcp">{c.hcpLine} – Playing {c.ph}{c.adjusted ? "*" : ""}</div>
-              <div className="label-format">
-                {scoring === "medal" ? "Medal" : "Stableford"} - {handicapAllowance}% allowance{c.teeLine ? ` - ${c.teeLine} Tees` : ""}
-              </div>
               {drawNote && drawNote.trim() && (
                 <div className="label-note">{drawNote}</div>
               )}
@@ -4729,12 +4726,11 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           display: flex; flex-direction: column; justify-content: center;
           font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
         }
-        .label-name { font-weight: 700; font-size: 10.5px; margin-bottom: 3px; line-height: 1.25; }
+        .label-name { font-weight: 700; font-size: 12px; margin-bottom: 3px; line-height: 1.25; }
         .label-meta { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin: 5px 0; }
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
-        .label-format { font-size: 9px; color: #6B6B5F; margin-bottom: 4px; }
         .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
 
         /* Print output — matched exactly to Avery L7160's real measurements,
@@ -4758,10 +4754,9 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           }
           .label-meta { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin: 2.5px 0 !important; line-height: 1.1 !important; }
           .label-competition { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.15 !important; }
-          .label-name { font-size: 11px !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
+          .label-name { font-size: 12.5px !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
-          .label-format { font-size: 8px !important; color: #000 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
           .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
         }
       `}</style>
