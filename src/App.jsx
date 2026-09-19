@@ -2861,7 +2861,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
             All
           </button>
           {compsInUse.map((abbr) => {
-            const full = competitions.find((c) => c.abbreviation === abbr);
+            const full = competitions.find((c) => c.abbreviation.toUpperCase() === abbr.toUpperCase());
             return (
               <button
                 key={abbr}
@@ -3978,6 +3978,24 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     setTimeout(() => setSavedMsg(false), 1500);
   };
 
+  // Auto-save — a safety net against losing work if the screen closes
+  // unexpectedly mid-edit. Debounced rather than saving on every single
+  // drag: waits until the rows have been still for a couple of seconds,
+  // so a flurry of quick changes settles into one save rather than many.
+  // Skips the very first render, since that's just the draw loading in,
+  // not a user edit. The manual "Save draw" button above still saves
+  // immediately whenever it's tapped.
+  const rowsMountedRef = useRef(false);
+  useEffect(() => {
+    if (!rowsMountedRef.current) {
+      rowsMountedRef.current = true;
+      return;
+    }
+    const timer = setTimeout(saveDraw, 2500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
   return (
     <div>
       <button
@@ -4200,27 +4218,47 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
                 ))}
               </div>
               <div style={{ maxHeight: 220, overflowY: "auto" }}>
-                {societyRoster
-                  .filter((m) => !players.some((p) => normalizeName(p.name) === normalizeName(m.name)))
-                  .filter((m) => !rosterSearch.trim() || m.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()))
-                  .filter((m) => rosterGenderFilter === "all" || (rosterGenderFilter === "ladies" ? m.isLady : !m.isLady))
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((m) => (
-                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 2px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedRosterIds.has(m.id)}
-                        onChange={() => setSelectedRosterIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(m.id)) next.delete(m.id);
-                          else next.add(m.id);
-                          return next;
-                        })}
-                      />
-                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.name}</span>
-                      <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{m.index || "no HCP"}</span>
-                    </label>
-                  ))}
+                {(() => {
+                  const visibleRosterMembers = societyRoster
+                    .filter((m) => !players.some((p) => normalizeName(p.name) === normalizeName(m.name)))
+                    .filter((m) => !rosterSearch.trim() || m.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()))
+                    .filter((m) => rosterGenderFilter === "all" || (rosterGenderFilter === "ladies" ? m.isLady : !m.isLady))
+                    .sort((a, b) => a.name.localeCompare(b.name));
+                  const allVisibleSelected = visibleRosterMembers.length > 0 && visibleRosterMembers.every((m) => selectedRosterIds.has(m.id));
+                  return (
+                    <>
+                      {visibleRosterMembers.length > 0 && (
+                        <button
+                          onClick={() => setSelectedRosterIds((prev) => {
+                            const next = new Set(prev);
+                            if (allVisibleSelected) visibleRosterMembers.forEach((m) => next.delete(m.id));
+                            else visibleRosterMembers.forEach((m) => next.add(m.id));
+                            return next;
+                          })}
+                          style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, background: "none", border: "none", padding: "4px 2px 8px", textAlign: "left" }}
+                        >
+                          {allVisibleSelected ? "Deselect all" : `Select all (${visibleRosterMembers.length})`}
+                        </button>
+                      )}
+                      {visibleRosterMembers.map((m) => (
+                        <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 2px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedRosterIds.has(m.id)}
+                            onChange={() => setSelectedRosterIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(m.id)) next.delete(m.id);
+                              else next.add(m.id);
+                              return next;
+                            })}
+                          />
+                          <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.name}</span>
+                          <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{m.index || "no HCP"}</span>
+                        </label>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button
@@ -4664,7 +4702,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
   // anyone not tagged into one.
   const competitionNameFor = (abbreviation) => {
     if (!abbreviation) return "";
-    const match = competitions.find((c) => c.abbreviation === abbreviation);
+    const match = competitions.find((c) => c.abbreviation.toUpperCase() === abbreviation.toUpperCase());
     return match ? match.fullName || match.abbreviation : "";
   };
 
