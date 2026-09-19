@@ -4671,7 +4671,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
       };
     });
 
-  const sheets = Math.ceil(cards.length / 21);
+  const sheets = Math.ceil(cards.length / 18);
 
   return (
     <div style={{ padding: "12px 14px 40px" }}>
@@ -4688,7 +4688,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
       </div>
       <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
         {cards.length} label{cards.length === 1 ? "" : "s"} for {roundLabel} — {sheets} sheet{sheets === 1 ? "" : "s"}
-        of Avery L7160 (21 per sheet, 3×7, 63.5×38.1mm).
+        of Avery L7161 (18 per sheet, 3×6, 63.5×46.6mm).
       </div>
       <div className="no-print" style={{ fontSize: 11, color: "#B5442E", marginBottom: 14, fontWeight: 600 }}>
         In the print dialog, set Scale to "100%" or "Actual size" — not "Fit to page" — or the labels won't line up
@@ -4722,7 +4722,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         /* On-screen preview only — doesn't need to be exact, just readable */
         .label-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
         .label-card {
-          border: 1px dashed #B5AF9A; padding: 10px 12px; min-height: 92px;
+          border: 1px dashed #B5AF9A; padding: 10px 12px; min-height: 112px;
           display: flex; flex-direction: column; justify-content: center;
           font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
         }
@@ -4733,15 +4733,20 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
         .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
 
-        /* Print output — matched exactly to Avery L7160's real measurements,
-           so each card lands precisely on a real adhesive label. */
+        /* Print output — matched exactly to Avery L7161's real measurements,
+           so each card lands precisely on a real adhesive label. Same
+           column width/count as L7160, just taller rows (46.6mm vs
+           38.1mm) and one fewer row per sheet (6 vs 7, so 18 vs 21 per
+           sheet) — top/bottom margin recalculated to fit exactly: A4 is
+           297mm tall, 6 × 46.6mm = 279.6mm, leaving 17.4mm split evenly
+           as 8.7mm top and bottom. */
         @media print {
           .no-print { display: none !important; }
-          @page { size: A4; margin: 15.15mm 7mm; }
+          @page { size: A4; margin: 8.7mm 7mm; }
           .label-grid {
             display: grid;
             grid-template-columns: repeat(3, 63.5mm);
-            grid-auto-rows: 38.1mm;
+            grid-auto-rows: 46.6mm;
             column-gap: 2.75mm;
             row-gap: 0mm;
             gap: 2.75mm 0mm;
