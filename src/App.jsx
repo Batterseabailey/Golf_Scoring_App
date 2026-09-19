@@ -4742,7 +4742,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
            as 8.7mm top and bottom. */
         @media print {
           .no-print { display: none !important; }
-          @page { size: A4; margin: 8.7mm 7mm 3mm 7mm; }
+          @page { size: A4; margin: 8.7mm 7mm 4.5mm 7mm; }
           .label-grid {
             display: grid;
             grid-template-columns: repeat(3, 63.5mm);
