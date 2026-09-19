@@ -422,6 +422,7 @@ function emptyRound(label, course) {
     players: [],
     draw: [],
     matches: [], // Match Play only — [{ id, playerA, playerB, result }]
+    competitions: [], // this day's own sub-competitions — [{ id, abbreviation, fullName }] — a new day always starts with a clean sheet, separate from every other day's
     localRules: "",
     startingHole: "1st",
     format: "individual", // individual | foursomes | matchplay
@@ -442,7 +443,7 @@ function emptyRound(label, course) {
   };
 }
 
-function sanitizeRound(r, fallbackLabel) {
+function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
   return {
     id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
     label: typeof r.label === "string" && r.label ? r.label : fallbackLabel,
@@ -450,6 +451,14 @@ function sanitizeRound(r, fallbackLabel) {
     course: isValidCourse(r.course) ? r.course : DEFAULT_COURSE,
     players: Array.isArray(r.players) ? r.players : [],
     draw: Array.isArray(r.draw) ? r.draw : [],
+    // A round saved before per-day competitions existed has no
+    // r.competitions of its own — in that one case (and that case only)
+    // fall back to whatever was in the old event-wide list, so an
+    // existing day like "Day 1" keeps the competitions it already had
+    // rather than appearing to lose them. Any round that already has
+    // its own competitions array (including a deliberately empty one)
+    // keeps exactly that.
+    competitions: Array.isArray(r.competitions) ? r.competitions : (Array.isArray(legacyCompetitions) ? legacyCompetitions : []),
     matches: Array.isArray(r.matches)
       ? r.matches.filter((m) => m && typeof m === "object").map((m) => ({
           id: typeof m.id === "string" && m.id ? m.id : crypto.randomUUID(),
@@ -516,14 +525,21 @@ const DEFAULT_STATE = {
   rounds: [emptyRound("Day 1")],
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
-  competitions: [], // event-wide sub-competitions (e.g. seniors' trophy) — [{ id, abbreviation, fullName }]
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
 function sanitizeState(parsed) {
+  // Competitions used to be one event-wide list shared by every round.
+  // They're now stored per-round instead, so a new day always starts
+  // with a clean sheet — but any round saved under the old shape still
+  // needs to inherit its share of that list, or an already-configured
+  // day like "Day 1" would appear to have lost its competitions. Each
+  // sanitizeRound call below falls back to this only for a round that
+  // has no competitions array of its own yet.
+  const legacyCompetitions = Array.isArray(parsed.competitions) ? parsed.competitions : [];
   let rounds;
   if (Array.isArray(parsed.rounds) && parsed.rounds.length > 0) {
-    rounds = parsed.rounds.slice(0, MAX_ROUNDS).map((r, i) => sanitizeRound(r, `Day ${i + 1}`));
+    rounds = parsed.rounds.slice(0, MAX_ROUNDS).map((r, i) => sanitizeRound(r, `Day ${i + 1}`, legacyCompetitions));
   } else if (isValidCourse(parsed.course) || Array.isArray(parsed.players)) {
     // Migrating data saved before multi-round support existed — wrap the
     // old flat course/players/draw/localRules/startingHole into a single
@@ -537,7 +553,8 @@ function sanitizeState(parsed) {
           localRules: parsed.localRules,
           startingHole: parsed.startingHole,
         },
-        "Day 1"
+        "Day 1",
+        legacyCompetitions
       ),
     ];
   } else {
@@ -556,7 +573,6 @@ function sanitizeState(parsed) {
     rounds,
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
-    competitions: Array.isArray(parsed.competitions) ? parsed.competitions : [],
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -989,7 +1005,7 @@ function AppInner() {
   // avoids the class of bug where a stale positional argument silently
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
-  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, competitions, societyRoster } = state;
+  const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, societyRoster } = state;
   // Which day THIS device is currently looking at — deliberately kept
   // separate from the shared/polled server state. If it lived inside
   // `state`, the 5-second Leaderboard refresh could fetch a slightly
@@ -1010,7 +1026,7 @@ function AppInner() {
   const lastLocalSaveAtRef = useRef(0);
   const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
-  const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval } = activeRound;
+  const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval, competitions } = activeRound;
   const isFoursomes = format === "foursomes";
   const isMatchPlay = format === "matchplay";
   const isMedal = scoring === "medal";
@@ -1510,16 +1526,19 @@ function AppInner() {
   // Sub-competitions (e.g. a seniors' trophy) — freeform, since the actual
   // trophies change through the year. Just an abbreviation + full name;
   // players get tagged with the abbreviation, same idea as the tee field.
+  // Each day keeps its own list — a new day always starts with a clean
+  // sheet, and adding, editing, or removing one here never touches any
+  // other day's competitions.
   const addCompetition = () => {
-    save((prev) => ({ competitions: [...prev.competitions, { id: crypto.randomUUID(), abbreviation: "", fullName: "" }] }));
+    updateRound((prevRound) => ({ competitions: [...prevRound.competitions, { id: crypto.randomUUID(), abbreviation: "", fullName: "" }] }));
   };
 
   const updateCompetition = (id, patch) => {
-    save((prev) => ({ competitions: prev.competitions.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+    updateRound((prevRound) => ({ competitions: prevRound.competitions.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   };
 
   const removeCompetition = (id) => {
-    save((prev) => ({ competitions: prev.competitions.filter((c) => c.id !== id) }));
+    updateRound((prevRound) => ({ competitions: prevRound.competitions.filter((c) => c.id !== id) }));
   };
 
   // ---- Society roster: a persistent list of known members, separate from
@@ -1616,17 +1635,18 @@ function AppInner() {
   };
 
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
-  // paste that isn't already in the Competitions list — so a code works
-  // the moment it appears, with no requirement to set it up first. Returns
-  // the list of genuinely new abbreviations, so the caller can tell the
-  // user what still needs a proper full name.
+  // paste that isn't already in this day's Competitions list — so a code
+  // works the moment it appears, with no requirement to set it up first.
+  // Scoped to the active round only, same as the rest of this day's
+  // competitions. Returns the list of genuinely new abbreviations, so the
+  // caller can tell the user what still needs a proper full name.
   const ensureCompetitionsExist = (abbreviations) => {
     let fresh = [];
-    save((prev) => {
-      const existing = new Set(prev.competitions.map((c) => c.abbreviation.toUpperCase()));
+    updateRound((prevRound) => {
+      const existing = new Set(prevRound.competitions.map((c) => c.abbreviation.toUpperCase()));
       fresh = [...new Set(abbreviations.map((a) => a.toUpperCase()))].filter((a) => !existing.has(a));
       if (fresh.length === 0) return {};
-      return { competitions: [...prev.competitions, ...fresh.map((abbreviation) => ({ id: crypto.randomUUID(), abbreviation, fullName: "" }))] };
+      return { competitions: [...prevRound.competitions, ...fresh.map((abbreviation) => ({ id: crypto.randomUUID(), abbreviation, fullName: "" }))] };
     });
     return fresh;
   };
@@ -1673,30 +1693,47 @@ function AppInner() {
     }));
   };
 
-  // Sets a competition tag for a whole set of players at once, everywhere
-  // each of them appears across every day — used by the bulk-tag tool.
+  // Sets a competition tag for a whole set of players at once, on THIS
+  // day only — competitions are per-day now, so a bulk-tag here should
+  // never reach into another day's players, even one with the same name.
   // Selecting someone sets the tag; leaving someone unselected clears it
   // ONLY if they currently carry this specific competition (so it never
   // touches a different tag they might already have).
   const bulkTagCompetition = (selectedNames, abbreviation) => {
     const selectedSet = new Set(selectedNames.map(normalizeName));
-    save((prev) => ({
-      rounds: prev.rounds.map((r) => ({
-        ...r,
-        players: r.players.map((p) => {
-          let patch = {};
-          if (p.name) {
-            if (selectedSet.has(normalizeName(p.name))) patch.competition = abbreviation;
-            else if (p.competition === abbreviation) patch.competition = "";
-          }
-          if (p.partnerName) {
-            if (selectedSet.has(normalizeName(p.partnerName))) patch.partnerCompetition = abbreviation;
-            else if (p.partnerCompetition === abbreviation) patch.partnerCompetition = "";
-          }
-          return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
-        }),
-      })),
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
+        let patch = {};
+        if (p.name) {
+          if (selectedSet.has(normalizeName(p.name))) patch.competition = abbreviation;
+          else if (p.competition === abbreviation) patch.competition = "";
+        }
+        if (p.partnerName) {
+          if (selectedSet.has(normalizeName(p.partnerName))) patch.partnerCompetition = abbreviation;
+          else if (p.partnerCompetition === abbreviation) patch.partnerCompetition = "";
+        }
+        return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
+      }),
     }));
+  };
+
+  // Competitions are per-day now, so a view that spans every round (the
+  // combined leaderboard, the cross-day handicap check) needs the union
+  // of every day's own list to correctly resolve any abbreviation it
+  // might encounter — deduplicated by abbreviation, keeping the first
+  // full name seen for each.
+  const allCompetitionsAcrossRounds = () => {
+    const seen = new Set();
+    const merged = [];
+    rounds.forEach((r) => {
+      (r.competitions || []).forEach((c) => {
+        const key = (c.abbreviation || "").toUpperCase();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        merged.push(c);
+      });
+    });
+    return merged;
   };
 
   // Every distinct player name across every day, each with whatever
@@ -2149,7 +2186,7 @@ function AppInner() {
           onSelectHandicap={handleHandicapTap}
         />
       ) : mode === "board" ? (
-        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
+        <Board rounds={rounds} tab={boardTab} competitions={allCompetitionsAcrossRounds()} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
       ) : mode === "draw" ? (
         // Public, like the leaderboard — no PIN needed just to see the draw.
         isMatchPlay
@@ -2164,7 +2201,7 @@ function AppInner() {
       ) : mode === "handicap" && handicapUnlocked ? (
         <HandicapCheck
           players={allPlayersAcrossRounds()}
-          competitions={competitions}
+          competitions={allCompetitionsAcrossRounds()}
           onUpdateIndexAndCompetition={updateIndexAndCompetitionEverywhere}
           onUpdateTeeForRound={updateTeeForRound}
           headerColor={headerColor}
@@ -2175,7 +2212,7 @@ function AppInner() {
         // requires scorerUnlocked — but if that state is ever false here
         // (e.g. a stale render), fall back to the board rather than
         // exposing the scorer screens.
-        <Board rounds={rounds} tab={boardTab} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
+        <Board rounds={rounds} tab={boardTab} competitions={allCompetitionsAcrossRounds()} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
       ) : active ? (
         <ScoreEntry
           course={course}
@@ -2275,11 +2312,12 @@ function AppInner() {
           onAdd={addCompetition}
           onUpdate={updateCompetition}
           onRemove={removeCompetition}
-          allPlayers={allPlayersAcrossRounds()}
+          allPlayers={players}
           onBulkTag={bulkTagCompetition}
           onBack={() => setShowCompetitionsSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
+          roundLabel={activeRound.label}
         />
       ) : showPrintLabels ? (
         <PrintLabels
@@ -5061,7 +5099,7 @@ function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, cours
   );
 }
 
-function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor }) {
+function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor, roundLabel }) {
   const [bulkTarget, setBulkTarget] = useState(""); // abbreviation being edited, or "" if none chosen
   const [selectedNames, setSelectedNames] = useState(new Set());
 
@@ -5093,12 +5131,12 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
       </button>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Competitions</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Competitions{roundLabel ? ` — ${roundLabel}` : ""}</div>
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
           Sub-competitions running alongside the main one — e.g. a seniors' trophy or a ladies' event. Give each a
           short abbreviation (matched automatically when you paste a draw with that abbreviation next to a name,
-          or add it here yourself) and a full name for display. This list is entirely separate from your course
-          data — reusing or switching a course never touches it.
+          or add it here yourself) and a full name for display. This list belongs to this day only — every day
+          keeps its own competitions, so setting these up here never changes what any other day has.
         </div>
         {competitions.map((c) => (
           <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
