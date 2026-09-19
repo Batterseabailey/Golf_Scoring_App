@@ -438,6 +438,7 @@ function emptyRound(label, course) {
     publicShowGross: true, // this day's leaderboard — gross/net/points columns
     publicShowNet: true,
     publicShowPoints: true,
+    publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
   };
 }
 
@@ -475,6 +476,7 @@ function sanitizeRound(r, fallbackLabel) {
     publicShowGross: r.publicShowGross === false ? false : true,
     publicShowNet: r.publicShowNet === false ? false : true,
     publicShowPoints: r.publicShowPoints === false ? false : true,
+    publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
   };
 }
 
@@ -2102,6 +2104,7 @@ function AppInner() {
           publicShowGross={activeRound.publicShowGross}
           publicShowNet={activeRound.publicShowNet}
           publicShowPoints={activeRound.publicShowPoints}
+          publicShowDayBoard={activeRound.publicShowDayBoard}
           onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -2494,12 +2497,14 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
 
   // "This day" is only offered when the currently-active round is a
   // scored (Individual/Foursomes) day matching the tab being viewed —
-  // Match Play days have no gross/net/points to show here at all.
+  // Match Play days have no gross/net/points to show here at all — AND
+  // the admin has explicitly switched it on for this day.
   const todayAvailable =
     activeRound &&
+    activeRound.publicShowDayBoard &&
     activeRound.format !== "matchplay" &&
     ((tab === "singles" && activeRound.format !== "foursomes") || (tab === "foursomes" && activeRound.format === "foursomes"));
-  const [viewMode, setViewMode] = useState("combined"); // combined | today
+  const [viewMode, setViewMode] = useState("today"); // combined | today — "today" is the common case; multi-day "combined" is for a later, rarer tournament format
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
@@ -2536,7 +2541,7 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
         </div>
       )}
       {todayAvailable && viewMode === "today" ? (
-        <SingleDayBoard round={activeRound} headerColor={headerColor} accentColor={accentColor} />
+        <SingleDayBoard round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : (
         <>
       {tab === "singles" && competitions.length > 0 && (
@@ -2603,23 +2608,45 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
 // column. Which columns actually show is controlled by that round's own
 // publicShowGross/Net/Points settings (set in Draw setup), same pattern
 // as the public draw-tab switches.
-function SingleDayBoard({ round, headerColor, accentColor }) {
+function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   const [search, setSearch] = useState("");
+  const [subFilter, setSubFilter] = useState(""); // competition abbreviation, or "" for all
   const [sortBy, setSortBy] = useState(round.scoring === "medal" ? "net" : "points");
   const [sortDir, setSortDir] = useState(round.scoring === "medal" ? "asc" : "desc"); // lower net is better; higher points is better
 
   const isFoursomes = round.format === "foursomes";
+  const totalHoles = round.course.holes.length;
   const effectivePlayers =
     isFoursomes && round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
 
-  const rows = effectivePlayers
+  // Which competition tags actually appear on this day's roster — only
+  // offer filter pills for ones that are actually in use here, in case
+  // a day only uses a subset of the event's overall competition list.
+  const compsInUse = [...new Set(
+    effectivePlayers.flatMap((p) => [p.competition, p.partnerCompetition]).filter(Boolean)
+  )];
+  const filteredPlayers = subFilter
+    ? effectivePlayers.filter((p) => p.competition === subFilter || p.partnerCompetition === subFilter)
+    : effectivePlayers;
+
+  const rows = filteredPlayers
     .filter((p) => p.name)
     .map((p) => {
       const t = totals(round.course, p, round.handicapAllowance, isFoursomes);
+      const complete = t.thru === totalHoles;
+      // Gross/Net are only ever shown as an actual number once every hole
+      // is in — a partial total isn't a real score to compare, so it's
+      // null for sorting purposes either way (not started or incomplete),
+      // and the display string distinguishes "–" (nothing entered yet)
+      // from "NR" (started but didn't finish — No Return). Points still
+      // show as a running total throughout, since that's the normal way
+      // to follow a Stableford leaderboard live.
       return {
         name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
-        gross: t.thru > 0 ? t.grossTotal : null,
-        net: t.thru > 0 ? t.netTotal : null,
+        gross: complete ? t.grossTotal : null,
+        net: complete ? t.netTotal : null,
+        grossDisplay: complete ? t.grossTotal : t.thru > 0 ? "NR" : "–",
+        netDisplay: complete ? t.netTotal : t.thru > 0 ? "NR" : "–",
         points: t.thru > 0 ? t.pts : null,
         thru: t.thru,
       };
@@ -2654,7 +2681,8 @@ function SingleDayBoard({ round, headerColor, accentColor }) {
   };
   const sortArrow = (field) => (sortBy === field ? (sortDir === "asc" ? " ▲" : " ▼") : "");
 
-  if (rows.length === 0) {
+  const anyPlayersAtAll = effectivePlayers.some((p) => p.name);
+  if (!anyPlayersAtAll) {
     return (
       <div style={{ padding: "40px 12px", textAlign: "center", color: "#6B6B5F" }}>
         <Flag size={28} color={accentColor} style={{ marginBottom: 10 }} />
@@ -2665,6 +2693,38 @@ function SingleDayBoard({ round, headerColor, accentColor }) {
 
   return (
     <div>
+      {compsInUse.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          <button
+            onClick={() => setSubFilter("")}
+            style={{
+              padding: "5px 11px", borderRadius: 20, fontSize: 11.5, fontWeight: 600,
+              border: `1px solid ${accentColor}`,
+              background: subFilter === "" ? accentColor : "transparent",
+              color: subFilter === "" ? "#FFFFFF" : accentColor,
+            }}
+          >
+            All
+          </button>
+          {compsInUse.map((abbr) => {
+            const full = competitions.find((c) => c.abbreviation === abbr);
+            return (
+              <button
+                key={abbr}
+                onClick={() => setSubFilter(abbr)}
+                style={{
+                  padding: "5px 11px", borderRadius: 20, fontSize: 11.5, fontWeight: 600,
+                  border: `1px solid ${accentColor}`,
+                  background: subFilter === abbr ? accentColor : "transparent",
+                  color: subFilter === abbr ? "#FFFFFF" : accentColor,
+                }}
+              >
+                {(full && full.fullName) || abbr}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -2673,7 +2733,9 @@ function SingleDayBoard({ round, headerColor, accentColor }) {
       />
       {standings.length === 0 ? (
         <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>
-          No {isFoursomes ? "pair" : "player"} matching "{search.trim()}".
+          {search.trim()
+            ? `No ${isFoursomes ? "pair" : "player"} matching "${search.trim()}".`
+            : `No ${isFoursomes ? "pair" : "player"} in this competition yet.`}
         </div>
       ) : (
       <div style={{ overflowX: "auto" }}>
@@ -2724,10 +2786,10 @@ function SingleDayBoard({ round, headerColor, accentColor }) {
               </td>
               <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
               {round.publicShowGross !== false && (
-                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.gross ?? "–"}</td>
+                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.grossDisplay}</td>
               )}
               {round.publicShowNet !== false && (
-                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.net ?? "–"}</td>
+                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.netDisplay}</td>
               )}
               {round.publicShowPoints !== false && (
                 <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13, fontWeight: 700, color: headerColor }}>{row.points ?? "–"}</td>
@@ -3082,7 +3144,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -3396,27 +3458,42 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${accentColor}`, marginBottom: 12 }}>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
-          Show on this day's leaderboard (what players see)
+          This day's leaderboard
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {[
-            { key: "gross", label: "Gross", value: publicShowGross, field: "publicShowGross" },
-            { key: "net", label: "Net", value: publicShowNet, field: "publicShowNet" },
-            { key: "points", label: "Stableford points", value: publicShowPoints, field: "publicShowPoints" },
-          ].map((sw) => (
-            <button
-              key={sw.key}
-              onClick={() => onUpdatePublicVis({ [sw.field]: !sw.value })}
-              style={{
-                flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
-                background: sw.value ? accentColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
-                fontWeight: 600, fontSize: 11.5,
-              }}
-            >
-              {sw.label}
-            </button>
-          ))}
-        </div>
+        <button
+          onClick={() => onUpdatePublicVis({ publicShowDayBoard: !publicShowDayBoard })}
+          style={{
+            width: "100%", padding: "9px 0", borderRadius: 7, border: `1px solid ${publicShowDayBoard ? accentColor : "#D8D4C0"}`,
+            background: publicShowDayBoard ? accentColor : "transparent", color: publicShowDayBoard ? "#FFFFFF" : "#9B9885",
+            fontWeight: 700, fontSize: 12.5, marginBottom: publicShowDayBoard ? 10 : 0,
+          }}
+        >
+          {publicShowDayBoard ? "Visible to players" : "Hidden from players"}
+        </button>
+        {publicShowDayBoard && (
+          <>
+            <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 8 }}>Which columns show:</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[
+                { key: "gross", label: "Gross", value: publicShowGross, field: "publicShowGross" },
+                { key: "net", label: "Net", value: publicShowNet, field: "publicShowNet" },
+                { key: "points", label: "Stableford points", value: publicShowPoints, field: "publicShowPoints" },
+              ].map((sw) => (
+                <button
+                  key={sw.key}
+                  onClick={() => onUpdatePublicVis({ [sw.field]: !sw.value })}
+                  style={{
+                    flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? accentColor : "#D8D4C0"}`,
+                    background: sw.value ? accentColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
+                    fontWeight: 600, fontSize: 11.5,
+                  }}
+                >
+                  {sw.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
