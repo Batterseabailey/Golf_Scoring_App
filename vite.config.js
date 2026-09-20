@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      injectRegister: false, // registered manually in main.jsx instead, so we can force a reload the moment a new service worker actually takes control — see the comment there for why the default injected script isn't enough on its own
       includeAssets: ["favicon.ico", "apple-touch-icon.png"],
       manifest: {
         name: "Lucifer Golfing Society",
