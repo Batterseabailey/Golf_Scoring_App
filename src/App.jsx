@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 13";
+const APP_VERSION = "20 Sep 2026 · build 14";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -85,9 +85,56 @@ function isIOSDevice() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
+// ---- Organiser access ----
+// Typing the event code with this suffix on the end (LGS2026WESB) opens
+// the very same event as the plain code (LGS2026), but marks THIS phone or
+// laptop as an organiser's device, which is what makes the Admin tab
+// appear. Everyone using the plain code never sees an Admin tab at all.
+// The device stays an organiser's device until "Hide the Admin tab on
+// this device" is tapped in Admin. The Admin PIN is still asked for —
+// the suffix only decides whether the tab is shown; the PIN remains the
+// actual lock. Change the letters here to change the suffix.
+const ADMIN_SUFFIX = "WESB";
+
+function splitAdminCode(raw) {
+  const full = sanitizeCode(raw);
+  if (ADMIN_SUFFIX && full.length > ADMIN_SUFFIX.length && full.endsWith(ADMIN_SUFFIX)) {
+    return { code: full.slice(0, -ADMIN_SUFFIX.length), admin: true };
+  }
+  return { code: full, admin: false };
+}
+
+function isAdminDevice(code) {
+  if (!code) return false;
+  try {
+    return window.localStorage.getItem(`golf-admin-device-${code}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setAdminDevice(code, on) {
+  if (!code) return;
+  try {
+    if (on) window.localStorage.setItem(`golf-admin-device-${code}`, "1");
+    else window.localStorage.removeItem(`golf-admin-device-${code}`);
+  } catch {
+    // ignore — without storage the suffix simply has to be typed each time
+  }
+}
+
 function codeFromUrl() {
   try {
-    return sanitizeCode(new URLSearchParams(window.location.search).get("code"));
+    const { code, admin } = splitAdminCode(new URLSearchParams(window.location.search).get("code"));
+    if (admin) {
+      // Remember this device, then take the suffix straight back out of
+      // the address bar so a copied or shared link never gives it away.
+      setAdminDevice(code, true);
+      const url = new URL(window.location.href);
+      url.searchParams.set("code", code);
+      window.history.replaceState(null, "", url);
+    }
+    return code;
   } catch {
     return "";
   }
@@ -1165,6 +1212,8 @@ function AppInner() {
   // nobody else can see or reach it. It seeds from a ?code= URL param so a
   // link can be pre-filled, but players can also just type it in.
   const [eventCode, setEventCode] = useState(codeFromUrl);
+  // Whether this device shows the Admin tab — see ADMIN_SUFFIX above.
+  const [adminVisible, setAdminVisible] = useState(() => isAdminDevice(codeFromUrl()));
   const eventCodeRef = useRef(eventCode);
   useEffect(() => { eventCodeRef.current = eventCode; }, [eventCode]);
 
@@ -1448,8 +1497,10 @@ function AppInner() {
   }, [eventCode]);
 
   const enterEventCode = (raw) => {
-    const code = sanitizeCode(raw);
+    const { code, admin } = splitAdminCode(raw);
     if (!code) return;
+    if (admin) setAdminDevice(code, true);
+    setAdminVisible(admin || isAdminDevice(code));
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("code", code);
@@ -2316,6 +2367,7 @@ function AppInner() {
   const setActiveRound = (roundId) => setLocalActiveRoundId(roundId);
 
   const handleScorerTap = () => {
+    if (!adminVisible) return;
     if (scorerUnlocked) {
       setMode("scorer");
     } else {
@@ -2487,6 +2539,7 @@ function AppInner() {
           >
             Your Handicap
           </button>
+          {adminVisible && (
           <button
             onClick={handleScorerTap}
             style={{
@@ -2498,6 +2551,7 @@ function AppInner() {
           >
             Admin
           </button>
+          )}
         </div>
       </div>
 
@@ -2776,6 +2830,7 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
           onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onHideAdmin={() => { setAdminDevice(eventCode, false); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -6350,7 +6405,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock, onHideAdmin }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -6506,6 +6561,15 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
         <span style={{ flex: 1, textAlign: "left" }}>Print the leaderboard</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
+
+      <div style={{ textAlign: "center", marginTop: 16 }}>
+        <button
+          onClick={onHideAdmin}
+          style={{ background: "none", border: "none", color: "#8A8774", fontSize: 11.5, textDecoration: "underline", padding: 0 }}
+        >
+          Hide the Admin tab on this device
+        </button>
+      </div>
 
       <div className="mono" style={{ textAlign: "center", fontSize: 10.5, color: "#9B9885", marginTop: 14 }}>
         App version: {APP_VERSION}
