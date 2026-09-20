@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 16";
+const APP_VERSION = "20 Sep 2026 · build 17";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -1660,9 +1660,21 @@ function AppInner() {
   useEffect(() => {
     // The leaderboard refreshes itself — and so does the players' "Enter
     // scores" screen, so everyone sees which cards are done or in hand.
-    if (mode !== "board" && mode !== "entry") return;
-    pollRef.current = setInterval(load, 5000);
-    return () => clearInterval(pollRef.current);
+    // Every other public screen (Menu, Draw, Local rules, Information)
+    // refreshes too, just less often — so something Admin switches on,
+    // like players' score entry or a changed draw, reaches a phone that's
+    // simply sitting open, without the app having to be reopened. Admin
+    // and the handicap screen are left alone so nothing moves mid-edit.
+    if (mode === "scorer" || mode === "handicap") return;
+    const every = mode === "board" || mode === "entry" ? 5000 : 20000;
+    pollRef.current = setInterval(load, every);
+    // ...and straight away whenever the app is brought back to the front.
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [mode, load]);
 
   // Leaving the score screens lets go of whichever card was open.
