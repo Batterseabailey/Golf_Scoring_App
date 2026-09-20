@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 18";
+const APP_VERSION = "20 Sep 2026 · build 19";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -5421,9 +5421,10 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
                 {c.title.split(" & ").map((name, i) => (
                   <React.Fragment key={i}>
                     {i > 0 ? " & " : ""}
-                    {/* Ladies (marked "L" in the Society roster) print in red,
-                        so their cards are easy to pick out of the pile. */}
-                    <span style={isLadyName(name) ? { color: "#C00000", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" } : undefined}>{name}</span>
+                    {/* Ladies (marked "L" in the Society roster) print in red and
+                        the men in dark blue, both bold, so the cards are easy
+                        to sort at a glance. */}
+                    <span style={{ color: isLadyName(name) ? "#C00000" : "#14275A", fontWeight: 800, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{name}</span>
                   </React.Fragment>
                 ))}
               </div>
