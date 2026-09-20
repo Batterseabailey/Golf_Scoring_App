@@ -1638,7 +1638,11 @@ function AppInner() {
   };
 
   const updateScore = (id, holeIdx, val) => {
-    const clean = val === "" ? "" : Math.max(0, Math.min(15, Number(val)));
+    // No upper limit on a hole's score — whatever is on the card goes in
+    // (e.g. a 9, or whatever maximum applies that day). Only guards
+    // against a negative or non-numeric entry.
+    const num = Number(val);
+    const clean = val === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
     updateRound({
       players: players.map((p) =>
         p.id === id
@@ -6536,10 +6540,11 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const strokeHoles = course.holes.map((h, i) => strokesOnHole(course, ph, i)).map((s, i) => ({ hole: i + 1, strokes: s })).filter((h) => h.strokes > 0);
   const inputRefs = useRef({});
   const timers = useRef({});
+  const [confirmClearScores, setConfirmClearScores] = useState(false);
 
   // Auto-advance to the next hole once a score looks "finished" — instantly
   // for single-digit scores that can't extend to two digits (2-9), after a
-  // brief pause for scores starting "1" (which might become 10-15), and
+  // brief pause for scores starting "1" (which might become 10 or more), and
   // immediately on Enter/Return regardless.
   useEffect(() => {
     return () => Object.values(timers.current).forEach(clearTimeout);
@@ -6760,6 +6765,60 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       {nine(IN)}
 
       {(() => {
+        // Card totals — Out / In / Total for gross, net and Stableford
+        // points — so the card can be checked against the signed paper
+        // one at a glance before pressing COMPLETE. Only counts holes
+        // that actually have a score in them.
+        const sumFor = (holes) => {
+          let gross = 0, net = 0, points = 0, played = 0;
+          holes.forEach((h) => {
+            const idx = h - 1;
+            const v = Array.isArray(player.scores) ? player.scores[idx] : "";
+            if (v === "" || v == null) return;
+            played += 1;
+            gross += Number(v);
+            net += Number(v) - strokesOnHole(course, ph, idx);
+            points += holePoints(course, v, idx, ph) || 0;
+          });
+          return { gross, net, points, played };
+        };
+        const out = sumFor(OUT), inn = sumFor(IN);
+        const all = { gross: out.gross + inn.gross, net: out.net + inn.net, points: out.points + inn.points, played: out.played + inn.played };
+        const show = (part, field) => (part.played > 0 ? part[field] : "–");
+        const cell = { textAlign: "right", padding: "7px 10px", fontSize: 14 };
+        const head = { textAlign: "right", padding: "6px 10px", fontSize: 10.5, color: "#8A8774", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+        const rowLabel = { textAlign: "left", padding: "7px 10px", fontSize: 13, fontWeight: 700 };
+        return (
+          <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", marginTop: 6, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: `${headerColor}12` }}>
+                  <th style={{ ...head, textAlign: "left" }}>{all.played === 18 ? "Card totals" : `Thru ${all.played} of 18`}</th>
+                  <th style={head}>Out</th>
+                  <th style={head}>In</th>
+                  <th style={{ ...head, color: headerColor }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { label: "Gross", field: "gross" },
+                  { label: "Net", field: "net" },
+                  { label: "Points", field: "points" },
+                ].map((r) => (
+                  <tr key={r.field} style={{ borderTop: "1px solid #EFEDE0" }}>
+                    <td style={rowLabel}>{r.label}</td>
+                    <td className="mono" style={cell}>{show(out, r.field)}</td>
+                    <td className="mono" style={cell}>{show(inn, r.field)}</td>
+                    <td className="mono" style={{ ...cell, fontWeight: 800, fontSize: 16, color: headerColor }}>{show(all, r.field)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+
+      {(() => {
         const entered = (Array.isArray(player.scores) ? player.scores : []).filter((v) => v !== "" && v != null).length;
         const complete = isScoreComplete(player) && entered > 0;
         if (complete) {
@@ -6799,6 +6858,48 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </div>
         );
       })()}
+
+      {/* For when scores have gone onto the wrong player's card: wipes
+          all 18 holes and takes the card back off the leaderboard. Asks
+          first, since it can't be undone. */}
+      {(Array.isArray(player.scores) ? player.scores : []).some((v) => v !== "" && v != null) && (
+        <div style={{ marginTop: 18, textAlign: "center" }}>
+          {confirmClearScores ? (
+            <div style={{ background: "#FDF2EF", border: "1px solid #B5442E", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#B5442E", marginBottom: 10 }}>
+                Remove all scores for {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name || "this player"}?
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => {
+                    Object.values(timers.current).forEach(clearTimeout);
+                    onUpdate({ scores: Array(18).fill(""), scoresComplete: false });
+                    setConfirmClearScores(false);
+                    const first = inputRefs.current[0];
+                    if (first) first.focus();
+                  }}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: "#B5442E", color: "#FFFFFF", fontWeight: 700, fontSize: 13 }}
+                >
+                  Yes, clear them
+                </button>
+                <button
+                  onClick={() => setConfirmClearScores(false)}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F", fontWeight: 600, fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmClearScores(true)}
+              style={{ padding: "9px 16px", borderRadius: 8, border: "1px solid #B5442E", background: "transparent", color: "#B5442E", fontWeight: 600, fontSize: 12.5 }}
+            >
+              Clear all scores and start again
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
