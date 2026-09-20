@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 12";
+const APP_VERSION = "20 Sep 2026 · build 13";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -5213,6 +5213,18 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
 // of players each with their own tee time and playing partners. Shows
 // the same handicap/tee/competition details as the public Draw tab, so
 // paper and phone always agree.
+// The society's name at the head of every printed sheet (draw and
+// leaderboard): large, bold serif capitals in dark blue with a rule
+// beneath, so it reads as the masthead rather than a small caption.
+// Text colour prints reliably — unlike backgrounds, which browsers drop
+// unless "Background graphics" is ticked.
+const PRINT_ORG_NAME_STYLE = {
+  fontFamily: '"Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif',
+  fontSize: 26, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+  color: "#14275A", lineHeight: 1.15, paddingBottom: 5, marginBottom: 8, borderBottom: "3px solid #14275A",
+  WebkitPrintColorAdjust: "exact", printColorAdjust: "exact",
+};
+
 // Printable leaderboard, reached from Admin. Two views: the selected
 // day on its own (gross / net / points) or the running total across all
 // days of the same format. Only cards that have been marked COMPLETE
@@ -5378,7 +5390,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
           {sections.map((sec, secIdx) => (
             <div key={sec.key} className={secIdx > 0 ? "print-newpage" : ""} style={{ marginTop: secIdx > 0 ? 28 : 0 }}>
           <div style={{ marginBottom: 10 }}>
-            {orgName && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>{orgName}</div>}
+            {orgName && <div style={PRINT_ORG_NAME_STYLE}>{orgName}</div>}
             <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>
               {view === "day" ? `${activeRound.label} — Leaderboard` : `Overall Leaderboard${isFoursomes ? " — Foursomes" : ""}`}
               {sec.heading ? ` — ${sec.heading}` : ""}
@@ -5479,7 +5491,7 @@ function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visO
 
   const sheetHeader = (subtitle) => (
     <div style={{ marginBottom: 10 }}>
-      {orgName && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>{orgName}</div>}
+      {orgName && <div style={PRINT_ORG_NAME_STYLE}>{orgName}</div>}
       <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>{roundLabel} — {subtitle}</div>
       <div style={{ fontSize: 13, marginTop: 2 }}>
         {[course.name, roundDateDisplay, startingHole && startingHole.trim() ? `Starting from the ${startingHole} tee` : ""].filter(Boolean).join("  ·  ")}
