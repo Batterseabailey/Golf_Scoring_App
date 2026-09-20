@@ -533,6 +533,97 @@ function formatDisplayDateLong(dateStr) {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
 
+// ---- Three-way merge, used only when two devices saved at the same time ----
+// base   = the last version this device knows the server had
+// mine   = this device's current data (base + whatever was just changed here)
+// theirs = what's actually on the server now (base + someone else's changes)
+// The result keeps BOTH sets of changes. Only when both devices changed the
+// very same value (e.g. the same player's score on the same hole) does one
+// have to win — and that's this device's, since it's the most recent action.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if (!Object.prototype.hasOwnProperty.call(b, k) || !deepEqual(a[k], b[k])) return false;
+  return true;
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isKeyedList = (v) => Array.isArray(v) && v.every((x) => isPlainObject(x) && typeof x.id === "string" && x.id);
+const isPrimitiveList = (v) => Array.isArray(v) && v.every((x) => x === null || typeof x !== "object");
+
+function merge3(base, mine, theirs) {
+  if (deepEqual(mine, theirs)) return mine;
+  if (deepEqual(mine, base)) return theirs; // only they changed it
+  if (deepEqual(theirs, base)) return mine; // only I changed it
+
+  // Both changed it — try to combine at a finer grain.
+  if (isPlainObject(mine) && isPlainObject(theirs)) {
+    const b = isPlainObject(base) ? base : {};
+    const out = {};
+    const keys = new Set([...Object.keys(theirs), ...Object.keys(mine)]);
+    for (const k of keys) {
+      const inMine = Object.prototype.hasOwnProperty.call(mine, k);
+      const inTheirs = Object.prototype.hasOwnProperty.call(theirs, k);
+      if (inMine && inTheirs) out[k] = merge3(b[k], mine[k], theirs[k]);
+      else if (inMine) out[k] = mine[k];
+      else out[k] = theirs[k];
+    }
+    return out;
+  }
+
+  // Lists of records that each carry an id (rounds, players, matches,
+  // competitions, documents, roster) — merge record by record.
+  if (isKeyedList(mine) && isKeyedList(theirs) && (mine.length > 0 || theirs.length > 0)) {
+    const b = isKeyedList(base) ? base : [];
+    const baseById = new Map(b.map((x) => [x.id, x]));
+    const mineById = new Map(mine.map((x) => [x.id, x]));
+    const theirsById = new Map(theirs.map((x) => [x.id, x]));
+    const out = [];
+    const seen = new Set();
+    const consider = (id) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const bi = baseById.get(id);
+      const mi = mineById.get(id);
+      const ti = theirsById.get(id);
+      if (mi && ti) out.push(merge3(bi, mi, ti));
+      else if (mi && !ti) {
+        // They removed it (or never had it). Keep it if it's new here, or
+        // if I changed it since — never silently drop an edit.
+        if (!bi || !deepEqual(mi, bi)) out.push(mi);
+      } else if (ti && !mi) {
+        if (!bi || !deepEqual(ti, bi)) out.push(ti);
+      }
+    };
+    // Keep the order of whichever side reordered/added; default to mine.
+    const mineOrderChanged = !deepEqual(mine.map((x) => x.id), b.map((x) => x.id));
+    const first = mineOrderChanged ? mine : theirs;
+    const second = mineOrderChanged ? theirs : mine;
+    first.forEach((x) => consider(x.id));
+    second.forEach((x) => consider(x.id));
+    return out;
+  }
+
+  // Fixed-length lists of plain values (a player's 18 hole scores, a draw
+  // row's 4 slots) — merge position by position.
+  if (isPrimitiveList(mine) && isPrimitiveList(theirs) && mine.length === theirs.length) {
+    const b = isPrimitiveList(base) && base.length === mine.length ? base : null;
+    if (b) return mine.map((v, i) => (v !== b[i] ? v : theirs[i]));
+  }
+
+  // Genuinely the same value changed on both sides — most recent action wins.
+  return mine;
+}
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
@@ -1060,6 +1151,22 @@ function AppInner() {
   // silently overwrite a genuinely newer local change with a stale
   // server copy.
   const lastLocalSaveAtRef = useRef(0);
+  // ---- Multi-device save safety ----
+  // stateRef always holds this device's latest data, updated the instant a
+  // change is made (React's own state can lag by a render). syncedRef holds
+  // the last version this device KNOWS the server has, plus its version
+  // marker (etag). Every save sends that marker; if another device has
+  // saved in the meantime the server refuses, and we fetch their version,
+  // merge our change into it, and send again — so nobody's scores or edits
+  // are ever overwritten by someone else's older copy.
+  const stateRef = useRef(DEFAULT_STATE);
+  const syncedRef = useRef({ state: DEFAULT_STATE, etag: null });
+  const dirtyRef = useRef(false);
+  const pumpingRef = useRef(false);
+  const applyState = useCallback((next) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
   const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval, competitions } = activeRound;
@@ -1106,38 +1213,137 @@ function AppInner() {
   const load = useCallback(async () => {
     const code = eventCodeRef.current;
     if (!code) return;
+    // True when it's unsafe to replace what's on screen with a server copy.
+    const busy = () =>
+      modeRef.current === "scorer" ||
+      dirtyRef.current ||
+      pumpingRef.current ||
+      Date.now() - lastLocalSaveAtRef.current < 4000 ||
+      eventCodeRef.current !== code;
     try {
       const res = await window.storage.get(storageKeyFor(code), true);
       // Only skip applying a refresh while actively in the scorer screens
       // (Admin) — that's the one place a background update could yank the
-      // screen out from under someone mid-edit. Every other screen,
-      // including the very first load right after entering an event code,
-      // should always get the real data.
-      if (modeRef.current === "scorer") return;
-      // Also skip it for a few seconds right after this device's own
-      // save — the write and this poll's read can otherwise race, and a
-      // fetch that lands a moment before that write has fully propagated
-      // would silently undo a genuinely newer local change. A brief
-      // window is enough for the backend to catch up without meaningfully
-      // delaying real updates from other devices.
-      if (Date.now() - lastLocalSaveAtRef.current < 4000) return;
+      // screen out from under someone mid-edit — or while this device has
+      // a change of its own still on its way to the server (including the
+      // few seconds right after a save, when a read can lag the write).
+      // Every other screen, including the very first load right after
+      // entering an event code, should always get the real data. Anything
+      // skipped here isn't lost: the save path merges it in (see pump).
+      if (busy()) return;
       const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
-      setState(loaded);
+      syncedRef.current = { state: loaded, etag: res ? res.etag || null : "new" };
+      applyState(loaded);
       if (!hasSeededActiveRoundRef.current) {
         setLocalActiveRoundId(defaultRoundIdFor(loaded.rounds, loaded.activeRoundId));
         hasSeededActiveRoundRef.current = true;
       }
       setLive(true);
     } catch (err) {
-      if (modeRef.current === "scorer") return;
+      if (busy()) return;
       if (String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404")) {
-        setState(DEFAULT_STATE);
+        syncedRef.current = { state: DEFAULT_STATE, etag: "new" };
+        applyState(DEFAULT_STATE);
       }
       setLive(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyState]);
+
+  // Sends this device's latest data to the server — one request at a time,
+  // always carrying the version marker of the copy it was based on.
+  const pump = useCallback(async () => {
+    if (pumpingRef.current) return;
+    pumpingRef.current = true;
+    const code = eventCodeRef.current;
+    const key = storageKeyFor(code);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Reads the server's current copy -> { state, etag } ("new" if none yet)
+    const fetchTheirs = async () => {
+      try {
+        const res = await window.storage.get(key, true);
+        return { state: sanitizeState(JSON.parse(res.value)), etag: res.etag || null };
+      } catch (err) {
+        const msg = String(err).toLowerCase();
+        if (msg.includes("not found") || msg.includes("404")) return { state: DEFAULT_STATE, etag: "new" };
+        throw err;
+      }
+    };
+    let failures = 0;
+    try {
+      while (dirtyRef.current && eventCodeRef.current === code) {
+        dirtyRef.current = false;
+        const mine = stateRef.current;
+        try {
+          // Older storage helper without safe saves — behave as before.
+          if (typeof window.storage.setIfMatch !== "function") {
+            await window.storage.set(key, JSON.stringify(mine), true);
+            syncedRef.current = { state: mine, etag: null };
+            setSyncError(false);
+            continue;
+          }
+          // No version marker yet (e.g. the very first load never landed):
+          // find out what the server has before sending anything.
+          if (!syncedRef.current.etag) {
+            const theirs = await fetchTheirs();
+            if (eventCodeRef.current !== code) return;
+            if (!theirs.etag) {
+              // Server can't supply version markers — plain save, as before.
+              await window.storage.set(key, JSON.stringify(mine), true);
+              syncedRef.current = { state: mine, etag: null };
+              setSyncError(false);
+              continue;
+            }
+            const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+            syncedRef.current = theirs;
+            applyState(merged);
+            dirtyRef.current = true;
+            continue;
+          }
+          const sentEtag = syncedRef.current.etag;
+          const result = await window.storage.setIfMatch(key, JSON.stringify(mine), sentEtag);
+          if (eventCodeRef.current !== code) return;
+          if (result.ok) {
+            syncedRef.current = { state: mine, etag: result.etag };
+            lastLocalSaveAtRef.current = Date.now();
+            failures = 0;
+            setSyncError(false);
+            continue;
+          }
+          // Refused: another device saved since our copy was loaded. Get
+          // their version and fold this device's changes into it.
+          const theirs = await fetchTheirs();
+          if (eventCodeRef.current !== code) return;
+          dirtyRef.current = true;
+          if (!theirs.etag || theirs.etag === sentEtag) {
+            // The read hasn't caught up with their save yet — it handed
+            // back the same version we already had. Wait and try again.
+            failures += 1;
+            if (failures > 12) throw new Error("Could not get an up-to-date copy");
+            await wait(Math.min(1000 * failures, 6000));
+            continue;
+          }
+          const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+          syncedRef.current = theirs;
+          applyState(merged);
+        } catch (err) {
+          // Offline / server error — keep the change, show the warning,
+          // and keep retrying in the background with growing gaps.
+          dirtyRef.current = true;
+          failures += 1;
+          setSyncError(true);
+          if (failures > 12) return; // give up for now; the next change restarts it
+          await wait(Math.min(1500 * failures, 10000));
+        }
+      }
+    } finally {
+      pumpingRef.current = false;
+      // A change may have landed in the instant between the loop ending
+      // and the flag clearing — make sure it isn't left behind.
+      if (dirtyRef.current && failures <= 12) pump();
+    }
+  }, [applyState]);
 
   // patch is a partial update — e.g. save({ players: next }) or
   // save({ course: nextCourse }) — merged onto the latest state via the
@@ -1146,28 +1352,24 @@ function AppInner() {
   const save = useCallback((patch) => {
     const code = eventCodeRef.current;
     if (!code) return;
-    setState((prev) => {
-      // Accepting a function here (rather than only a plain object) means
-      // the patch is computed from the ACTUAL latest state at the moment
-      // this update applies, not from whatever "rounds"/"players" closure
-      // variable happened to be captured back when the click handler that
-      // triggered this call was created. Two updates fired in quick
-      // succession — e.g. tapping two switches back-to-back, before React
-      // has re-rendered in between — would otherwise each build their
-      // patch from the SAME pre-update snapshot, and the second call's
-      // save would silently overwrite (undo) the first's, since both
-      // "start from" the same old data. Passing a function closes that
-      // gap entirely, for every caller, rather than requiring each one to
-      // be manually combined into a single call.
-      const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
-      const next = { ...prev, ...resolvedPatch };
-      lastLocalSaveAtRef.current = Date.now();
-      window.storage.set(storageKeyFor(code), JSON.stringify(next), true)
-        .then(() => setSyncError(false))
-        .catch(() => setSyncError(true));
-      return next;
-    });
-  }, []);
+    // Accepting a function here (rather than only a plain object) means
+    // the patch is computed from the ACTUAL latest state at the moment
+    // this update applies, not from whatever "rounds"/"players" closure
+    // variable happened to be captured back when the click handler that
+    // triggered this call was created. Two updates fired in quick
+    // succession — e.g. tapping two switches back-to-back, before React
+    // has re-rendered in between — would otherwise each build their
+    // patch from the SAME pre-update snapshot, and the second call's
+    // save would silently overwrite (undo) the first's. stateRef is
+    // updated synchronously right here, so that can't happen.
+    const prev = stateRef.current;
+    const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
+    const next = { ...prev, ...resolvedPatch };
+    lastLocalSaveAtRef.current = Date.now();
+    applyState(next);
+    dirtyRef.current = true;
+    pump();
+  }, [applyState, pump]);
 
   // Switching event code means switching to a completely different data
   // set — reset everything local before the new code's load() runs, so
@@ -1175,7 +1377,9 @@ function AppInner() {
   useEffect(() => {
     if (!eventCode) return;
     setLoading(true);
-    setState(DEFAULT_STATE);
+    applyState(DEFAULT_STATE);
+    syncedRef.current = { state: DEFAULT_STATE, etag: null };
+    dirtyRef.current = false;
     setLocalActiveRoundId(null);
     hasSeededActiveRoundRef.current = false;
     setActiveId(null);
