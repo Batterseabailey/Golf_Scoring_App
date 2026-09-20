@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 27";
+const APP_VERSION = "20 Sep 2026 · build 28";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1866,6 +1866,12 @@ function AppInner() {
   // somebody else's card.
   const updatePlayer = (id, patch) => {
     updateRound((prevRound) => ({ players: prevRound.players.map((p) => (p.id === id ? { ...p, ...patch } : p)) }), { immediate: true });
+    if ("index" in patch || "partnerIndex" in patch) {
+      const round = stateRef.current.rounds.find((r) => r.id === activeRoundId);
+      const card = round && round.players.find((p) => p.id === id);
+      if (card && "index" in patch) syncIndexElsewhere(card.name, patch.index);
+      if (card && "partnerIndex" in patch) syncIndexElsewhere(card.partnerName, patch.partnerIndex);
+    }
   };
 
   // ---- Card locks (see ENTRY_LOCK_MS above) ----
@@ -1909,28 +1915,66 @@ function AppInner() {
   // Lets a handicap be edited straight from the draw builder — looks up
   // whoever has this name, whether they're currently a primary roster
   // entry or stored as someone's partner, and updates the right field.
+  // A player's handicap index is kept in more than one place: on each
+  // day's own list, and in the Society roster (which is where "Add from
+  // society roster" copies it from). Changing it on one day used to leave
+  // the other copies alone — so an old figure kept coming back whenever
+  // the player was re-added from the roster, or when looking at another
+  // day. Now a change made on any day is also written to:
+  //   • the Society roster, and
+  //   • every OTHER day on which that player has no scores entered yet.
+  // A day that already has scores for them is deliberately left alone, so
+  // correcting a handicap later can never quietly rewrite a finished result.
+  const syncIndexElsewhere = (name, newIndex) => {
+    const target = normalizeName(name);
+    if (!target) return;
+    save((prev) => ({
+      societyRoster: prev.societyRoster.map((m) => (normalizeName(m.name) === target ? { ...m, index: newIndex } : m)),
+      rounds: prev.rounds.map((r) => {
+        if (r.id === activeRoundId) return r;
+        return {
+          ...r,
+          players: r.players.map((p) => {
+            const played = (p.scores || []).some((v) => v !== "" && v != null);
+            if (played) return p;
+            if (normalizeName(p.name) === target) return { ...p, index: newIndex };
+            if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex };
+            return p;
+          }),
+        };
+      }),
+    }));
+  };
+
   const updatePlayerIndexByName = (name, newIndex) => {
-    const target = (name || "").trim().toLowerCase();
-    updateRound({
-      players: players.map((p) => {
-        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex };
-        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex };
+    const target = normalizeName(name);
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
+        if (normalizeName(p.name) === target) return { ...p, index: newIndex };
+        if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex };
         return p;
       }),
-    });
+    }));
+    syncIndexElsewhere(name, newIndex);
   };
 
   // Updates both handicap and tee for whoever matches this name in one
   // write — used by the draw's slot editor, which edits both at once.
   const updatePlayerDetailsByName = (name, newIndex, newTee, newCompetition) => {
-    const target = (name || "").trim().toLowerCase();
+    // Matched with the same forgiving comparison used to FIND the player
+    // (ignores capitals and stray double spaces). It used to use a
+    // stricter one — so for a name stored with, say, a double space, the
+    // pop-up showed the player but the save matched nobody and silently
+    // did nothing, and the old handicap "came back".
+    const target = normalizeName(name);
     updateRound((prevRound) => ({
       players: prevRound.players.map((p) => {
-        if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
-        if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
+        if (normalizeName(p.name) === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
+        if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
         return p;
       }),
     }));
+    syncIndexElsewhere(name, newIndex);
   };
 
   const updateScore = (id, holeIdx, val) => {
@@ -2252,6 +2296,7 @@ function AppInner() {
   const updateIndexAndCompetitionEverywhere = (name, newIndex, newCompetition) => {
     const target = normalizeName(name);
     save((prev) => ({
+      societyRoster: prev.societyRoster.map((m) => (normalizeName(m.name) === target ? { ...m, index: newIndex } : m)),
       rounds: prev.rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
@@ -2385,6 +2430,17 @@ function AppInner() {
     // same starting snapshot of players, and written in a single update —
     // doing this as separate save() calls previously meant a later one
     // could work from stale data and silently undo an earlier one.
+    //
+    // It all happens inside save(), working from the LATEST saved list of
+    // players rather than the copy this screen was drawn with. The Build
+    // tab's auto-save fires a couple of seconds after a change, and by
+    // then its copy could be out of date — it would then write back a
+    // handicap, tee or adjustment that had just been corrected.
+    save((prev) => {
+    const liveRound = prev.rounds.find((r) => r.id === activeRoundId);
+    const players = liveRound ? liveRound.players : [];
+    const course = liveRound ? liveRound.course : activeRound.course;
+    const isFoursomes = liveRound ? liveRound.format === "foursomes" : false;
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     const namesInThisPaste = newDraw.flatMap((entry) => entry.players || []);
@@ -2417,7 +2473,7 @@ function AppInner() {
     // checked against the individual (pre-pairing) list, since the roster
     // holds individuals even on a Foursomes day — so it builds itself up
     // over time rather than needing separate upkeep.
-    save((prev) => {
+    {
       const existingRosterNames = new Set(prev.societyRoster.map((m) => normalizeName(m.name)));
       const newRosterMembers = cleanedDrawPlayers
         .filter((p) => p.name && !existingRosterNames.has(normalizeName(p.name)))
@@ -2426,6 +2482,7 @@ function AppInner() {
         rounds: prev.rounds.map((r) => (r.id === activeRoundId ? { ...r, draw: newDraw, players: finalPlayers } : r)),
         societyRoster: newRosterMembers.length > 0 ? [...prev.societyRoster, ...newRosterMembers] : prev.societyRoster,
       };
+    }
     });
   };
 
