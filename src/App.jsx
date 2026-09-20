@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 17";
+const APP_VERSION = "20 Sep 2026 · build 18";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -2943,6 +2943,7 @@ function AppInner() {
         />
       ) : showPrintLabels ? (
         <PrintLabels
+          societyRoster={societyRoster}
           course={course}
           players={players}
           draw={draw}
@@ -5307,7 +5308,7 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
-function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
+function PrintLabels({ societyRoster = [], course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
       .map((h, i) => strokesOnHole(course, ph, i))
@@ -5380,6 +5381,8 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
     });
 
   const sheets = Math.ceil(cards.length / 18);
+  const ladyNames = new Set(societyRoster.filter((m) => m.isLady).map((m) => normalizeName(m.name)));
+  const isLadyName = (name) => ladyNames.has(normalizeName(name));
 
   return (
     <div style={{ padding: "12px 14px 40px" }}>
@@ -5414,7 +5417,16 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
               <div className="label-meta">
                 {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
               </div>
-              <div className="label-name">{c.title}</div>
+              <div className="label-name">
+                {c.title.split(" & ").map((name, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 ? " & " : ""}
+                    {/* Ladies (marked "L" in the Society roster) print in red,
+                        so their cards are easy to pick out of the pile. */}
+                    <span style={isLadyName(name) ? { color: "#C00000", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" } : undefined}>{name}</span>
+                  </React.Fragment>
+                ))}
+              </div>
               {c.partners.length > 0 && (
                 <div className="label-partners">({c.partners.join(", ")})</div>
               )}
