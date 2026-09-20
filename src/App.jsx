@@ -1594,9 +1594,16 @@ function AppInner() {
     const compMap = new Map((compPairs || []).map(({ name, abbreviation }) => [normalizeName(name), abbreviation]));
     const pasteSet = new Set((namesInThisPaste || []).map(normalizeName));
     return currentPlayers.map((p) => {
+      // On a Foursomes day one record holds two people, each with their
+      // own tag — so the partner's half is updated too, not just the
+      // first-named player's. (Previously only the first name was, so a
+      // partner's competition from a re-upload was silently dropped.)
+      const patch = {};
       const target = normalizeName(p.name);
-      if (!pasteSet.has(target)) return p;
-      return { ...p, competition: compMap.get(target) || "" };
+      if (target && pasteSet.has(target)) patch.competition = compMap.get(target) || "";
+      const partnerTarget = normalizeName(p.partnerName);
+      if (partnerTarget && pasteSet.has(partnerTarget)) patch.partnerCompetition = compMap.get(partnerTarget) || "";
+      return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
     });
   };
 
@@ -2090,7 +2097,16 @@ function AppInner() {
     const withHandicaps = mergeHandicapsIntoPlayers(players, hcpPairs);
     const withTees = mergeTeesIntoPlayers(withHandicaps, teePairs);
     const namesInThisPaste = newDraw.flatMap((entry) => entry.players || []);
-    const withComps = mergeCompetitionsIntoPlayers(withTees, compPairs, namesInThisPaste);
+    // Competition tags are only rewritten when this really IS a paste/CSV
+    // import (which always passes a compPairs list, even an empty one).
+    // Every other save of the draw — the Build tab's Save button and its
+    // auto-save, removing a tee time — passes nothing here, and must leave
+    // everyone's tags alone. It used to be treated as "a paste that
+    // mentions no competitions", which wiped every tagged player in the
+    // draw a couple of seconds after the Build tab was opened.
+    const withComps = Array.isArray(compPairs)
+      ? mergeCompetitionsIntoPlayers(withTees, compPairs, namesInThisPaste)
+      : withTees;
     const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
     // On a Singles day, strip any partner fields that might be lingering
     // on a player's record — e.g. leftover from a day that was briefly,
