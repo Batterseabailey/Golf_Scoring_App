@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 10";
+const APP_VERSION = "20 Sep 2026 · build 12";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -1236,6 +1236,7 @@ function AppInner() {
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
   const [showPrintDraw, setShowPrintDraw] = useState(false);
+  const [showPrintBoard, setShowPrintBoard] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
   const [showSocietyRoster, setShowSocietyRoster] = useState(false);
   const [showMatchesSetup, setShowMatchesSetup] = useState(false);
@@ -2648,6 +2649,15 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
+      ) : showPrintBoard ? (
+        <PrintLeaderboard
+          rounds={rounds}
+          activeRound={activeRound}
+          competitions={allCompetitionsAcrossRounds()}
+          orgName={state.orgName}
+          onBack={() => setShowPrintBoard(false)}
+          headerColor={headerColor}
+        />
       ) : showPrintDraw ? (
         <PrintDraw
           draw={draw}
@@ -2762,9 +2772,10 @@ function AppInner() {
           onOpenSocietyRoster={() => setShowSocietyRoster(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
           onOpenPrintDraw={() => setShowPrintDraw(true)}
+          onOpenPrintBoard={() => setShowPrintBoard(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -5202,6 +5213,253 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
 // of players each with their own tee time and playing partners. Shows
 // the same handicap/tee/competition details as the public Draw tab, so
 // paper and phone always agree.
+// Printable leaderboard, reached from Admin. Two views: the selected
+// day on its own (gross / net / points) or the running total across all
+// days of the same format. Only cards that have been marked COMPLETE
+// count, exactly as on the live leaderboard, so paper and phone agree.
+function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, headerColor, initialFilter = "" }) {
+  const isFoursomes = activeRound.format === "foursomes";
+  const isMatchPlay = activeRound.format === "matchplay";
+  const isMedal = activeRound.scoring === "medal";
+  const [view, setView] = useState("day"); // day | overall
+  const [compFilter, setCompFilter] = useState(initialFilter);
+  const [cols, setCols] = useState({ gross: true, net: true, points: true });
+
+  const sameFormatRounds = rounds.filter((r) => r.format !== "matchplay" && (r.format === "foursomes") === isFoursomes);
+
+  const compName = (abbr) => { const c = competitions.find((x) => x.abbreviation === abbr); return (c && c.fullName) || abbr; };
+
+  // ---- This day ----
+  const dayPlayers = (isFoursomes && activeRound.draw.length > 0
+    ? mergedPairsFromDraw(activeRound.players, activeRound.draw, activeRound.course)
+    : activeRound.players
+  ).filter((p) => p.name);
+  const compsInUse = [...new Set(dayPlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean))];
+  const totalHoles = activeRound.course.holes.length;
+  // filter: "" = everyone, an abbreviation = that competition only,
+  // "__none__" = players not tagged into any competition.
+  const inFilter = (p, filter) => {
+    if (!filter) return true;
+    if (filter === "__none__") return !p.competition && !(p.partnerName && p.partnerCompetition);
+    return p.competition === filter || (p.partnerName && p.partnerCompetition === filter);
+  };
+  const dayRowsFor = (filter) => dayPlayers
+    .filter((p) => inFilter(p, filter))
+    .map((p) => {
+      const t = totals(activeRound.course, forLeaderboard(p), activeRound.handicapAllowance, isFoursomes);
+      const complete = t.thru === totalHoles;
+      return {
+        name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+        ph: t.ph,
+        thru: t.thru,
+        gross: complete ? t.grossTotal : null,
+        net: complete ? t.netTotal : null,
+        points: t.thru > 0 ? t.pts : null,
+        // what the ranking is decided on: net for Medal, points otherwise
+        sortValue: isMedal ? (complete ? t.netTotal : null) : (t.thru > 0 ? t.pts : null),
+      };
+    })
+    .sort((a, b) => {
+      if (a.sortValue === null && b.sortValue === null) return a.name.localeCompare(b.name);
+      if (a.sortValue === null) return 1;
+      if (b.sortValue === null) return -1;
+      return isMedal ? a.sortValue - b.sortValue : b.sortValue - a.sortValue;
+    });
+  // Level scores share a position ("3=") — the app doesn't do countback.
+  const withPositions = (rows, valueOf) => {
+    let lastValue = null, lastPos = 0;
+    return rows.map((row, i) => {
+      const v = valueOf(row);
+      if (v === null) return { ...row, pos: "" };
+      const pos = v === lastValue ? lastPos : i + 1;
+      lastValue = v; lastPos = pos;
+      return { ...row, pos };
+    }).map((row, i, all) => {
+      if (row.pos === "") return row;
+      const tied = all.filter((o) => o.pos === row.pos).length > 1;
+      return { ...row, pos: tied ? `${row.pos}=` : `${row.pos}` };
+    });
+  };
+  const dayRankedFor = (filter) => withPositions(dayRowsFor(filter), (r) => r.sortValue);
+
+  // ---- Overall ----
+  const overallRankedFor = (filter) => withPositions(
+    (isFoursomes ? combinedPairStandings(sameFormatRounds) : combinedStandings(sameFormatRounds, filter))
+      .map((r) => ({ ...r, sortValue: r.anyPlayed ? r.total : null })).sort((a, b) => {
+        if (a.sortValue === null && b.sortValue === null) return a.name.localeCompare(b.name);
+        if (a.sortValue === null) return 1;
+        if (b.sortValue === null) return -1;
+        return b.sortValue - a.sortValue;
+      }),
+    (r) => r.sortValue
+  );
+
+  // What actually gets printed: one section normally, or — with "Each
+  // competition separately" — one section per competition, each ranked
+  // on its own and each starting on a fresh page.
+  const canFilter = !(view === "overall" && isFoursomes);
+  const activeFilter = canFilter ? compFilter : "";
+  let sections;
+  if (activeFilter === "__split__") {
+    sections = compsInUse.map((abbr) => ({ key: abbr, heading: compName(abbr), filter: abbr }));
+    if (view === "day" && dayPlayers.some((p) => inFilter(p, "__none__"))) {
+      sections.push({ key: "__none__", heading: "Not in a competition", filter: "__none__" });
+    }
+  } else {
+    sections = [{ key: activeFilter || "all", heading: activeFilter ? compName(activeFilter) : "", filter: activeFilter }];
+  }
+  sections = sections
+    .map((sec) => ({ ...sec, rows: view === "day" ? dayRankedFor(sec.filter) : overallRankedFor(sec.filter) }))
+    .filter((sec) => sec.rows.length > 0);
+
+  const th = { textAlign: "left", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000", whiteSpace: "nowrap" };
+  const thR = { ...th, textAlign: "right" };
+  const td = { padding: "6px 8px", fontSize: 13, borderBottom: "1px solid #999" };
+  const tdR = { ...td, textAlign: "right" };
+  const pill = (active) => ({
+    flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, border: `1px solid ${headerColor}`,
+    background: active ? headerColor : "#FFFFFF", color: active ? "#FFFFFF" : headerColor,
+  });
+  const nothingToPrint = isMatchPlay || sections.length === 0;
+  const printedAt = new Date().toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
+          ← Back
+        </button>
+        <button
+          onClick={() => window.print()}
+          disabled={nothingToPrint}
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5, opacity: nothingToPrint ? 0.5 : 1 }}
+        >
+          <Printer size={15} /> Print
+        </button>
+      </div>
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <button onClick={() => setView("day")} style={pill(view === "day")}>{activeRound.label} only</button>
+        <button onClick={() => setView("overall")} style={pill(view === "overall")}>Overall ({sameFormatRounds.length} day{sameFormatRounds.length === 1 ? "" : "s"})</button>
+      </div>
+      {compsInUse.length > 0 && !(view === "overall" && isFoursomes) && (
+        <select
+          className="no-print"
+          value={compFilter}
+          onChange={(e) => setCompFilter(e.target.value)}
+          style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 8, background: "#FFF" }}
+        >
+          <option value="">Everyone together</option>
+          {compsInUse.length > 0 && <option value="__split__">Each competition separately (one page each)</option>}
+          {compsInUse.map((abbr) => <option key={abbr} value={abbr}>{compName(abbr)} only</option>)}
+        </select>
+      )}
+      {view === "day" && (
+        <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          {[["gross", "Gross"], ["net", "Net"], ["points", "Points"]].map(([k, label]) => (
+            <button key={k} onClick={() => setCols((c) => ({ ...c, [k]: !c[k] }))} style={{ ...pill(cols[k]), fontSize: 11.5, padding: "6px 4px" }}>
+              {cols[k] ? "✓ " : ""}{label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 14 }}>
+        Preview below — prints on A4. Only cards marked COMPLETE are counted, the same as the live leaderboard.
+        Players level on {isMedal && view === "day" ? "net score" : "points"} share a position (shown as "3="); any countback is for you to apply.
+      </div>
+
+      {isMatchPlay ? (
+        <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>
+          {activeRound.label} is a Match Play day, which has no leaderboard. Switch to another day to print one.
+        </div>
+      ) : nothingToPrint ? (
+        <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>No players to show yet.</div>
+      ) : (
+        <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
+          {sections.map((sec, secIdx) => (
+            <div key={sec.key} className={secIdx > 0 ? "print-newpage" : ""} style={{ marginTop: secIdx > 0 ? 28 : 0 }}>
+          <div style={{ marginBottom: 10 }}>
+            {orgName && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>{orgName}</div>}
+            <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>
+              {view === "day" ? `${activeRound.label} — Leaderboard` : `Overall Leaderboard${isFoursomes ? " — Foursomes" : ""}`}
+              {sec.heading ? ` — ${sec.heading}` : ""}
+            </div>
+            <div style={{ fontSize: 13, marginTop: 2 }}>
+              {view === "day"
+                ? [activeRound.course.name, formatDisplayDateLong(activeRound.date), isMedal ? "Medal" : "Stableford", activeRound.handicapAllowance !== 100 ? `${activeRound.handicapAllowance}% allowance` : ""].filter(Boolean).join("  ·  ")
+                : sameFormatRounds.map((r) => r.label).join("  ·  ")}
+            </div>
+          </div>
+          {view === "day" ? (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: 36 }}>Pos</th>
+                  <th style={th}>{isFoursomes ? "Pair" : "Player"}</th>
+                  <th style={thR}>HCP</th>
+                  {cols.gross && <th style={thR}>Gross</th>}
+                  {cols.net && <th style={thR}>Net</th>}
+                  {cols.points && <th style={thR}>Points</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {sec.rows.map((r) => (
+                  <tr key={r.name} className="print-row">
+                    <td className="mono" style={{ ...td, fontWeight: 700 }}>{r.pos}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{r.name}</td>
+                    <td className="mono" style={tdR}>{r.ph}</td>
+                    {cols.gross && <td className="mono" style={tdR}>{r.gross !== null ? r.gross : r.thru > 0 ? "NR" : "–"}</td>}
+                    {cols.net && <td className="mono" style={{ ...tdR, fontWeight: isMedal ? 800 : 400 }}>{r.net !== null ? r.net : r.thru > 0 ? "NR" : "–"}</td>}
+                    {cols.points && <td className="mono" style={{ ...tdR, fontWeight: isMedal ? 400 : 800 }}>{r.points !== null ? r.points : "–"}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: 36 }}>Pos</th>
+                  <th style={th}>{isFoursomes ? "Pair" : "Player"}</th>
+                  {sameFormatRounds.map((r) => <th key={r.id} style={thR}>{r.label}</th>)}
+                  <th style={thR}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sec.rows.map((row) => (
+                  <tr key={row.name} className="print-row">
+                    <td className="mono" style={{ ...td, fontWeight: 700 }}>{row.pos}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{row.name}</td>
+                    {sameFormatRounds.map((r) => {
+                      const t = row.perRound[r.id];
+                      return <td key={r.id} className="mono" style={tdR}>{t && t.thru > 0 ? t.pts : "–"}</td>;
+                    })}
+                    <td className="mono" style={{ ...tdR, fontWeight: 800 }}>{row.anyPlayed ? row.total : "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+              <div style={{ fontSize: 10, marginTop: 8, color: "#444" }}>Printed {printedAt}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4; margin: 12mm; }
+          body { background: #FFFFFF !important; }
+          .print-area { border: none !important; padding: 0 !important; border-radius: 0 !important; }
+          .print-row { break-inside: avoid; page-break-inside: avoid; }
+          .print-newpage { break-before: page; page-break-before: always; margin-top: 0 !important; }
+          thead { display: table-header-group; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visOpts, startingHole, drawNote, roundLabel, roundDateDisplay, orgName, onBack, headerColor }) {
   const [which, setWhich] = useState("both"); // times | individual | both
   const { showIndex, showCH, showTee, showComp, showStartTee } = visOpts;
@@ -6080,7 +6338,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, headerColor, accentColor, onLock }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -6221,6 +6479,19 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
       >
         <Printer size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Print the draw (tee time order &amp; by player)</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenPrintBoard}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Printer size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Print the leaderboard</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
