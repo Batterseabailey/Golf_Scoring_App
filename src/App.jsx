@@ -22,6 +22,25 @@ const DEFAULT_COURSE = {
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
 
+// The event code that's pre-filled on the opening screen, so members only
+// have to press Continue. Change this one line for a different event.
+const DEFAULT_EVENT_CODE = "LGS2026";
+const LAST_CODE_KEY = "golf-last-event-code";
+
+// Whichever code this phone last used takes priority (so someone following
+// a different event isn't pushed back to the default each time); otherwise
+// the default above. Wrapped in try/catch because some browsers block
+// storage in private mode — the default still works then.
+function prefilledEventCode() {
+  try {
+    const last = sanitizeCode(window.localStorage.getItem(LAST_CODE_KEY));
+    if (last) return last;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_EVENT_CODE;
+}
+
 function sanitizeCode(raw) {
   return (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
 }
@@ -1030,7 +1049,7 @@ function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectD
 }
 
 function CodeGate({ onSubmit }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(prefilledEventCode);
 
   const submit = () => {
     if (value.trim()) onSubmit(value);
@@ -1048,7 +1067,7 @@ function CodeGate({ onSubmit }) {
         <Flag size={26} color="#8A8774" style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 4 }}>Live Leaderboard</div>
         <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 18 }}>
-          Enter the event code you were given.
+          Press Continue to open the event — or type a different code first.
         </div>
         <input
           value={value}
@@ -1400,6 +1419,11 @@ function AppInner() {
       window.history.replaceState(null, "", url);
     } catch {
       // ignore — URL update is a nicety, not required for the app to work
+    }
+    try {
+      window.localStorage.setItem(LAST_CODE_KEY, code);
+    } catch {
+      // ignore — remembering the code is a convenience only
     }
     setEventCode(code);
   };
