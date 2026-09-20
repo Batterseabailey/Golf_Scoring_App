@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 25";
+const APP_VERSION = "20 Sep 2026 · build 27";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -5383,6 +5383,23 @@ function LocalRulesView({ text, headerColor, accentColor }) {
   );
 }
 
+// Sizes the name line so it always fits the label's width (63.5mm, about
+// 212px of usable space) instead of wrapping untidily or being cut off.
+// A single name, or a pair short enough, stays on ONE line and is shrunk
+// only as far as needed (never below 11px). A pair too long for that is
+// deliberately set on two lines — one name per line — at a larger size,
+// which reads better than one line of tiny type. 0.66 is the average width
+// of a bold Bookman-style letter relative to the font size, measured with
+// a little margin.
+function fitLabelName(names) {
+  const WIDTH = 212, PER_CHAR = 0.66, MAX = 17, MIN_ONE_LINE = 11;
+  const fit = (chars, cap) => Math.floor(Math.min(cap, WIDTH / (PER_CHAR * Math.max(chars, 1))) * 10) / 10;
+  const oneLine = fit(names.join(" & ").length, MAX);
+  if (names.length < 2 || oneLine >= MIN_ONE_LINE) return { stack: false, size: Math.max(oneLine, 9) };
+  const longest = Math.max(...names.map((n, i) => n.length + (i < names.length - 1 ? 2 : 0)));
+  return { stack: true, size: Math.max(fit(longest, 15.5), 9) };
+}
+
 function PrintLabels({ societyRoster = [], course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
@@ -5414,8 +5431,16 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
     return match ? match.fullName || match.abbreviation : "";
   };
 
+  // Once a draw exists, labels are only printed for people actually IN it —
+  // anyone still sitting unplaced in the pool (a reserve, a withdrawal
+  // that's been pulled out of the draw) doesn't get one. With no draw at
+  // all yet, everyone on the day's list still prints, as before.
+  const namesInDraw = new Set(draw.flatMap((entry) => entry.players || []).filter(Boolean).map(normalizeName));
+  const inDraw = (p) => namesInDraw.size === 0 || namesInDraw.has(normalizeName(p.name)) || (p.partnerName && namesInDraw.has(normalizeName(p.partnerName)));
+  const leftOut = players.filter((p) => p.name && !inDraw(p)).length;
+
   const cards = players
-    .filter((p) => p.name)
+    .filter((p) => p.name && inDraw(p))
     .map((p) => {
       if (isFoursomes) {
         const ph = combinedHandicap(course, p, handicapAllowance);
@@ -5475,6 +5500,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
       <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
         {cards.length} label{cards.length === 1 ? "" : "s"} for {roundLabel} — {sheets} sheet{sheets === 1 ? "" : "s"}
         of Avery L7161 (18 per sheet, 3×6, 63.5×46.6mm).
+        {leftOut > 0 ? ` ${leftOut} ${leftOut === 1 ? "player isn't" : "players aren't"} in the draw, so ${leftOut === 1 ? "has" : "have"} no label.` : ""}
       </div>
       <div className="no-print" style={{ fontSize: 11, color: "#B5442E", marginBottom: 14, fontWeight: 600 }}>
         In the print dialog, set Scale to "100%" or "Actual size" — not "Fit to page" — or the labels won't line up
@@ -5492,10 +5518,10 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
               <div className="label-meta">
                 {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
               </div>
-              <div className="label-name">
-                {c.title.split(" & ").map((name, i) => (
+              <div className="label-name" style={{ "--label-name-size": `${fitLabelName(c.title.split(" & ")).size}px`, whiteSpace: "nowrap" }}>
+                {c.title.split(" & ").map((name, i, all) => (
                   <React.Fragment key={i}>
-                    {i > 0 ? " & " : ""}
+                    {i > 0 ? (fitLabelName(all).stack ? <> &amp;<br /></> : " & ") : ""}
                     {/* Ladies (marked "L" in the Society roster) print in red and
                         the men in dark blue, both bold, so the cards are easy
                         to sort at a glance. */}
@@ -5522,7 +5548,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
           display: flex; flex-direction: column; justify-content: center;
           font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
         }
-        .label-name { font-weight: 700; font-size: 16px; margin: 6px 0; line-height: 1.25; }
+        .label-name { font-weight: 700; font-size: var(--label-name-size, 16px); margin: 6px 0; line-height: 1.25; }
         .label-meta { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin: 5px 0; }
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
@@ -5555,7 +5581,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
           }
           .label-meta { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin: 2.5px 0 !important; line-height: 1.1 !important; }
           .label-competition { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; margin-bottom: 1px !important; line-height: 1.15 !important; }
-          .label-name { font-size: 17px !important; font-weight: 700 !important; margin: 3px 0 !important; line-height: 1.1 !important; }
+          .label-name { font-size: var(--label-name-size, 17px) !important; font-weight: 700 !important; margin: 3px 0 !important; line-height: 1.12 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
           .label-note { font-size: 10.5px !important; color: #000 !important; font-style: italic !important; font-weight: 600 !important; line-height: 1.15 !important; margin-top: 5px !important; }
