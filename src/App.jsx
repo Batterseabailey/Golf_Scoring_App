@@ -169,6 +169,23 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
   return { ph, pts, thru, netTotal, grossTotal, relToPar: netTotal - parSoFar };
 }
 
+// A card only counts towards any leaderboard once Admin has pressed
+// COMPLETE on it — until then the scores are saved (nothing is lost if
+// you're interrupted halfway through a card) but stay private to Admin.
+// Cards entered before this feature existed have no flag at all; those
+// keep showing, so nothing already on a leaderboard disappears.
+function isScoreComplete(p) {
+  if (p.scoresComplete === true) return true;
+  if (p.scoresComplete === false) return false;
+  return Array.isArray(p.scores) && p.scores.some((s) => s !== "" && s != null);
+}
+
+// What the leaderboards are allowed to see of a player: their real card
+// once complete, otherwise a blank one ("not started").
+function forLeaderboard(p) {
+  return isScoreComplete(p) ? p : { ...p, scores: Array(18).fill("") };
+}
+
 function emptyPlayer(course, isFoursomes = false) {
   const base = { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "W", competition: "", scores: Array(18).fill("") };
   if (isFoursomes) {
@@ -306,7 +323,7 @@ function mergedPairsFromDraw(players, draw, course) {
       (p) => normalizeName(p.name) === normalizeName(np.name) && normalizeName(p.partnerName) === normalizeName(np.partnerName)
     );
     return existing
-      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, scores: existing.scores }
+      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, scores: existing.scores, scoresComplete: existing.scoresComplete }
       : np;
   });
   // Preserve anyone on the roster who isn't part of the draw's groupings
@@ -740,7 +757,7 @@ function combinedStandings(rounds, competitionFilter) {
         ? mergedPairsFromDraw(round.players, round.draw, round.course)
         : round.players;
     effectivePlayers.forEach((p) => {
-      const t = totals(round.course, p, round.handicapAllowance, round.format === "foursomes");
+      const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, round.format === "foursomes");
       if (!competitionFilter || p.competition === competitionFilter) credit(p.name, round.id, t);
       // On a Foursomes day, both partners earned this result together — the
       // combined-across-days table only makes sense (and stays comparable
@@ -781,7 +798,7 @@ function combinedPairStandings(rounds) {
       if (!nameA) return;
       const key = nameB ? [nameA, nameB].sort().join(" & ") : nameA;
       const display = nameB ? [nameA, nameB].sort().join(" & ") : nameA;
-      const t = totals(round.course, p, round.handicapAllowance, true);
+      const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, true);
       if (!byPairKey.has(key)) byPairKey.set(key, { name: display, perRound: {} });
       byPairKey.get(key).perRound[round.id] = t;
     });
@@ -1625,7 +1642,15 @@ function AppInner() {
     updateRound({
       players: players.map((p) =>
         p.id === id
-          ? { ...p, scores: p.scores.map((s, i) => (i === holeIdx ? clean : s)) }
+          ? {
+              ...p,
+              scores: p.scores.map((s, i) => (i === holeIdx ? clean : s)),
+              // Pin down the card's status the first time it's touched:
+              // a brand-new card starts as "in progress" (hidden from the
+              // leaderboard until COMPLETE is pressed); a card that already
+              // had scores from before this feature stays visible.
+              scoresComplete: p.scoresComplete === undefined ? isScoreComplete(p) : p.scoresComplete,
+            }
           : p
       ),
     });
@@ -3074,7 +3099,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   const rows = filteredPlayers
     .filter((p) => p.name)
     .map((p) => {
-      const t = totals(round.course, p, round.handicapAllowance, isFoursomes);
+      const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, isFoursomes);
       const complete = t.thru === totalHoles;
       // Gross/Net are only ever shown as an actual number once every hole
       // is in — a partial total isn't a real score to compare, so it's
@@ -6382,6 +6407,11 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
                   : `${getTee(course, p.tee)?.label} tee`}
                 {" "}· thru {p.thru}/18 · {p.thru > 0 ? `${p.pts} pts` : "not started"}
               </div>
+              {p.thru > 0 && (
+                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: isScoreComplete(p) ? "#2F6B3F" : "#B5442E" }}>
+                  {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : "In progress — not on the leaderboard yet"}
+                </div>
+              )}
             </div>
             <ChevronRight size={16} color="#9B9885" />
           </button>
@@ -6728,6 +6758,47 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       {nine(OUT)}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
       {nine(IN)}
+
+      {(() => {
+        const entered = (Array.isArray(player.scores) ? player.scores : []).filter((v) => v !== "" && v != null).length;
+        const complete = isScoreComplete(player) && entered > 0;
+        if (complete) {
+          return (
+            <div style={{ marginTop: 14, background: "#EEF6EF", border: "1px solid #7FB88F", borderRadius: 10, padding: 14, textAlign: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#2F6B3F" }}>✓ Complete — showing on the leaderboard</div>
+              <div style={{ fontSize: 11.5, color: "#4F6B55", marginTop: 4 }}>Any correction you make above shows on the leaderboard straight away.</div>
+              <button
+                onClick={() => onUpdate({ scoresComplete: false })}
+                style={{ marginTop: 10, background: "none", border: "none", color: "#B5442E", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}
+              >
+                Reopen — take this card off the leaderboard
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div style={{ marginTop: 14 }}>
+            <button
+              onClick={() => { onUpdate({ scoresComplete: true }); onBack(); }}
+              disabled={entered === 0}
+              style={{
+                width: "100%", padding: "15px 0", borderRadius: 10, border: "none",
+                background: entered === 0 ? "#D8D4C0" : headerColor, color: "#FFFFFF",
+                fontWeight: 800, fontSize: 16, letterSpacing: "0.08em",
+              }}
+            >
+              COMPLETE
+            </button>
+            <div style={{ fontSize: 11.5, color: "#6B6B5F", textAlign: "center", marginTop: 6 }}>
+              {entered === 0
+                ? "Enter the scores, then press COMPLETE to post them to the leaderboard."
+                : entered < 18
+                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE (an unfinished card will show as NR).`
+                : "All 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE."}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
