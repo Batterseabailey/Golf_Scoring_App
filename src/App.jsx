@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 24";
+const APP_VERSION = "20 Sep 2026 · build 25";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -524,7 +524,18 @@ function pairText(pair, course, rosterPlayers, allowancePct, showIndex, showCH) 
   if (pair.length < 2 || !showCH) return people;
   const combined = pairPH(course, rosterPlayers, allowancePct, pair[0], pair[1]);
   const pairStar = pair.some((n) => Number((findIndividualByName(rosterPlayers, n) || {}).handicapAdjustment)) ? "*" : "";
-  return combined !== null ? `${people} — pair ${combined}${pairStar}` : people;
+  // The pair's playing handicap follows in brackets. The ⟦ ⟧ markers are
+  // invisible to the reader: withBoldFigures (below) turns whatever sits
+  // between them into bold when the line is put on screen or paper.
+  return combined !== null ? `${people} ⟦(${combined}${pairStar})⟧` : people;
+}
+
+// Turns a draw line into what's actually displayed: any ⟦marked⟧ figure —
+// a Foursomes pair's playing handicap — comes out in bold.
+function withBoldFigures(line) {
+  const parts = String(line).split(/⟦|⟧/);
+  if (parts.length === 1) return line;
+  return parts.map((part, i) => (i % 2 === 1 ? <strong key={i} style={{ fontWeight: 800 }}>{part}</strong> : <React.Fragment key={i}>{part}</React.Fragment>));
 }
 
 // Draw groups only ever store names (not full player records), so shots are
@@ -3943,7 +3954,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
             <div style={{ fontSize: 14, flex: 1 }}>
               {entry.players && entry.players.length > 0
                 ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex: publicShowIndex, showCH: publicShowCH, showTee: publicShowTee, showComp: publicShowComp }).map((line, i) => (
-                    <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
+                    <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{withBoldFigures(line)}</div>
                   ))
                 : entry.group || "—"}
             </div>
@@ -4428,7 +4439,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                   <div style={{ flex: 1, fontSize: 12.5 }}>
                     {entry.players && entry.players.length > 0
                       ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes", visOpts).map((line, i) => (
-                          <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{line}</div>
+                          <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{withBoldFigures(line)}</div>
                         ))
                       : entry.group || "—"}
                   </div>
@@ -5211,7 +5222,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           </div>
           {row.slots.some(Boolean) && (
             <div className="mono" style={{ fontSize: 10.5, color: "#8A8774", marginTop: 6 }}>
-              {formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts)}
+              {withBoldFigures(formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts))}
             </div>
           )}
         </div>
@@ -5884,7 +5895,7 @@ function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visO
               <td style={td}>
                 {entry.players && entry.players.filter(Boolean).length > 0
                   ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex, showCH, showTee, showComp }).map((line, i) => (
-                      <div key={i} style={{ marginBottom: 1 }}>{line}</div>
+                      <div key={i} style={{ marginBottom: 1 }}>{withBoldFigures(line)}</div>
                     ))
                   : entry.group || "—"}
               </td>
