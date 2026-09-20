@@ -5,7 +5,7 @@
 const API = "/.netlify/functions/storage";
 
 async function getItem(key) {
-  const res = await fetch(`${API}?key=${encodeURIComponent(key)}`);
+  const res = await fetch(`${API}?key=${encodeURIComponent(key)}`, { cache: "no-store" });
   if (res.status === 404) {
     throw new Error("Not found");
   }
@@ -13,7 +13,10 @@ async function getItem(key) {
     throw new Error(`Storage get failed (${res.status})`);
   }
   const data = await res.json();
-  return { key, value: data.value, shared: true };
+  // etag = a version marker for what's stored. Handing it back with the
+  // next save (see setIfMatch) is how the server can tell whether another
+  // device has saved in the meantime.
+  return { key, value: data.value, etag: data.etag || null, shared: true };
 }
 
 async function setItem(key, value) {
@@ -28,6 +31,27 @@ async function setItem(key, value) {
   return { key, value, shared: true };
 }
 
+// A "safe" save: only goes through if the stored version is still the one
+// this device last saw. Pass the etag from the last get/save, or "new" if
+// nothing has ever been stored under this key.
+//   -> { ok: true, etag }       saved; etag is the new version marker
+//   -> { ok: false, conflict }  someone else saved first; nothing written
+async function setItemIfMatch(key, value, etag) {
+  const res = await fetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value, ifMatch: etag }),
+  });
+  if (res.status === 409) {
+    return { ok: false, conflict: true };
+  }
+  if (!res.ok) {
+    throw new Error(`Storage set failed (${res.status})`);
+  }
+  const data = await res.json();
+  return { ok: true, etag: data.etag || null };
+}
+
 async function deleteItem(key) {
   const res = await fetch(`${API}?key=${encodeURIComponent(key)}`, { method: "DELETE" });
   if (!res.ok) {
@@ -39,6 +63,7 @@ async function deleteItem(key) {
 window.storage = {
   get: (key) => getItem(key),
   set: (key, value) => setItem(key, value),
+  setIfMatch: (key, value, etag) => setItemIfMatch(key, value, etag),
   delete: (key) => deleteItem(key),
   // Not used by this app, kept only so nothing throws if it's ever called.
   list: async (prefix) => ({ keys: [], prefix, shared: true }),
