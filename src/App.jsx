@@ -21,27 +21,71 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 20";
+const APP_VERSION = "20 Sep 2026 · build 24";
 
-const DEFAULT_ORG_NAME = "Your Golf Society";
+const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
-// The Lucifer Golfing Society's devil, shown in front of the society's
-// name in the app header and on the printed draw and leaderboard. It's
-// embedded here (a small 153x200 image) rather than kept as a separate
-// file, so updating the app stays a one-file job. Only appears when the
-// event's society name contains "Lucifer" — any other society using the
-// app keeps the plain flag.
+// ---- Society crests ----
+// Embedded here (small images) rather than kept as separate files, so
+// updating the app stays a one-file job. A crest is shown in front of the
+// society's name — in the app header and on the printed draw and
+// leaderboard — whenever that name matches; any other name gets the flag.
 const LUCIFER_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJkAAADICAMAAADMULPaAAAAwFBMVEXrJxtgWlVWIR3q6uqTkIv8/PufGRXnYlj29vYqCwlLRDqYZ2D39/bvRTbZoZyHgnzDwb2kQzjnhHu2trZ/f39+gH2+wMDcuro/RkBCPUC/wLzAv8D//78AAAD9/f33GA0OCQb4JREWEw7+/v4mGREqJBg4NS3o6OjY19a3trTJyMdYVk8vKiR4dnGYlpKqqKYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABn2MriAAAAMHRSTlP//v4e/qD//1///v7a//7+/v//AwL//Qf/////BAD+//7//gP+/v7+/v7+/v7+/v4gJoCZAAAiCElEQVR42r1diYLauLKV1AbaZuskc+99WxtZSPJu///fvaqSZMtAA80k48nSWSYcat9hn3/qOX+u8rZTnNd5/ga/+u7DXn/hJ5BxY7S0vNy9AI29DOz88G+856NSWhstXqEaexUYvNSD1zr/tcszKbbc6DbfvZ3P/wQypMfqETQimhTswJXk+Nf/AWT4mvkT0N52uZDr/UHILs/P3yQaexFY3R3z1a/HRDsoUey3Wo35++cfR3Y+v+WNUem/H4k1ECnPO7kuNhmwc/dNorHXDBVX6hEZzghtlW+l2LOtlvV3icZe4mVitJJfIjufiTz4A1AXdOD0k/8DyPDVSp2CUFe3uDmz7A2/7/JGpevTZovaef7zyColtjLLdxfAzgHW+2q12uXwA2hwo+T6xNaqK79pbdlLUibFWpklfzyqt/fVbpfj08D3sml6KcWpWEtEdv4HkK3XFxpwJlTvKwI1cs5bw3veKSUVCBr7IQ3R7PynkaVsLVGm/Sshvc5vK6RVM3LLjYQHdAQe/EGwTaJkk+/eP7/Bz1eRbYTsg8fBH94RVpIglRCX4C3Hx0qg2rbMByk5sPf9G6L2KrI9l6oiyUHbgLjq1ipjjDJim9S5f0qAJqsckIEBbKdI7Xx+bHZfRLZG49l614m4xhb4pkTb1lWZR08iVet+Amx2cMJ2fibCe1UD0OOoBl7nE6V+aBXSZFiAooejM8/zo5QtR2xoBElX3h9FeK9aDcY2GNvkiGu0WgI9mvz6qaU84s89AtwqqW3p7Vz+KM59FdnptOFSJmgiWghbxRjjKccanzKvOtmSbdP4LvIK3C3+nFfDMJS7+1R7yQc0CpABtFQf660yNpskHkxZ3/dW0mN5J1H8AYlWH465Ks04743W6lGc+xKyvEvXRVEA1VDsM0evpk46a5VcPGqgPxuU8rw+KgO6YLLMmOq+u3oRmRRFcUJH7dlTDkgfwqKkBbIdLVnZo8PTqawMGqEsb8q8Vra8H7G9FgWNMmWsOG0g+kJZq/rOs48fm6ZBECXSk9eTVUvcVxAIbAdksH0YFr2ADEJa+Ich6tqDHWulOnJiYSf6WQdGA8C6YER66ZHVsqstEhkyl6tQ5XfEtKgDUhyINolBBvLYZlQ9R7a2zWzUJKFuVDcIiOtQZ4dHkeRrGQoaDulZVQmAwcFINPCt4dZas8SVVyD0iKdWqm5VSdztH6Z5LyEDfh6kDOqWDy64mJ+O93VsbjEUUjX8xFti64A0fBTivphvriD7hhebqDJwMLdKww98SMbyyhF0Y0aek5QVaIcu4fMPcBNS3BKtgomEq6xKem64KCCRSloK1iz+mr5s8rc/JWcWsHVV/sRTuwASWEmyWRuVPCFoL+pmbiA6w+Chfg4ZMhKcFjnRFoxz/bjS8SKy0loKBycNXT5jUl3QDID1nmTIydKq329pPc1AyTJ8QXUd/NTgEQyPvDwBA5emnPV3oWTy+5F5OVNk+pUcLoF9aJL3mdEjADPl4Mxtrem9DA9N7Yu6CdC0NR0Y+yuafViZHQl0PdMMKMQdybjKXMT2qAbzoj0DaGQiSooIF6xEjym7pO6V9+Jo+jrI613wGIjcmvw3R0EzNBffX2hARcB6cqnB0oGHGNGIUQSMlRqi2Z+QM5f3ILbE5R9RqmQhAe7qS7D/Qlp1jn4Qn0EeCuHZg2rCy7VtqrzoC4M2GCBZf+EHSgvhK1gO4qIlo6uzofwTPiBSA6kXHgoohtai6tt2iH63Jo9Ue5dpe8r+3v5ArOFzbCwQg42KPVRzQJyJmjOA3AkcmFdC1noZ3D1MN1+0Gv6LFZmq7uPSgRuNtjVZJMSEDOIA8B2r97cnmjDsBWphPf3t3SW0WBYwS8vRdRU4ItnHUa5RpJMQokEyd45Lk78JWajeRfwTRhrVzkJfcdPUGRi0BRm1kbwk0jXPltHYt8j1+fnrDesFZZUfQPe3G3i2GMW2Ed8MJJ12GR5lioBVSoHpeLL0yL5FLipH5Q2EV50GIU9ZsV4Leeylnlg3QjqcXZZe7FR3OT7d5mHP43pztc7BJXFY/JHrvUjR6YgrJ3VhgHukYdWpb1Rr2dO4qFA9is6FgfSka8zSGzQG7eMAsrL6cYz9LWTERsC1SyANoTQDzEInttvtD1ZsiU/tA5p5YN9q2bFngCEbG0jdtELpkkKsQfL3eywgHISu0Bs2j4A1VqpvtTnZc64bK18ScWmgFUNMRYHA2IZDPFja7gGuQ28kOKnvdMXYI2B/gTo2HI06cFFsN2y/LwAXotsDMgYmqk5kf4VloZ1bpQwowe78u6ruGFDsMAz1df0fe+QhUivQ7MS2mHdeMLOsR65ji2ao5r76TjvgLrLz5/+BtT8QI5GNKFmICWEVxQkraKfTBsnJFxQaIBM1MRVrLQ7oxs+/BxmW+lfgfTT4Z6IXgHLfEBJ9x297QCZDlZb3ZcUhuNaLrC5v0/X+AOHRt4Yj2D2V3OWJwC6NEmvPPiTaiWiFNMMvNkK6moCvsePbuPBNoxKsgL+GpfDPv62bZ0zdco4dVqnX+4KAMc9H98zIJinrnRm+SPQSLNIjaYHpz0Njd4DVRAItgmw5YB4SY2t4AKyY7X/vNEWaNpa7ssPeq0bl7obHEwv3kRGwHhkjxdrRith3ImhsLcDYAq3SFL7Qs5QhLju0jjqz8deuKyxdOPmshrIvZAyAKfBFGgQMTRfiIg7CL9fgxYNPJ1dVTS0myimpWPC/M7KjTNmJHUBk4a9DMrd6Tg/YV9nkVoJkgE6hRWVB3B2y9XrLhfbNS6+Y5dgjTEilGuoc1vk4jCERFigKmwNH06e2Tw4JsZvAdvkWRT9dOyvBiiDyDh68zGYDNMAyovPlWHZHe6xsS1VaWZfaFTAw9l/TW9oftvh2NK+eGkNgNyuKTmTE3psv5qyX56hDCTTYikAyTjKkfLkWks4WtEG77gSEi+sTiMOe7X8m6HkNJIJPQGM3hZ+ArYMPmmg2mQv6GrF1mEaOLdFLjmWSDFim5bIpjW/6wL8FYnZCm7Pfbw6QBipDwwG/vomMgCVEMeYIxSYLNlMMYKGiouxoi7ZCJZk0u8k91WU2mZIWZw+AZIBrwwiaBtO8e2g82A1gR7IW3g9FlnU2rxPh2GarnUpyaWdLUWYm/GKH8xokm3vUps1BU0nmsV1j10W7I0WHk4M8eQcZG/75h7UgRlZj5D0xVwpuoERmFgEaMVS46vsjaOyq25Wg9gvk4oyKbD6IsYcz/ybaW5VA4AgCL7O5MAtfVs3YcggYFYkZChqGKsDSA1F5+60KsusQkozNJPL8Y4GlbLK7bE+NnaoEy96DZk50sliJgjcIUYpopecm6QCYmz0KgDQPobGFkP1yapmuffTlwp0CMQhwkuQtRYp/jIz8YRTVnkrgXVnPOWZL3VW0dWZ0GuCoRqK2AXSOoQ8KtexCyID8M7CTc5Hw4O+mOAshyJ7ASzGhtXQdzDHK6TwH+woETFJXrNJiIho6FJC2n6QGD2aY2FLIGmBAunZKicAgYk3dGI3kIMtkxJHZKGBAFBe4RnEQd90S8KT/Dj3NnHxABA2odsBmMs573Eml2ELIdh3ZC0cuhjYBbDbO0nArB6DCD+GsvCCnzqu5A03QmtaHOvSbTuxomIp5ZPjffsMK9KFKm7sdHrZwSpl2QkbmQFCIwwc3S9PZ8kOuxdwq5E3UiQDOJQmnxI97nyRIS1vIIHQq2GS0SUMLhqJmuupOLYHFvMTpHZoqYJQT0VNP9bp6Z1Mh/YQUjwNqLdXU3gcH35QAFpxj2YBpNDhmgtCKoOnFHnyo40aW7/76ChqbE0tX3hXeWvzsUrI7U4xvOLYDPQJpk6CLY9KrEKwhsKq3VYktnMZi0a+BLJpm0HzysHcsJVGT96Y4J2R/UQc6WLICglDtAsRkIto4UPfUB4zSti2Hb8sJjeFfmJ8kQOvSKO05TtDWJ29wC8dT5KfWX5dg2MxLbPbJNQuOcbPZbrdYxfSM26kkkTefGRtRrURTq8pGilDAbeANgc3xsbozusXmiMiox3MH2fl8xulvGvybIgpQcCK5NEec3GrUADQ71nU9iK7D8XrgaSbbXs3QnJwhyXjeZFXUrUM9WGMhxAkbQ99OouyqozfqHSyaDsFSHYtDndPmAHk/ZrYdciiptAyvVpZVr2wCwU4VE8xl63zKDebEDrVerOnx/MTQU4gGU5a5kn9Ns9WCZMFvF/C++oofM2pPDnkW18mAvccsGFfHVNe2KP0EVb1sRynyI5huOYAbhrEHBHW71Rs8l/hYMLIfZDHYqYiJBibRoO9LtE6UvagtZn0FcWvVeUMSGmE0Z4bOYejHMV/YPCpzaRC51GeEAPIQ/sbqHZ63uZjIYiMrJrfkQ4sCiSbqEiUHLZvvUbpQx+ZJW7r4lwgWusC+GzVoa+pxGOzxg37TEVbrpfakwmZ221SNt0Gr1er9jdSVXUhZcYqpBhJ74Kmuy7Kmvg2XMztbiGM5dqZdbqf6eDwDWArvtK1c8ZSTemqxeAJUo7Wx1thtAo/DR5UZNnefJ1s21XooYAQXJ9qQbXjlI/aAT/hoOpfMSb6LOgJoA0EdbQmktiLjIwpliiXU6fl5OGw555nI8I0Za7DLJxWOzY0NZaSMll2w9uYVM0qTXCyEKxGhpshRxRy0zEK02DpgclFztDjVC/4ENKbsgxcbgxcIz95DPIDVhMiJK6w5AfnwaTE+Yj7ERpbPgeypiELazSGVevTIOHcxRi3bunNshEgjnnKEeMWUjmSLltg6Sr4o7KCACL/R36uHEYQSq3WdNmAK35hfmZo85jJ5o8B2s02laodhCzEhrzDr7QMXqXi7mL70w2ZWLmpVo9RrTAUXb7nAUA1rEfh+pv/bVEcNPnrH3Fg9ZtfrKVu7zJQ2Rx28EG8SIpP34SDsl50cjgUfUCi7HKvVIhRRHS4f4G4geE/R2uKI7TvyAgiepZDes4mZU1YSpXEhu6QY1BlU06nwJTzZ1bRGo5UbMllwGKN1Ft6zpxcCcyEHxd34YCAGv0gMSAJzxkz5DOd0nWCSB92SlwT/rmcnbnhsSftqNql1DW8k9k8V+iY2J6ro2CGLYvtiQ/awwQjyjJ6IY9gFVn0HyDDIxqxwHVesT0XIz8l8bLYubK2rMmlbMAMQey2mzBoA6ywt5tFoLbILQqo0RGien9hPwAKRptGcldtagdDpiMkX0ewTa2Uy2P9iIfs+sSw2xknWzLtu2Wiiijb9MfxsQT+WtVqkGTCFAu6QEuypLIfmksJTv0disAKnNWR8bNbMUCwINbyJ9Kf91nOwme18cz0/laAbEjiv0V3OcaBCi6lKQl/4gjTN5Po9IKQZCClQuCZkrlpG5mamm8+BHdiNvhxOar/sGoJZznp1iQxHHSlNcdW4wE+qRaIIe3YikXg5opCCPaNgFv+3Jc2CFiFeMQeFQay+nIgDRkIKeNVVzMiST2+2OJ18K6bYCIcMCzDvOEfNrcLNAxZ85qyOkw5MJBPO1AcGVnVnv+zKQZaTZFJfjhmiCq0nxYyDwJ9hbwCVc1dmWLfGXyHNjt6bx5WV2cEV7IerFgff2Bj5Nclq4A03E8mGY+KmIxqlfIpNTPTVQURHPTUnaODBd3mSZVQtZWdSgHTt3wSLa3jOjjiTAfazHsu+rZAx4H7q8SYyJIAJzBwFZAsdIatUcDKnYI88Qmcra8qhfiG0nJpAnww331AG2MRGFnveCRlpJwjRiMVP8NhmCvXrEf6LlRB9ZtmOmLPbLIRcWjr197icKiDd9j+pFu4ST9q22dGX7J1mdpBmizg7ItpGeG+EPw00w05unbtSRpvSDko/RsgsTQ1qlS0smkfmi7xFsCA/BdXu3UzyvDzDXJ6ZstMFrFCKLZhPiQkeDjcSTNEp05QQtSiDu0RYMLMcgmacz+PkAKjJAzmgI20pUqcBi3KhS9CQJ/pq4YjR3Lp0RqMI8s/iaGOzzTIxJ71YEuhrJEJmXXNdUxVPGef1dTZkIIdTGmrqOHScLFMR6hwOWXfV/PTcXE/xImOxhpJB/AmRZwKh5zaj0QM/1sWV1dra/lDX8K3G7o4DTyknte3A5UOW78oPBxf/FUWs9s5NeWS/LpDhkrGaA04Exi7tBvgnDIz3G+yaBMkvwe8m5cUkF1YbMMpoDG7XIcYyDre9Gw7tSBfTEM3MVQGS+RRgaoycbiHDPgqRT8RTqhcz7SBivEQ3VJU4AJ1/mCihcjtSsZAwJzvklQFZnv+6QmYdsrk9cpp7Jr6v6XtPAEx7+3BtakeXkoKp5dZZ5d2YTcpZKYcsNkieu4xaPtU1zcqOHEekLWzONue8gJGWhoHLobscty+F5KYlCbvo77s/1uk6CubnuBT+23izcUWzGVlxiSx6d4Bs201tkmNy9dr9Nj8iq3tzaxKn8dH2HFqdpjmBL5GhIV1jPOZARRn6FA6REK4fzXIB+Xk+quG21xLFMl4IKS1zcektZBnlTYtOydIRuH9nk11OO9zYnlDixog52YxgZ2efTGRA8f2SZl43L71TseyAFT9093BgCrVJ3YqQIJcSkzqh2XAGyjkZQtZ+JWfLDLhY6PfJB3gzMZr+q+G8G+Ma/rcxBTrNDj0gcyMfX8hZbGmXGfokZGAwUh7V6cQXyHC+Vtqr0TMsWkyhRrFo5WLlRNDayPstH6DXy7jRc3IfDNmJreMwlcvxK3ZSfLZQlLHHgTrbYf0g0KuI023kJuYNf10hyya/6Y3y6SqsRV7OOUlj1JeqUHWYLdcx1OwIkUhbi1SQPaewLMo12P6nlrc8+oQskGwidpR6YlrXROPP/dc6MGIhK1LiqqG03VbHlHx6MXWaQwK08d7pOtYY5jqQ1+PF+AP9/sKUtTK5o56uK1YtFrGAJs0HdgHneHE2bszFGlfIzuA4FuWWIq5qeJaClO3i8PQeMgprI+yjwrVq2ZeJJvW8+MepIXgT2RsVdxcx7TLBc3m0jUsB2X2jRuMIoZycGAg4KnjvVe6b/bHdjCLH/HyFrKQ5m9PpVrzta+86tXHp7tFYL+R9ys1L12B6t24vYFtu0RFcmHO/04sacImMKkPYCWBLskVuvdimsZhl95npVp6oste0CmlFFSJlDlz65HEaYHDI0KAer5p2jOp6qAJLaIs0ZZ1GdqDW4vGeHxgWSKdAF/zmMhY12xa9Ogtuhb5RzQX9xnXPLkJ2mWxOD46N15Gq6Sc2EBtNHUdRRtUD5ZlZLNNOytE/biIb517A6XRRQnN+TcuPbyLLq6Pf8IiyBDEHshM8Rt1nfb2czrAYan354LSY/JnQbRbRf6/MfWTlPBIdmWes317IvwtvaN/+xqh5qOylkxeYY7pAeURWzd5c31fN0jYzeYfYzE3RRhEnxJsuVKkukZ2nNnURT5dFir3XkW+qjBrvIzP1jEzF7ExZEePySro1X9LM11zWyxiIRZ0KEyPTsn6ALKLZYkFFnKJqRmgLUE53Q8wQ2SctVKXr062Y1mvAvGeSSPmIZm0103eCWXaBZBNHCz/Gr3C242qWlfnjUTRSMQdBizRlgYyrR8ismkIN7itGOIeWiiLmYpgY3nQ033C9ne66O6FQdRHThsZwrJtcPZCznGtsNITwn/jZJF26Zqdogm3y59SduXXQAjti51DbCDWN0KAoJqsx00wo82CfGqeofJ+Owo6s3+pU/LjMYv1YSEbtgBtbIL5X17v2/iKVi+RsRoZu59Gmdz2NRzeuJ6xxxPqiy+a/3rqa+41JF/bp2Rkb27mWeoXsYB7JGS0jKtX67gCmJj+mIfmiiNwAGiQq6N8cXHLd6l00ErTIAOjNATIzeaeDkY+34xNpXBkIZ6DIKRVze+I0pZ2+EmpvDnu52QNXeY891GluWmDQqeMs4Im9fS4N/S/IWHnT87l/meZQb59GC1MRZUYZIWORV5+GL7exLR+f2QfbCUXD0bVW8RhUXNQoQhVI3Z4qZNOwKvkBX3Kc/lc3nrqNuzWJsuUToYbbG6ipdJuKq5KEC8+2brv/5uQe8yMveSmokMzmN1dMlQSQBhFx86kLEVXndwWkjPhZFHHjiEhmvlgCZIuBvbgxHJVgNls9G7FEmidohvaFVqpdx30Ks4uoVojzUF+SbJpYeqPkbsqhlknhfqtndg6yewoZMLRx40w01MxOiyl+esP8DsniybjBjcqe2JUaYeWBzzSzzyHLM4vhlXZNhPU8N+OLoGybqi+sbIwM1VNEliOu16BPT7ObQdd9BR2SAahFZl7SnNaiejIp5vl8fwKTUuLJ3C7yLmJnMg8ktfnTD8ftUwdNLLMfJjQdDnm/P+c4HQGaUsLZsfvtuW6uH/LnkQlRuBkZnKqN/DEDj6nvXoeNJ31jJYhzAVevmYjGlWqeBVZDVsL8eoMfvPD/5hrnvvWdtWG2GNsejLqovoS3eJh1oJVqfBZZgqEyKxCa1m682a8wZlpr2ss631z/vZgo3+WtJoEoTpfGYzNPVSbqdmH9ZuTtZ1U3B5GmOBvHgsPDxiO/eTXrfD3rDvzEI1NoFtlyngTHeGaT1j0vaNwZsjCjqrWza+wHUAwDvWtensOJZXaxUkHziOIisvVJp8/NSyOfFrTGNXWiPSycRS4ImL45Gj2dWGZXayhyFrWo5UMTH55U1prmeaKtXZrEaJUCqbZGvZQ66gCcoweXFCgqYheXDfwWlmBXNY7NNIWRtOZpdjahzkgjeltchEBsG25siGSXZMMVHSImu7m55v1cvEWKwZR2leMPo8RdUzGOyTgv4rrFKCxtr7f4tsGwAbQmRGW4Vz4/72AvDZ2+ZTe2/doJ2qKOtjlq0fhpka9nXGqeodp569e6Ga0CE160lZoSFkhu1yWW2d25jtWy52fcrgW7tYgoArS4cluwQ5ZSUa/svsyfcHNdmjZreeJNX4qD0EIYkRx5m1Gj3SgAiGOubuR4lR+apiqralftdtXRGLPzU6vXukFnwdIFNJLiYG77LyoITd9J00+XVmu6cgrc03T2kcKBgYc7E7Susnp/wzU+mlW1psMftE+Mb2xJutBbhe2RqRDvWFK72saNXkXVGjUXDvIGftnhkTStld9rxrttY1a3fi7FuuHN0kzbELi9Rc4UdOPmZuk7nXlTvh0zh7nYru76fsTE+coNJBlNbbTDcUiSAfTXGDxIO/BMC5z7UjYfuqH8gOi4lby3IG7G8rFBE2q4eywBdCtat7dx32mn1pCZZPMiHZpbfLcJFoQXExHlaGWnpsMbtBE8BUt0u0tg9wKiTsDfVPBlNYK/Mwgum5ddMKHxE19fbTC/5xRH6lQsBpNxXxOnVjNcJp1ri3VijVtXc6OsnUxJkkYaXt/lO/he0ehX5/Z+XMraDKDGKQ7uiDkqnbba2FcXsfxGbkqbLVN3cbPZ0wJbizNLxu0D4DlfP2KrrAHpwbwkDLnv0Fr9B/+5HmSe019sG1Qgur1SDUPClfbSmQAtpozli035t2DXdBpi0TC3IWgEhx/IPiR1nc3XU8CWuJGWzqmfolg6mqZ3g7hJzvGQ15u7V4PwaGKn4qCW3bRzyr6+I7bLE9p4QpMdsDGBwQhqm+EDHZGw9uhfU81ReECh/N1jHzCrJLF0kzgJJ8ZwJnqFx9B4ckxxJItPG6fs7omzCke1VIrYmO8myq5vGhzell3nFtCxceX+G6KJFrdtXXma4aSswSOrVeVuSlCjNRxbh5DEWro7HW3p3rticcYbx8Q7v0dFbeUaj8XV07paTQeKiHl2Ob1E06Srv9ArwotXnZkU+ai6xLnNsycoqBBogo13dNm9wx9nGgTlUrutUneRx1pQdPiqa8car7NUNF05HbicInJFA7yrMwqTOz2PDosWKWgrbkoBnOcceX+s4uVhdufwhxfQfKQVKtxD7Npwu9QOftQLhKtyO21y0WmcbwCWzTxQnQQ7j8Hn+xSehZeKt5rv39fww2MH5s8wKM6P47ht54nLvBVUjr2gGbjCZOgpk8FTUXwsK45lyIYjLsP7tl7eq8fbYO+LW1r372tYfxb6IHQ3HDV6wXYcr9pMFbCoW85p4JZQCfwrnQnDXcmuQa5W9UfdhMnUy6zk/Nx9jSMRQifuhlICXo3XCcYx2fL8bFiOvwraKj3sMm/YTNbjIQZ/xh+3mpax7Plqt+4rZAAM/sWsGTWE2JVW7jiuBX9d9x3IieC8uRpvufDy4B4/zHDEHS1i/7uPX11Y9tLNOPogE3clo8LzW0cQfbfQB24eXVLT99eTVVdjHKVtgdetO9CzWjkrEV2eewXZrx19rohswAX2uTtdSgfYIAIJ1xo5da0XI5h447jq+ZH3nKa1R1nlJZh8XJkLVHrmQP+9myS0TwXx4diBGccRctWRGcjcuknCqTVe5w1YtXK2/P3Q0cxvBvqHvy2ojb6bLs5952Ff+cwsLLPyXkAEnSQIr6/KsgGVx2GZ0soaxz+lhT+tw5VV5fcIBHd9/Sw5NvipEb/nk6cmmqFkZcmYQJo2YOcWPHLnaAeed2fMqEzSJGg3O7c34A5r/SvPj0SsHq98KPPdT/W4J2e4zuwnisHB4diF21Obl1vxpG+T0xBoT2HGOABV0eBhGbcn7cB1UorX3l8A9pVuvrmxBkTx32MfBrZVBq9skUZ2OZHkUAtw9q0eK9DlwaUemkKj3efn70T24TfiXYym5vRmrIGHZTX+T13XHx9N44bHwcwf6fQr7efaCiKlZlfuwMjZ+rufa3MPmbtWipSwuEkzRdNoNThHh+CL6diUo1MaMoxn1jUubdLNIJOgwTHfOfv32AeEIjyExrUbcG+OkJoZNe2uKSWn8Fn6Kwyh2+rDkczQ5etHH2HwzbtUEzLZSbxuQ92JREMOmbTOFcrOA1M4816FGkuSpj67g0zSDRdWv5lmo/JBdFuhjNsjjQb2SR0cFf8vupDFawDQhr3XZCYoGL/Kz6/8NqvhqlXWpZC83JF3ypyZj08J+FWjqgejhWXcMrHz1rTxgvjwsPY375/5bTtkGndlgT4MpeLXPCyhg88/ujjXVnhpZZY+F4LjONXufP6dyGjyxRMIQh63Xd27xKPHFrJ/8HMMsra1jj4qVBDsYTQuBm+//1F196NtPNibma5LBi/bO7AkXisUj7jm9zYhKqonSlKCh71N0/PxNRfwIA+o3OcB7CgG/fwFRMvw0x6sxfVSnlmwZVjv2a0oUqIP+LCWfurpQ1BUfRlW/4ariSGhWU3XCDD9LHnGbZfxKgrM8AOlcInQ8jbDveHy2AuF6+HI9t3qRWD3883phINblaWDqUY5W2GBelmGUN4/fa28PEIqigEcZMrgJTowv3Tz+PN3I4tjUNpHTYZh4C2YLjMvZmX0mV3UTuudjqadNXysB8inhmr3dn4R2KO7oVPc/gbk8p69Haq8ThJu2qGu3fHI8392pbtip+L7JKp+Vcg+n702jImBcFaCQrLdNM9Ie4NUCYTk1MxHcPyppdeBPYsMF7CN/ygwyKX/ouKSU46z/9BLjGljg4YXIv4GsGeRITT8jJgcrzEu8moHDOMxbqy7SNEldY15yyuf7vpdZJ+h04FmLbSuJuXAT3A07oQQSH34SJTV++ffAfb0ve1zsCGTrp3PccPWGJMdw3GG1RvZwPPfAfb5/641WNy9fpf8AAAAAElFTkSuQmCC";
+const RADLEY_LOGO = "data:image/png;base64,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";
+
+function logoForOrgName(orgName) {
+  if (/lucifer/i.test(orgName || "")) return LUCIFER_LOGO;
+  if (/radle/i.test(orgName || "")) return RADLEY_LOGO;
+  return null;
+}
 
 function SocietyLogo({ orgName, height }) {
-  if (!/lucifer/i.test(orgName || "")) return null;
-  return <img src={LUCIFER_LOGO} alt="" style={{ height, width: "auto", display: "block", flexShrink: 0 }} />;
+  const src = logoForOrgName(orgName);
+  if (!src) return null;
+  return <img src={src} alt="" style={{ height, width: "auto", display: "block", flexShrink: 0 }} />;
 }
+
+// ---- Which society's site is this? ----
+// The SAME App.jsx runs on both sites. It looks at the web address it's
+// being served from and picks that society's settings, so one file can be
+// dropped into either GitHub repo without editing anything:
+//   • an address containing "orgs" or "radle"  -> Old Radleian Golfing Society
+//   • anything else (seeyourscore.netlify.app)  -> Lucifer Golfing Society
+// These are only the STARTING values for a brand-new event, plus the code
+// pre-filled on the opening screen — every event still keeps its own name,
+// colours and PINs once set up.
+const BRANDS = {
+  lucifer: {
+    orgName: "Lucifer Golfing Society",
+    defaultEventCode: "LGS2026",
+    headerColor: "#1F2A37",
+    accentColor: "#3B6D8C",
+    printColor: "#14275A",
+  },
+  orgs: {
+    orgName: "Old Radleian Golfing Society",
+    defaultEventCode: "ORGS2026",
+    headerColor: "#9B1B26",
+    accentColor: "#1F2A37",
+    printColor: "#9B1B26",
+  },
+};
+
+function detectBrand() {
+  try {
+    return /orgs|radle/i.test(window.location.hostname) ? BRANDS.orgs : BRANDS.lucifer;
+  } catch {
+    return BRANDS.lucifer;
+  }
+}
+const BRAND = detectBrand();
+const DEFAULT_ORG_NAME = BRAND.orgName || DEFAULT_ORG_NAME_FALLBACK;
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
 
 // The event code that's pre-filled on the opening screen, so members only
-// have to press Continue. Change this one line for a different event.
-const DEFAULT_EVENT_CODE = "LGS2026";
+// have to press Continue. Set per society in the BRANDS block above
+// (defaultEventCode) — change it there for next year's event.
+const DEFAULT_EVENT_CODE = BRAND.defaultEventCode;
 const LAST_CODE_KEY = "golf-last-event-code";
 
 // Whichever code this phone last used takes priority (so someone following
@@ -385,11 +429,13 @@ function pairPlayersFromDraw(players, draw, course) {
         index: pA ? pA.index : "",
         tee: validTee(pA && pA.tee),
         competition: pA ? pA.competition || "" : "",
+        handicapAdjustment: pA ? Number(pA.handicapAdjustment) || 0 : 0,
         scores: Array(18).fill(""),
         partnerName: nameB || "",
         partnerIndex: pB ? pB.index : "",
         partnerTee: validTee(pB && pB.tee),
         partnerCompetition: pB ? pB.competition || "" : "",
+        partnerHandicapAdjustment: pB ? Number(pB.handicapAdjustment) || 0 : 0,
       });
     }
   });
@@ -409,7 +455,7 @@ function mergedPairsFromDraw(players, draw, course) {
       (p) => normalizeName(p.name) === normalizeName(np.name) && normalizeName(p.partnerName) === normalizeName(np.partnerName)
     );
     return existing
-      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, scores: existing.scores, scoresComplete: existing.scoresComplete }
+      ? { ...np, id: existing.id, index: existing.index, tee: existing.tee, competition: existing.competition, partnerIndex: existing.partnerIndex, partnerTee: existing.partnerTee, partnerCompetition: existing.partnerCompetition, handicapAdjustment: Number(existing.handicapAdjustment) || 0, partnerHandicapAdjustment: Number(existing.partnerHandicapAdjustment) || 0, scores: existing.scores, scoresComplete: existing.scoresComplete, entryLock: existing.entryLock || null }
       : np;
   });
   // Preserve anyone on the roster who isn't part of the draw's groupings
@@ -439,89 +485,75 @@ function pairPH(course, rosterPlayers, allowancePct, nameA, nameB) {
   return Math.floor((allowedA + allowedB) / 2 + 0.5);
 }
 
+// One person's name with their handicap details — "Will Bailey (3.3/6)":
+// handicap index / course handicap for THIS day's course (after the day's
+// allowance and any one-off adjustment). Shown the same way on Singles and
+// Foursomes days, so the "Course handicap" switch always does something;
+// on a Foursomes day the pair's combined figure then follows the pair.
+function nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH) {
+  const p = findIndividualByName(rosterPlayers, n);
+  const idx = p && p.index !== "" && p.index != null ? p.index : null;
+  const idxPart = showIndex && idx !== null ? idx : null;
+  const ph = showCH && idx !== null ? individualPH(course, p, allowancePct) : null;
+  // A * marks anyone whose handicap has been adjusted for this day only
+  // (shots added or taken off in Draw setup / Enter scores).
+  const star = p && Number(p.handicapAdjustment) ? "*" : "";
+  if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph}${star})`;
+  if (idxPart !== null) return `${n} (${idxPart})${star}`;
+  if (ph !== null) return `${n} (${ph}${star})`;
+  return `${n}${star}`;
+}
+
+const ADJUSTED_FOOTNOTE = "* handicap adjusted for this competition";
+
+function anyHandicapAdjusted(players) {
+  return (players || []).some((p) => Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment));
+}
+
+// Splits a Foursomes group into its pairs — names two at a time, however
+// many there are (a lone pair, the usual two pairs, or an odd one left
+// over while a draw is still being built).
+function foursomesPairs(names) {
+  const pairs = [];
+  for (let i = 0; i < names.length; i += 2) pairs.push(names.slice(i, i + 2));
+  return pairs;
+}
+
+function pairText(pair, course, rosterPlayers, allowancePct, showIndex, showCH) {
+  const people = pair.map((n) => nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH)).join(" & ");
+  if (pair.length < 2 || !showCH) return people;
+  const combined = pairPH(course, rosterPlayers, allowancePct, pair[0], pair[1]);
+  const pairStar = pair.some((n) => Number((findIndividualByName(rosterPlayers, n) || {}).handicapAdjustment)) ? "*" : "";
+  return combined !== null ? `${people} — pair ${combined}${pairStar}` : people;
+}
+
 // Draw groups only ever store names (not full player records), so shots are
 // looked up against the current roster + course each time this renders —
 // meaning it's always correct for whichever course this day is set to,
 // with no separate step to keep it in sync.
 function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, isFoursomes, opts) {
   if (!names || names.length === 0) return "";
-  const { showIndex = true, showCH = true, showTee = true, showComp = true } = opts || {};
-  // Each person's own raw handicap index, right after their name — lets a
-  // player instantly spot-check that what's on file for them is correct.
-  // For Singles specifically, also show their playing handicap for this
-  // course (e.g. "3.3/6") — for Foursomes the combined figure after the
-  // pair covers that instead, so just the raw index is shown per person.
-  // showIndex/showCH independently control the index and the course-
-  // handicap half of that, e.g. for a quicker admin-only view.
-  const withIndex = (n) => {
-    const p = findIndividualByName(rosterPlayers, n);
-    const idx = p && p.index !== "" && p.index != null ? p.index : null;
-    const idxPart = showIndex && idx !== null ? idx : null;
-    if (!isFoursomes) {
-      const ph = showCH ? individualPH(course, p, allowancePct) : null;
-      if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph})`;
-      if (idxPart !== null) return `${n} (${idxPart})`;
-      if (ph !== null) return `${n} (${ph})`;
-      return n;
-    }
-    return idxPart !== null ? `${n} (${idxPart})` : n;
-  };
-
-  // Tee and competition abbreviation, same idea as formatGroupLines below —
-  // appended once per person (or once per pair, when both share the same
-  // tee/competition) rather than repeated.
-  const detailsFor = (n) => {
-    const p = findIndividualByName(rosterPlayers, n);
-    const parts = [];
-    if (showTee && p && p.tee) parts.push(p.tee);
-    if (showComp && p && p.competition) parts.push(p.competition);
-    return parts.join(" · ");
-  };
-  const withDetails = (n) => {
-    const details = detailsFor(n);
-    return details ? `${withIndex(n)} – ${details}` : withIndex(n);
-  };
-
-  if (names.length === 4) {
-    if (isFoursomes) {
-      const phA = showCH ? pairPH(course, rosterPlayers, allowancePct, names[0], names[1]) : null;
-      const phB = showCH ? pairPH(course, rosterPlayers, allowancePct, names[2], names[3]) : null;
-      const detailsA = [...new Set([detailsFor(names[0]), detailsFor(names[1])])].filter(Boolean).join(" / ");
-      const detailsB = [...new Set([detailsFor(names[2]), detailsFor(names[3])])].filter(Boolean).join(" / ");
-      const pairAStr = `${withIndex(names[0])} & ${withIndex(names[1])}${phA !== null ? ` (${phA})` : ""}${detailsA ? ` – ${detailsA}` : ""}`;
-      const pairBStr = `${withIndex(names[2])} & ${withIndex(names[3])}${phB !== null ? ` (${phB})` : ""}${detailsB ? ` – ${detailsB}` : ""}`;
-      return `${pairAStr} v ${pairBStr}`;
-    }
-    return `${withDetails(names[0])} & ${withDetails(names[1])} v ${withDetails(names[2])} & ${withDetails(names[3])}`;
+  const { showIndex = true, showCH = true } = opts || {};
+  if (isFoursomes) {
+    return foursomesPairs(names).map((pair) => pairText(pair, course, rosterPlayers, allowancePct, showIndex, showCH)).join(" v ");
   }
-  return names.map(withDetails).join(" & ");
+  const each = names.map((n) => nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH));
+  if (each.length === 4) return `${each[0]} & ${each[1]} v ${each[2]} & ${each[3]}`;
+  return each.join(" & ");
 }
 
 // Same calculation as formatGroupNamesWithShots, but returns an array of
 // separate lines to stack vertically instead of one line joined with "&" —
 // so a group of 3 or 4 never has to squeeze onto a single horizontal line,
 // which doesn't fit a phone screen width. Singles gets one line per
-// player; Foursomes gets one line per pair (still showing their combined
-// figure, since that's what's actually meaningful for a pair).
+// player; Foursomes gets one line per pair (each partner's own figures,
+// then the pair's combined handicap).
 function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursomes, opts) {
   if (!names || names.length === 0) return [];
   const { showIndex = true, showCH = true, showTee = true, showComp = true } = opts || {};
-  const withIndex = (n) => {
-    const p = findIndividualByName(rosterPlayers, n);
-    const idx = p && p.index !== "" && p.index != null ? p.index : null;
-    const idxPart = showIndex && idx !== null ? idx : null;
-    if (!isFoursomes) {
-      const ph = showCH ? individualPH(course, p, allowancePct) : null;
-      if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph})`;
-      if (idxPart !== null) return `${n} (${idxPart})`;
-      if (ph !== null) return `${n} (${ph})`;
-      return n;
-    }
-    return idxPart !== null ? `${n} (${idxPart})` : n;
-  };
 
   // Tee and competition abbreviation, appended onto the same line — e.g.
-  // "Will Bailey (3.3/6) – Club – PWC". showTee/showComp independently
+  // "Will Bailey (3.3/6) – Club · PWC". showTee/showComp independently
   // control each half.
   const detailsFor = (n) => {
     const p = findIndividualByName(rosterPlayers, n);
@@ -530,26 +562,21 @@ function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursome
     if (showComp && p && p.competition) parts.push(p.competition);
     return parts.join(" · ");
   };
-  const withDetails = (n) => {
-    const details = detailsFor(n);
-    return details ? `${withIndex(n)} – ${details}` : withIndex(n);
-  };
 
-  if (names.length === 4 && isFoursomes) {
-    const phA = showCH ? pairPH(course, rosterPlayers, allowancePct, names[0], names[1]) : null;
-    const phB = showCH ? pairPH(course, rosterPlayers, allowancePct, names[2], names[3]) : null;
-    // If both partners share the same tee/competition, show it once rather
-    // than repeating it — otherwise show each partner's own.
-    const detailsA = [...new Set([detailsFor(names[0]), detailsFor(names[1])])].filter(Boolean).join(" / ");
-    const detailsB = [...new Set([detailsFor(names[2]), detailsFor(names[3])])].filter(Boolean).join(" / ");
-    const pairAMain = `${withIndex(names[0])} & ${withIndex(names[1])}${phA !== null ? ` (${phA})` : ""}`;
-    const pairBMain = `${withIndex(names[2])} & ${withIndex(names[3])}${phB !== null ? ` (${phB})` : ""}`;
-    return [
-      detailsA ? `${pairAMain} – ${detailsA}` : pairAMain,
-      detailsB ? `${pairBMain} – ${detailsB}` : pairBMain,
-    ];
+  if (isFoursomes) {
+    return foursomesPairs(names).map((pair) => {
+      const main = pairText(pair, course, rosterPlayers, allowancePct, showIndex, showCH);
+      // If both partners share the same tee/competition, show it once
+      // rather than repeating it — otherwise show each partner's own.
+      const details = [...new Set(pair.map(detailsFor))].filter(Boolean).join(" / ");
+      return details ? `${main} – ${details}` : main;
+    });
   }
-  return names.map(withDetails);
+  return names.map((n) => {
+    const main = nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH);
+    const details = detailsFor(n);
+    return details ? `${main} – ${details}` : main;
+  });
 }
 
 function emptyRound(label, course) {
@@ -787,8 +814,8 @@ function merge3(base, mine, theirs) {
 
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
-  accentColor: "#3B6D8C",
-  headerColor: "#1F2A37",
+  accentColor: BRAND.accentColor,
+  headerColor: BRAND.headerColor,
   rev: 0, // goes up by one with every save — lets a device recognise (and ignore) an out-of-date copy from the server
   pin: DEFAULT_PIN,
   handicapPin: "0000", // separate, lighter-weight code for players checking/updating their own handicap
@@ -1208,8 +1235,15 @@ function CodeGate({ onSubmit }) {
     >
       <style>{`.mono { font-family: 'Courier New', ui-monospace, monospace; }`}</style>
       <div style={{ width: "100%", maxWidth: 320, textAlign: "center" }}>
-        <Flag size={26} color="#8A8774" style={{ marginBottom: 10 }} />
-        <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 4 }}>Live Leaderboard</div>
+        {logoForOrgName(BRAND.orgName) ? (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+            <SocietyLogo orgName={BRAND.orgName} height={96} />
+          </div>
+        ) : (
+          <Flag size={26} color="#8A8774" style={{ marginBottom: 10 }} />
+        )}
+        <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 2 }}>{BRAND.orgName}</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#6B6B5F", marginBottom: 6 }}>Live Leaderboard</div>
         <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 18 }}>
           Press Continue to open the event — or type a different code first.
         </div>
@@ -1217,7 +1251,7 @@ function CodeGate({ onSubmit }) {
           value={value}
           onChange={(e) => setValue(e.target.value.toUpperCase())}
           onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="e.g. LGS2026"
+          placeholder={`e.g. ${BRAND.defaultEventCode}`}
           className="mono"
           style={{
             width: "100%", fontSize: 20, textAlign: "center", letterSpacing: "0.15em", padding: "12px 0",
@@ -1227,7 +1261,7 @@ function CodeGate({ onSubmit }) {
         />
         <button
           onClick={submit}
-          style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: "#1B2A4A", color: "#FFFFFF", fontWeight: 600, fontSize: 14 }}
+          style={{ width: "100%", padding: "11px 0", borderRadius: 8, border: "none", background: BRAND.headerColor, color: "#FFFFFF", fontWeight: 600, fontSize: 14 }}
         >
           Continue
         </button>
@@ -2160,25 +2194,25 @@ function AppInner() {
   // Sets ONE person's per-day handicap adjustment — addressed the same way
   // as bulkSetTee, since a Foursomes record holds two people.
   const setHandicapAdjustment = (recordId, role, value) => {
-    updateRound({
-      players: players.map((p) => {
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
         if (p.id !== recordId) return p;
         return role === "partner" ? { ...p, partnerHandicapAdjustment: value } : { ...p, handicapAdjustment: value };
       }),
-    });
+    }));
   };
 
   // Applies the SAME adjustment to a whole batch of people at once — e.g.
   // "all ladies get +2 shots for this competition".
   const bulkSetHandicapAdjustment = (selections, value) => {
-    updateRound({
-      players: players.map((p) => {
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
         const setsPrimary = selections.some((s) => s.recordId === p.id && s.role === "primary");
         const setsPartner = selections.some((s) => s.recordId === p.id && s.role === "partner");
         if (!setsPrimary && !setsPartner) return p;
         return { ...p, ...(setsPrimary ? { handicapAdjustment: value } : {}), ...(setsPartner ? { partnerHandicapAdjustment: value } : {}) };
       }),
-    });
+    }));
   };
 
   // Auto-registers a placeholder entry for any abbreviation seen in a draw
@@ -2597,7 +2631,7 @@ function AppInner() {
       <div className="no-print" style={{ background: headerColor, color: "#F1EFE3", padding: "18px 16px 22px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/lucifer/i.test(orgName || "") ? <SocietyLogo orgName={orgName} height={50} /> : <Flag size={20} color={accentColor} />}
+            {logoForOrgName(orgName) ? <SocietyLogo orgName={orgName} height={50} /> : <Flag size={20} color={accentColor} />}
             <span style={{ fontSize: 22, letterSpacing: "0.08em", textTransform: "uppercase", opacity: 0.75 }}>
               {orgName}
             </span>
@@ -3877,6 +3911,9 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
         </button>
       </div>
 
+      {viewMode === "times" && (publicShowIndex || publicShowCH) && anyHandicapAdjusted(players) && (
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", fontStyle: "italic", marginBottom: 8 }}>{ADJUSTED_FOOTNOTE}</div>
+      )}
       {viewMode === "individual" && (
         <input
           value={filter}
@@ -4487,11 +4524,11 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const teeableePeople = (isFoursomes
     ? players.flatMap((p) => {
         const list = [];
-        if (p.name) list.push({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee });
-        if (p.partnerName) list.push({ key: `${p.id}:partner`, recordId: p.id, role: "partner", name: p.partnerName, tee: p.partnerTee });
+        if (p.name) list.push({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee, adj: Number(p.handicapAdjustment) || 0 });
+        if (p.partnerName) list.push({ key: `${p.id}:partner`, recordId: p.id, role: "partner", name: p.partnerName, tee: p.partnerTee, adj: Number(p.partnerHandicapAdjustment) || 0 });
         return list;
       })
-    : players.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee }))
+    : players.filter((p) => p.name).map((p) => ({ key: `${p.id}:primary`, recordId: p.id, role: "primary", name: p.name, tee: p.tee, adj: Number(p.handicapAdjustment) || 0 }))
   ).sort((a, b) => a.name.localeCompare(b.name));
 
   // isLady lives on the Society Roster, not the day's own player record,
@@ -5008,7 +5045,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             onClick={() => setShowAdjustPanel((v) => !v)}
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, cursor: "pointer" }}
           >
-            <span style={{ fontSize: 12, fontWeight: 700 }}>Adjust handicap</span>
+            <span style={{ fontSize: 12, fontWeight: 700 }}>
+              Adjust handicap{teeableePeople.some((x) => x.adj !== 0) ? ` — ${teeableePeople.filter((x) => x.adj !== 0).length} adjusted` : ""}
+            </span>
             <ChevronRight size={15} color="#9B9885" style={{ transform: showAdjustPanel ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
           </button>
           {showAdjustPanel && (
@@ -5050,6 +5089,11 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               >
                 <input type="checkbox" checked={selectedAdjustKeys.has(person.key)} onChange={() => toggleAdjustSelect(person.key)} />
                 <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{person.name}</span>
+                {person.adj !== 0 && (
+                  <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: "#FFFFFF", background: headerColor, borderRadius: 4, padding: "1px 6px" }}>
+                    {person.adj > 0 ? `+${person.adj}` : person.adj} {Math.abs(person.adj) === 1 ? "shot" : "shots"}
+                  </span>
+                )}
               </label>
             ))}
           </div>
@@ -5196,6 +5240,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
           currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
           currentTee={getTee(course, (findIndividualByName(players, editingSlot.name) || {}).tee).label}
           currentCompetition={(findIndividualByName(players, editingSlot.name) || {}).competition || ""}
+          currentAdjustment={Number((findIndividualByName(players, editingSlot.name) || {}).handicapAdjustment) || 0}
           competitions={competitions}
           course={course}
           headerColor={headerColor}
@@ -5217,7 +5262,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   );
 }
 
-function SlotHandicapEditor({ name, currentIndex, currentTee, currentCompetition, competitions, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
+function SlotHandicapEditor({ currentAdjustment = 0, name, currentIndex, currentTee, currentCompetition, competitions, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
   const [value, setValue] = useState(currentIndex);
   const [tee, setTee] = useState(currentTee);
   const [competition, setCompetition] = useState(currentCompetition || (competitions[0] && competitions[0].abbreviation) || "");
@@ -5235,6 +5280,12 @@ function SlotHandicapEditor({ name, currentIndex, currentTee, currentCompetition
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 15, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{name}</div>
+        {currentAdjustment !== 0 && (
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#FFFFFF", background: headerColor, borderRadius: 7, padding: "7px 10px", marginBottom: 12 }}>
+            * Handicap adjusted for this day: {currentAdjustment > 0 ? `+${currentAdjustment}` : currentAdjustment} {Math.abs(currentAdjustment) === 1 ? "shot" : "shots"}
+            <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2, opacity: 0.9 }}>Change it under "Adjust handicap" on the Draw screen.</div>
+          </div>
+        )}
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
         <input
           type="number"
@@ -5516,7 +5567,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
 const PRINT_ORG_NAME_STYLE = {
   fontFamily: '"Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif',
   fontSize: 26, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
-  color: "#14275A", lineHeight: 1.15, paddingBottom: 5, marginBottom: 8, borderBottom: "3px solid #14275A",
+  color: BRAND.printColor, lineHeight: 1.15, paddingBottom: 5, marginBottom: 8, borderBottom: `3px solid ${BRAND.printColor}`,
   WebkitPrintColorAdjust: "exact", printColorAdjust: "exact",
 };
 
@@ -5558,6 +5609,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
       return {
         name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
         ph: t.ph,
+        adjusted: !!(Number(p.handicapAdjustment) || (isFoursomes && Number(p.partnerHandicapAdjustment))),
         thru: t.thru,
         gross: complete ? t.grossTotal : null,
         net: complete ? t.netTotal : null,
@@ -5718,7 +5770,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
                   <tr key={r.name} className="print-row">
                     <td className="mono" style={{ ...td, fontWeight: 700 }}>{r.pos}</td>
                     <td style={{ ...td, fontWeight: 600 }}>{r.name}</td>
-                    <td className="mono" style={tdR}>{r.ph}</td>
+                    <td className="mono" style={tdR}>{r.ph}{r.adjusted ? "*" : ""}</td>
                     {cols.gross && <td className="mono" style={tdR}>{r.gross !== null ? r.gross : r.thru > 0 ? "NR" : "–"}</td>}
                     {cols.net && <td className="mono" style={{ ...tdR, fontWeight: isMedal ? 800 : 400 }}>{r.net !== null ? r.net : r.thru > 0 ? "NR" : "–"}</td>}
                     {cols.points && <td className="mono" style={{ ...tdR, fontWeight: isMedal ? 400 : 800 }}>{r.points !== null ? r.points : "–"}</td>}
@@ -5751,7 +5803,9 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
               </tbody>
             </table>
           )}
-              <div style={{ fontSize: 10, marginTop: 8, color: "#444" }}>Printed {printedAt}</div>
+              <div style={{ fontSize: 10, marginTop: 8, color: "#444" }}>
+                {view === "day" && sec.rows.some((r) => r.adjusted) ? `${ADJUSTED_FOOTNOTE}  ·  ` : ""}Printed {printedAt}
+              </div>
             </div>
           ))}
         </div>
@@ -5838,6 +5892,9 @@ function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visO
           ))}
         </tbody>
       </table>
+      {(showIndex || showCH) && anyHandicapAdjusted(players) && (
+        <div style={{ fontSize: 11, fontStyle: "italic", marginTop: 6 }}>{ADJUSTED_FOOTNOTE}</div>
+      )}
     </div>
   );
 
@@ -7060,7 +7117,7 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
                 </span>
                 {(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)) ? (
                   <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: headerColor, borderRadius: 4, padding: "1px 5px" }}>
-                    adj
+                    adj {[p.handicapAdjustment, p.partnerHandicapAdjustment].map((v) => Number(v) || 0).filter((v) => v !== 0).map((v) => (v > 0 ? `+${v}` : `${v}`)).join(" / ")}
                   </span>
                 ) : null}
               </div>
@@ -7351,7 +7408,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name}
           </div>
           <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 4 }}>
-            Playing HCP {ph}{player.tee ? ` · ${player.tee} tee` : ""}
+            Playing HCP {ph}{Number(player.handicapAdjustment) || (isFoursomes && Number(player.partnerHandicapAdjustment)) ? "*" : ""}{player.tee ? ` · ${player.tee} tee` : ""}
           </div>
           <div style={{ fontSize: 11.5, color: "#8A5A00", marginTop: 8 }}>
             Check this is the right card before you start. Enter the GROSS score for each hole, then press COMPLETE.
