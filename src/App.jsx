@@ -19,6 +19,10 @@ const DEFAULT_COURSE = {
   ],
 };
 
+// Shown at the bottom of the Admin screen, so it's always possible to
+// confirm which version of the app a phone or laptop is really running.
+const APP_VERSION = "20 Sep 2026 · build 10";
+
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
 
@@ -664,6 +668,7 @@ const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
   headerColor: "#1F2A37",
+  rev: 0, // goes up by one with every save — lets a device recognise (and ignore) an out-of-date copy from the server
   pin: DEFAULT_PIN,
   handicapPin: "0000", // separate, lighter-weight code for players checking/updating their own handicap
   rounds: [emptyRound("Day 1")],
@@ -725,6 +730,7 @@ function sanitizeState(parsed) {
     orgName: typeof parsed.orgName === "string" && parsed.orgName ? parsed.orgName : DEFAULT_ORG_NAME,
     accentColor: typeof parsed.accentColor === "string" && parsed.accentColor ? parsed.accentColor : DEFAULT_STATE.accentColor,
     headerColor: typeof parsed.headerColor === "string" && parsed.headerColor ? parsed.headerColor : DEFAULT_STATE.headerColor,
+    rev: typeof parsed.rev === "number" && parsed.rev > 0 ? parsed.rev : 0,
     pin: typeof parsed.pin === "string" && parsed.pin ? parsed.pin : DEFAULT_PIN,
     handicapPin: typeof parsed.handicapPin === "string" && parsed.handicapPin ? parsed.handicapPin : "0000",
     rounds,
@@ -1198,6 +1204,7 @@ function AppInner() {
   const stateRef = useRef(DEFAULT_STATE);
   const syncedRef = useRef({ state: DEFAULT_STATE, etag: null });
   const dirtyRef = useRef(false);
+  const staleSinceRef = useRef(0);
   const pumpingRef = useRef(false);
   const applyState = useCallback((next) => {
     stateRef.current = next;
@@ -1268,6 +1275,18 @@ function AppInner() {
       // skipped here isn't lost: the save path merges it in (see pump).
       if (busy()) return;
       const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
+      // The server can briefly hand back a copy from BEFORE this device's
+      // latest save (reads can lag writes by up to a minute). Showing it
+      // would make changes appear to vanish a few seconds after being
+      // made — so anything older than what's already on screen is ignored;
+      // the next refresh will bring the up-to-date copy.
+      // (If the server STILL says the same after 90 seconds, it isn't lag
+      // — e.g. a phone on an older app version saved — so accept it.)
+      if ((loaded.rev || 0) < (stateRef.current.rev || 0)) {
+        if (!staleSinceRef.current) staleSinceRef.current = Date.now();
+        if (Date.now() - staleSinceRef.current < 90000) return;
+      }
+      staleSinceRef.current = 0;
       syncedRef.current = { state: loaded, etag: res ? res.etag || null : "new" };
       applyState(loaded);
       if (!hasSeededActiveRoundRef.current) {
@@ -1331,7 +1350,7 @@ function AppInner() {
               setSyncError(false);
               continue;
             }
-            const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+            const merged = { ...merge3(syncedRef.current.state, stateRef.current, theirs.state), rev: Math.max(stateRef.current.rev || 0, theirs.state.rev || 0) + 1 };
             syncedRef.current = theirs;
             applyState(merged);
             dirtyRef.current = true;
@@ -1352,7 +1371,7 @@ function AppInner() {
           const theirs = await fetchTheirs();
           if (eventCodeRef.current !== code) return;
           dirtyRef.current = true;
-          if (!theirs.etag || theirs.etag === sentEtag) {
+          if (!theirs.etag || theirs.etag === sentEtag || (failures < 5 && (theirs.state.rev || 0) < (syncedRef.current.state.rev || 0))) {
             // The read hasn't caught up with their save yet — it handed
             // back the same version we already had. Wait and try again.
             failures += 1;
@@ -1360,7 +1379,7 @@ function AppInner() {
             await wait(Math.min(1000 * failures, 6000));
             continue;
           }
-          const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+          const merged = { ...merge3(syncedRef.current.state, stateRef.current, theirs.state), rev: Math.max(stateRef.current.rev || 0, theirs.state.rev || 0) + 1 };
           syncedRef.current = theirs;
           applyState(merged);
         } catch (err) {
@@ -1400,7 +1419,7 @@ function AppInner() {
     // updated synchronously right here, so that can't happen.
     const prev = stateRef.current;
     const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
-    const next = { ...prev, ...resolvedPatch };
+    const next = { ...prev, ...resolvedPatch, rev: (prev.rev || 0) + 1 };
     lastLocalSaveAtRef.current = Date.now();
     applyState(next);
     dirtyRef.current = true;
@@ -6204,6 +6223,10 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
         <span style={{ flex: 1, textAlign: "left" }}>Print the draw (tee time order &amp; by player)</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
+
+      <div className="mono" style={{ textAlign: "center", fontSize: 10.5, color: "#9B9885", marginTop: 14 }}>
+        App version: {APP_VERSION}
+      </div>
     </div>
   );
 }
