@@ -533,6 +533,97 @@ function formatDisplayDateLong(dateStr) {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
 
+// ---- Three-way merge, used only when two devices saved at the same time ----
+// base   = the last version this device knows the server had
+// mine   = this device's current data (base + whatever was just changed here)
+// theirs = what's actually on the server now (base + someone else's changes)
+// The result keeps BOTH sets of changes. Only when both devices changed the
+// very same value (e.g. the same player's score on the same hole) does one
+// have to win — and that's this device's, since it's the most recent action.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if (!Object.prototype.hasOwnProperty.call(b, k) || !deepEqual(a[k], b[k])) return false;
+  return true;
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isKeyedList = (v) => Array.isArray(v) && v.every((x) => isPlainObject(x) && typeof x.id === "string" && x.id);
+const isPrimitiveList = (v) => Array.isArray(v) && v.every((x) => x === null || typeof x !== "object");
+
+function merge3(base, mine, theirs) {
+  if (deepEqual(mine, theirs)) return mine;
+  if (deepEqual(mine, base)) return theirs; // only they changed it
+  if (deepEqual(theirs, base)) return mine; // only I changed it
+
+  // Both changed it — try to combine at a finer grain.
+  if (isPlainObject(mine) && isPlainObject(theirs)) {
+    const b = isPlainObject(base) ? base : {};
+    const out = {};
+    const keys = new Set([...Object.keys(theirs), ...Object.keys(mine)]);
+    for (const k of keys) {
+      const inMine = Object.prototype.hasOwnProperty.call(mine, k);
+      const inTheirs = Object.prototype.hasOwnProperty.call(theirs, k);
+      if (inMine && inTheirs) out[k] = merge3(b[k], mine[k], theirs[k]);
+      else if (inMine) out[k] = mine[k];
+      else out[k] = theirs[k];
+    }
+    return out;
+  }
+
+  // Lists of records that each carry an id (rounds, players, matches,
+  // competitions, documents, roster) — merge record by record.
+  if (isKeyedList(mine) && isKeyedList(theirs) && (mine.length > 0 || theirs.length > 0)) {
+    const b = isKeyedList(base) ? base : [];
+    const baseById = new Map(b.map((x) => [x.id, x]));
+    const mineById = new Map(mine.map((x) => [x.id, x]));
+    const theirsById = new Map(theirs.map((x) => [x.id, x]));
+    const out = [];
+    const seen = new Set();
+    const consider = (id) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const bi = baseById.get(id);
+      const mi = mineById.get(id);
+      const ti = theirsById.get(id);
+      if (mi && ti) out.push(merge3(bi, mi, ti));
+      else if (mi && !ti) {
+        // They removed it (or never had it). Keep it if it's new here, or
+        // if I changed it since — never silently drop an edit.
+        if (!bi || !deepEqual(mi, bi)) out.push(mi);
+      } else if (ti && !mi) {
+        if (!bi || !deepEqual(ti, bi)) out.push(ti);
+      }
+    };
+    // Keep the order of whichever side reordered/added; default to mine.
+    const mineOrderChanged = !deepEqual(mine.map((x) => x.id), b.map((x) => x.id));
+    const first = mineOrderChanged ? mine : theirs;
+    const second = mineOrderChanged ? theirs : mine;
+    first.forEach((x) => consider(x.id));
+    second.forEach((x) => consider(x.id));
+    return out;
+  }
+
+  // Fixed-length lists of plain values (a player's 18 hole scores, a draw
+  // row's 4 slots) — merge position by position.
+  if (isPrimitiveList(mine) && isPrimitiveList(theirs) && mine.length === theirs.length) {
+    const b = isPrimitiveList(base) && base.length === mine.length ? base : null;
+    if (b) return mine.map((v, i) => (v !== b[i] ? v : theirs[i]));
+  }
+
+  // Genuinely the same value changed on both sides — most recent action wins.
+  return mine;
+}
+
 const DEFAULT_STATE = {
   orgName: DEFAULT_ORG_NAME,
   accentColor: "#3B6D8C",
@@ -544,6 +635,19 @@ const DEFAULT_STATE = {
   documents: [], // event-wide, not tied to any particular day
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
+
+// Which day the app opens on. Today's round if there is one (the first
+// in the list when several share today's date), otherwise the next
+// upcoming dated round, otherwise whatever was last saved as active.
+function defaultRoundIdFor(rounds, savedActiveRoundId) {
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const todays = rounds.find((r) => r.date === today);
+  if (todays) return todays.id;
+  const upcomingDates = rounds.filter((r) => r.date && r.date > today).map((r) => r.date).sort();
+  if (upcomingDates.length > 0) return rounds.find((r) => r.date === upcomingDates[0]).id;
+  return savedActiveRoundId;
+}
 
 function sanitizeState(parsed) {
   // Competitions used to be one event-wide list shared by every round.
@@ -1047,6 +1151,22 @@ function AppInner() {
   // silently overwrite a genuinely newer local change with a stale
   // server copy.
   const lastLocalSaveAtRef = useRef(0);
+  // ---- Multi-device save safety ----
+  // stateRef always holds this device's latest data, updated the instant a
+  // change is made (React's own state can lag by a render). syncedRef holds
+  // the last version this device KNOWS the server has, plus its version
+  // marker (etag). Every save sends that marker; if another device has
+  // saved in the meantime the server refuses, and we fetch their version,
+  // merge our change into it, and send again — so nobody's scores or edits
+  // are ever overwritten by someone else's older copy.
+  const stateRef = useRef(DEFAULT_STATE);
+  const syncedRef = useRef({ state: DEFAULT_STATE, etag: null });
+  const dirtyRef = useRef(false);
+  const pumpingRef = useRef(false);
+  const applyState = useCallback((next) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
   const activeRoundId = localActiveRoundId || savedActiveRoundId;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval, competitions } = activeRound;
@@ -1072,6 +1192,7 @@ function AppInner() {
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
+  const [showPrintDraw, setShowPrintDraw] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
   const [showSocietyRoster, setShowSocietyRoster] = useState(false);
   const [showMatchesSetup, setShowMatchesSetup] = useState(false);
@@ -1092,38 +1213,137 @@ function AppInner() {
   const load = useCallback(async () => {
     const code = eventCodeRef.current;
     if (!code) return;
+    // True when it's unsafe to replace what's on screen with a server copy.
+    const busy = () =>
+      modeRef.current === "scorer" ||
+      dirtyRef.current ||
+      pumpingRef.current ||
+      Date.now() - lastLocalSaveAtRef.current < 4000 ||
+      eventCodeRef.current !== code;
     try {
       const res = await window.storage.get(storageKeyFor(code), true);
       // Only skip applying a refresh while actively in the scorer screens
       // (Admin) — that's the one place a background update could yank the
-      // screen out from under someone mid-edit. Every other screen,
-      // including the very first load right after entering an event code,
-      // should always get the real data.
-      if (modeRef.current === "scorer") return;
-      // Also skip it for a few seconds right after this device's own
-      // save — the write and this poll's read can otherwise race, and a
-      // fetch that lands a moment before that write has fully propagated
-      // would silently undo a genuinely newer local change. A brief
-      // window is enough for the backend to catch up without meaningfully
-      // delaying real updates from other devices.
-      if (Date.now() - lastLocalSaveAtRef.current < 4000) return;
+      // screen out from under someone mid-edit — or while this device has
+      // a change of its own still on its way to the server (including the
+      // few seconds right after a save, when a read can lag the write).
+      // Every other screen, including the very first load right after
+      // entering an event code, should always get the real data. Anything
+      // skipped here isn't lost: the save path merges it in (see pump).
+      if (busy()) return;
       const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
-      setState(loaded);
+      syncedRef.current = { state: loaded, etag: res ? res.etag || null : "new" };
+      applyState(loaded);
       if (!hasSeededActiveRoundRef.current) {
-        setLocalActiveRoundId(loaded.activeRoundId);
+        setLocalActiveRoundId(defaultRoundIdFor(loaded.rounds, loaded.activeRoundId));
         hasSeededActiveRoundRef.current = true;
       }
       setLive(true);
     } catch (err) {
-      if (modeRef.current === "scorer") return;
+      if (busy()) return;
       if (String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404")) {
-        setState(DEFAULT_STATE);
+        syncedRef.current = { state: DEFAULT_STATE, etag: "new" };
+        applyState(DEFAULT_STATE);
       }
       setLive(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyState]);
+
+  // Sends this device's latest data to the server — one request at a time,
+  // always carrying the version marker of the copy it was based on.
+  const pump = useCallback(async () => {
+    if (pumpingRef.current) return;
+    pumpingRef.current = true;
+    const code = eventCodeRef.current;
+    const key = storageKeyFor(code);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Reads the server's current copy -> { state, etag } ("new" if none yet)
+    const fetchTheirs = async () => {
+      try {
+        const res = await window.storage.get(key, true);
+        return { state: sanitizeState(JSON.parse(res.value)), etag: res.etag || null };
+      } catch (err) {
+        const msg = String(err).toLowerCase();
+        if (msg.includes("not found") || msg.includes("404")) return { state: DEFAULT_STATE, etag: "new" };
+        throw err;
+      }
+    };
+    let failures = 0;
+    try {
+      while (dirtyRef.current && eventCodeRef.current === code) {
+        dirtyRef.current = false;
+        const mine = stateRef.current;
+        try {
+          // Older storage helper without safe saves — behave as before.
+          if (typeof window.storage.setIfMatch !== "function") {
+            await window.storage.set(key, JSON.stringify(mine), true);
+            syncedRef.current = { state: mine, etag: null };
+            setSyncError(false);
+            continue;
+          }
+          // No version marker yet (e.g. the very first load never landed):
+          // find out what the server has before sending anything.
+          if (!syncedRef.current.etag) {
+            const theirs = await fetchTheirs();
+            if (eventCodeRef.current !== code) return;
+            if (!theirs.etag) {
+              // Server can't supply version markers — plain save, as before.
+              await window.storage.set(key, JSON.stringify(mine), true);
+              syncedRef.current = { state: mine, etag: null };
+              setSyncError(false);
+              continue;
+            }
+            const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+            syncedRef.current = theirs;
+            applyState(merged);
+            dirtyRef.current = true;
+            continue;
+          }
+          const sentEtag = syncedRef.current.etag;
+          const result = await window.storage.setIfMatch(key, JSON.stringify(mine), sentEtag);
+          if (eventCodeRef.current !== code) return;
+          if (result.ok) {
+            syncedRef.current = { state: mine, etag: result.etag };
+            lastLocalSaveAtRef.current = Date.now();
+            failures = 0;
+            setSyncError(false);
+            continue;
+          }
+          // Refused: another device saved since our copy was loaded. Get
+          // their version and fold this device's changes into it.
+          const theirs = await fetchTheirs();
+          if (eventCodeRef.current !== code) return;
+          dirtyRef.current = true;
+          if (!theirs.etag || theirs.etag === sentEtag) {
+            // The read hasn't caught up with their save yet — it handed
+            // back the same version we already had. Wait and try again.
+            failures += 1;
+            if (failures > 12) throw new Error("Could not get an up-to-date copy");
+            await wait(Math.min(1000 * failures, 6000));
+            continue;
+          }
+          const merged = merge3(syncedRef.current.state, stateRef.current, theirs.state);
+          syncedRef.current = theirs;
+          applyState(merged);
+        } catch (err) {
+          // Offline / server error — keep the change, show the warning,
+          // and keep retrying in the background with growing gaps.
+          dirtyRef.current = true;
+          failures += 1;
+          setSyncError(true);
+          if (failures > 12) return; // give up for now; the next change restarts it
+          await wait(Math.min(1500 * failures, 10000));
+        }
+      }
+    } finally {
+      pumpingRef.current = false;
+      // A change may have landed in the instant between the loop ending
+      // and the flag clearing — make sure it isn't left behind.
+      if (dirtyRef.current && failures <= 12) pump();
+    }
+  }, [applyState]);
 
   // patch is a partial update — e.g. save({ players: next }) or
   // save({ course: nextCourse }) — merged onto the latest state via the
@@ -1132,28 +1352,24 @@ function AppInner() {
   const save = useCallback((patch) => {
     const code = eventCodeRef.current;
     if (!code) return;
-    setState((prev) => {
-      // Accepting a function here (rather than only a plain object) means
-      // the patch is computed from the ACTUAL latest state at the moment
-      // this update applies, not from whatever "rounds"/"players" closure
-      // variable happened to be captured back when the click handler that
-      // triggered this call was created. Two updates fired in quick
-      // succession — e.g. tapping two switches back-to-back, before React
-      // has re-rendered in between — would otherwise each build their
-      // patch from the SAME pre-update snapshot, and the second call's
-      // save would silently overwrite (undo) the first's, since both
-      // "start from" the same old data. Passing a function closes that
-      // gap entirely, for every caller, rather than requiring each one to
-      // be manually combined into a single call.
-      const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
-      const next = { ...prev, ...resolvedPatch };
-      lastLocalSaveAtRef.current = Date.now();
-      window.storage.set(storageKeyFor(code), JSON.stringify(next), true)
-        .then(() => setSyncError(false))
-        .catch(() => setSyncError(true));
-      return next;
-    });
-  }, []);
+    // Accepting a function here (rather than only a plain object) means
+    // the patch is computed from the ACTUAL latest state at the moment
+    // this update applies, not from whatever "rounds"/"players" closure
+    // variable happened to be captured back when the click handler that
+    // triggered this call was created. Two updates fired in quick
+    // succession — e.g. tapping two switches back-to-back, before React
+    // has re-rendered in between — would otherwise each build their
+    // patch from the SAME pre-update snapshot, and the second call's
+    // save would silently overwrite (undo) the first's. stateRef is
+    // updated synchronously right here, so that can't happen.
+    const prev = stateRef.current;
+    const resolvedPatch = typeof patch === "function" ? patch(prev) : patch;
+    const next = { ...prev, ...resolvedPatch };
+    lastLocalSaveAtRef.current = Date.now();
+    applyState(next);
+    dirtyRef.current = true;
+    pump();
+  }, [applyState, pump]);
 
   // Switching event code means switching to a completely different data
   // set — reset everything local before the new code's load() runs, so
@@ -1161,7 +1377,9 @@ function AppInner() {
   useEffect(() => {
     if (!eventCode) return;
     setLoading(true);
-    setState(DEFAULT_STATE);
+    applyState(DEFAULT_STATE);
+    syncedRef.current = { state: DEFAULT_STATE, etag: null };
+    dirtyRef.current = false;
     setLocalActiveRoundId(null);
     hasSeededActiveRoundRef.current = false;
     setActiveId(null);
@@ -2342,6 +2560,28 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
+      ) : showPrintDraw ? (
+        <PrintDraw
+          draw={draw}
+          players={players}
+          course={course}
+          handicapAllowance={handicapAllowance}
+          isFoursomes={isFoursomes}
+          visOpts={{
+            showIndex: activeRound.publicShowIndex,
+            showCH: activeRound.publicShowCH,
+            showTee: activeRound.publicShowTee,
+            showComp: activeRound.publicShowComp,
+            showStartTee: activeRound.publicShowStartTee,
+          }}
+          startingHole={startingHole}
+          drawNote={activeRound.drawNote}
+          roundLabel={activeRound.label}
+          roundDateDisplay={formatDisplayDateLong(activeRound.date)}
+          orgName={state.orgName}
+          onBack={() => setShowPrintDraw(false)}
+          headerColor={headerColor}
+        />
       ) : showPrintLabels ? (
         <PrintLabels
           course={course}
@@ -2433,9 +2673,10 @@ function AppInner() {
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
           onOpenSocietyRoster={() => setShowSocietyRoster(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
+          onOpenPrintDraw={() => setShowPrintDraw(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -3308,7 +3549,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
               {filteredRows.map((r) => (
                 <tr key={r.name} style={{ borderTop: "1px solid #EFEDE0" }}>
                   <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{r.name}</td>
-                  <td className="mono" style={{ padding: "9px 10px", fontSize: 12.5, whiteSpace: "nowrap" }}>{r.time}</td>
+                  <td className="mono" style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 700, color: headerColor, whiteSpace: "nowrap" }}>{r.time}</td>
                   {publicShowTee && <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.tee}</td>}
                   <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.others.join(" + ") || "—"}</td>
                 </tr>
@@ -4830,7 +5071,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
-        .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
+        .label-note { font-size: 11px; color: #6B6B5F; font-style: italic; margin-top: 6px; }
 
         /* Print output — matched exactly to Avery L7161's real measurements,
            so each card lands precisely on a real adhesive label. Same
@@ -4861,7 +5102,169 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           .label-name { font-size: 17px !important; font-weight: 700 !important; margin: 3px 0 !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
-          .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
+          .label-note { font-size: 10.5px !important; color: #000 !important; font-style: italic !important; font-weight: 600 !important; line-height: 1.15 !important; margin-top: 5px !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Printable draw for anyone without the app — reached from Admin. Two
+// sheets, either or both: the draw in tee-time order, and an A–Z list
+// of players each with their own tee time and playing partners. Shows
+// the same handicap/tee/competition details as the public Draw tab, so
+// paper and phone always agree.
+function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visOpts, startingHole, drawNote, roundLabel, roundDateDisplay, orgName, onBack, headerColor }) {
+  const [which, setWhich] = useState("both"); // times | individual | both
+  const { showIndex, showCH, showTee, showComp, showStartTee } = visOpts;
+  const anyStartTee = showStartTee && draw.some((e) => e.startTee);
+
+  const individualRows = draw
+    .flatMap((entry) =>
+      (entry.players || []).filter(Boolean).map((name) => ({
+        name,
+        time: entry.time,
+        startTee: entry.startTee || "",
+        tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
+        others: (entry.players || []).filter((n) => n && n !== name),
+      }))
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const sheetHeader = (subtitle) => (
+    <div style={{ marginBottom: 10 }}>
+      {orgName && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>{orgName}</div>}
+      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>{roundLabel} — {subtitle}</div>
+      <div style={{ fontSize: 13, marginTop: 2 }}>
+        {[course.name, roundDateDisplay, startingHole && startingHole.trim() ? `Starting from the ${startingHole} tee` : ""].filter(Boolean).join("  ·  ")}
+      </div>
+      {drawNote && drawNote.trim() && (
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 6, padding: "5px 8px", border: "1px solid #000" }}>{drawNote}</div>
+      )}
+    </div>
+  );
+
+  const th = { textAlign: "left", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000", whiteSpace: "nowrap" };
+  const td = { padding: "6px 8px", fontSize: 13, borderBottom: "1px solid #999", verticalAlign: "top" };
+  const timeCell = { ...td, fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" };
+
+  const timesSheet = (
+    <div className="print-sheet">
+      {sheetHeader("Draw")}
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={th}>Tee Time</th>
+            {anyStartTee && <th style={th}>Start</th>}
+            <th style={th}>Players</th>
+          </tr>
+        </thead>
+        <tbody>
+          {draw.map((entry) => (
+            <tr key={entry.id} className="print-row">
+              <td className="mono" style={timeCell}>{entry.time}</td>
+              {anyStartTee && <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{entry.startTee || ""}</td>}
+              <td style={td}>
+                {entry.players && entry.players.filter(Boolean).length > 0
+                  ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex, showCH, showTee, showComp }).map((line, i) => (
+                      <div key={i} style={{ marginBottom: 1 }}>{line}</div>
+                    ))
+                  : entry.group || "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const individualSheet = (
+    <div className="print-sheet">
+      {sheetHeader("Draw by Player (A–Z)")}
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={th}>Player</th>
+            <th style={th}>Tee Time</th>
+            {anyStartTee && <th style={th}>Start</th>}
+            {showTee && <th style={th}>Tee</th>}
+            <th style={th}>Playing With</th>
+          </tr>
+        </thead>
+        <tbody>
+          {individualRows.map((r) => (
+            <tr key={r.name} className="print-row">
+              <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{r.name}</td>
+              <td className="mono" style={timeCell}>{r.time}</td>
+              {anyStartTee && <td style={{ ...td, whiteSpace: "nowrap" }}>{r.startTee}</td>}
+              {showTee && <td style={{ ...td, whiteSpace: "nowrap" }}>{r.tee}</td>}
+              <td style={td}>{r.others.join(", ") || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const choice = (value, label) => (
+    <button
+      onClick={() => setWhich(value)}
+      style={{
+        flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700,
+        border: `1px solid ${headerColor}`,
+        background: which === value ? headerColor : "#FFFFFF",
+        color: which === value ? "#FFFFFF" : headerColor,
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
+          ← Back
+        </button>
+        <button
+          onClick={() => window.print()}
+          disabled={draw.length === 0}
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5, opacity: draw.length === 0 ? 0.5 : 1 }}
+        >
+          <Printer size={15} /> Print
+        </button>
+      </div>
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {choice("both", "Both sheets")}
+        {choice("times", "Tee time order")}
+        {choice("individual", "By player")}
+      </div>
+      <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 14 }}>
+        Preview below. Prints on A4; with "Both sheets" the by-player list starts on a new page. Handicaps, tees and
+        competitions follow the "Show on public draw tab" switches in Draw setup, so paper matches what players see.
+      </div>
+
+      {draw.length === 0 ? (
+        <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>
+          There's no draw for {roundLabel} yet — add one under Draw first.
+        </div>
+      ) : (
+        <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
+          {(which === "both" || which === "times") && timesSheet}
+          {which === "both" && <div className="print-break" style={{ height: 24 }} />}
+          {(which === "both" || which === "individual") && individualSheet}
+        </div>
+      )}
+
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4; margin: 12mm; }
+          body { background: #FFFFFF !important; }
+          .print-area { border: none !important; padding: 0 !important; border-radius: 0 !important; }
+          .print-break { break-after: page; page-break-after: always; height: 0 !important; }
+          .print-row { break-inside: avoid; page-break-inside: avoid; }
+          thead { display: table-header-group; }
         }
       `}</style>
     </div>
@@ -5589,7 +5992,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, headerColor, accentColor, onLock }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -5717,6 +6120,19 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
       >
         <Printer size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Print scorecard labels</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenPrintDraw}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Printer size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Print the draw (tee time order &amp; by player)</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
     </div>
