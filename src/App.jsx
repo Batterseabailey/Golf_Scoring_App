@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 14";
+const APP_VERSION = "20 Sep 2026 · build 16";
 
 const DEFAULT_ORG_NAME = "Your Golf Society";
 const STORAGE_PREFIX = "golf-live-scoreboard-v2";
@@ -120,6 +120,28 @@ function setAdminDevice(code, on) {
     else window.localStorage.removeItem(`golf-admin-device-${code}`);
   } catch {
     // ignore — without storage the suffix simply has to be typed each time
+  }
+}
+
+// On an organiser's device the Admin PIN is remembered after the first
+// successful unlock, so the PIN box comes up already filled in and it's
+// just a press of Unlock. Forgotten again by "Hide the Admin tab on this
+// device". (If the PIN is later changed, the remembered one simply fails
+// once and the new one is remembered instead.)
+function rememberedAdminPin(code) {
+  try {
+    return window.localStorage.getItem(`golf-admin-pin-${code}`) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberAdminPin(code, pin) {
+  try {
+    if (pin) window.localStorage.setItem(`golf-admin-pin-${code}`, pin);
+    else window.localStorage.removeItem(`golf-admin-pin-${code}`);
+  } catch {
+    // ignore
   }
 }
 
@@ -543,6 +565,7 @@ function emptyRound(label, course) {
     publicShowGross: true, // this day's leaderboard — gross/net/points columns
     publicShowNet: true,
     publicShowPoints: true,
+    publicScoreEntry: false, // Admin switch — lets players open "Enter scores" for this day and help put cards in
     publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
   };
 }
@@ -589,6 +612,7 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicShowGross: r.publicShowGross === false ? false : true,
     publicShowNet: r.publicShowNet === false ? false : true,
     publicShowPoints: r.publicShowPoints === false ? false : true,
+    publicScoreEntry: r.publicScoreEntry === true,
     publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
   };
 }
@@ -618,6 +642,42 @@ function formatDisplayDateLong(dateStr) {
   if (!y || !m || !d) return "";
   const date = new Date(y, m - 1, d);
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
+// ---- Card locks, for when players help enter scores ----
+// Opening a card stamps it with { by: this device, claimedAt, at }. Other
+// phones then show it as "being entered on another phone" and won't open
+// it. There's no central server to grant locks, so two phones CAN tap the
+// same card in the same few seconds; when their saves meet, the EARLIER
+// claim wins (see pickLock, used by the merge below) and the later phone
+// is sent back to the list. A lock lapses after 3 minutes without a score
+// being typed, so a phone that's closed mid-card never blocks it for long.
+const ENTRY_LOCK_MS = 3 * 60 * 1000;
+
+function getDeviceId() {
+  try {
+    let id = window.localStorage.getItem("golf-device-id");
+    if (!id) {
+      id = crypto.randomUUID();
+      window.localStorage.setItem("golf-device-id", id);
+    }
+    return id;
+  } catch {
+    return `session-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function lockHeldByOther(p, deviceId) {
+  const l = p && p.entryLock;
+  return !!(l && l.by && l.by !== deviceId && Date.now() - (l.at || 0) < ENTRY_LOCK_MS);
+}
+
+function pickLock(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  if (a.by === b.by) return (a.at || 0) >= (b.at || 0) ? a : b;
+  if ((a.claimedAt || 0) !== (b.claimedAt || 0)) return (a.claimedAt || 0) < (b.claimedAt || 0) ? a : b;
+  return String(a.by) < String(b.by) ? a : b;
 }
 
 // ---- Three-way merge, used only when two devices saved at the same time ----
@@ -660,7 +720,8 @@ function merge3(base, mine, theirs) {
     for (const k of keys) {
       const inMine = Object.prototype.hasOwnProperty.call(mine, k);
       const inTheirs = Object.prototype.hasOwnProperty.call(theirs, k);
-      if (inMine && inTheirs) out[k] = merge3(b[k], mine[k], theirs[k]);
+      if (k === "entryLock" && inMine && inTheirs && !deepEqual(mine[k], theirs[k])) out[k] = pickLock(mine[k], theirs[k]);
+      else if (inMine && inTheirs) out[k] = merge3(b[k], mine[k], theirs[k]);
       else if (inMine) out[k] = mine[k];
       else out[k] = theirs[k];
     }
@@ -1254,6 +1315,11 @@ function AppInner() {
   const syncedRef = useRef({ state: DEFAULT_STATE, etag: null });
   const dirtyRef = useRef(false);
   const staleSinceRef = useRef(0);
+  const entryDebounceRef = useRef(null);
+  const deviceIdRef = useRef(null);
+  if (!deviceIdRef.current) deviceIdRef.current = getDeviceId();
+  const deviceId = deviceIdRef.current;
+  const [entryNotice, setEntryNotice] = useState("");
   const pumpingRef = useRef(false);
   const applyState = useCallback((next) => {
     stateRef.current = next;
@@ -1454,7 +1520,7 @@ function AppInner() {
   // save({ course: nextCourse }) — merged onto the latest state via the
   // functional setState form, so it's always correct even if several
   // saves fire close together.
-  const save = useCallback((patch) => {
+  const save = useCallback((patch, opts) => {
     const code = eventCodeRef.current;
     if (!code) return;
     // Accepting a function here (rather than only a plain object) means
@@ -1473,7 +1539,18 @@ function AppInner() {
     lastLocalSaveAtRef.current = Date.now();
     applyState(next);
     dirtyRef.current = true;
-    pump();
+    // While players are helping enter scores, several phones are typing
+    // at once — so their keystrokes are bundled into one save about a
+    // second after the last one, rather than one save per hole. Far fewer
+    // collisions between phones, and nothing is lost: the change is
+    // already on this screen and marked as waiting to go. Opening,
+    // closing and completing a card still go straight away.
+    clearTimeout(entryDebounceRef.current);
+    if (modeRef.current === "entry" && !(opts && opts.immediate)) {
+      entryDebounceRef.current = setTimeout(pump, 900);
+    } else {
+      pump();
+    }
   }, [applyState, pump]);
 
   // Switching event code means switching to a completely different data
@@ -1581,18 +1658,48 @@ function AppInner() {
   }, [eventCode, load]);
 
   useEffect(() => {
-    if (mode !== "board") return;
+    // The leaderboard refreshes itself — and so does the players' "Enter
+    // scores" screen, so everyone sees which cards are done or in hand.
+    if (mode !== "board" && mode !== "entry") return;
     pollRef.current = setInterval(load, 5000);
     return () => clearInterval(pollRef.current);
   }, [mode, load]);
 
+  // Leaving the score screens lets go of whichever card was open.
+  useEffect(() => {
+    if (mode === "entry" || mode === "scorer" || !activeId) return;
+    releaseCard(activeId);
+    setActiveId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  // A player's phone is sent back to the list if the card it has open
+  // turns out to belong to someone else (they claimed it first), has been
+  // completed, or Admin has switched players' score entry off.
+  useEffect(() => {
+    if (mode !== "entry") return;
+    if (!activeRound.publicScoreEntry || isMatchPlay) {
+      setActiveId(null);
+      setMode("menu");
+      return;
+    }
+    if (!activeId) return;
+    const card = players.find((p) => p.id === activeId);
+    if (!card) { setActiveId(null); return; }
+    if (lockHeldByOther(card, deviceId)) {
+      setEntryNotice(`${card.name}'s card is being entered on another phone — please pick a different one.`);
+      setActiveId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, activeId, players, activeRound.publicScoreEntry]);
+
   // Every field that used to live at the top level (course, players, draw,
   // localRules, startingHole) now belongs to a specific round — this merges
   // a patch onto the currently active round and leaves the others untouched.
-  const updateRound = (patch) => {
+  const updateRound = (patch, opts) => {
     save((prevState) => ({
       rounds: prevState.rounds.map((r) => (r.id === activeRoundId ? { ...r, ...(typeof patch === "function" ? patch(r) : patch) } : r)),
-    }));
+    }), opts);
   };
 
   const addPlayer = () => {
@@ -1684,8 +1791,49 @@ function AppInner() {
 
   const loadExample = () => updateRound({ players: exampleSeed(course) });
 
+  // Built from the latest saved round (not this render's snapshot), so an
+  // update from one phone can never carry along an out-of-date copy of
+  // somebody else's card.
   const updatePlayer = (id, patch) => {
-    updateRound({ players: players.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
+    updateRound((prevRound) => ({ players: prevRound.players.map((p) => (p.id === id ? { ...p, ...patch } : p)) }), { immediate: true });
+  };
+
+  // ---- Card locks (see ENTRY_LOCK_MS above) ----
+  const claimCard = (id, { force = false } = {}) => {
+    const round = stateRef.current.rounds.find((r) => r.id === activeRoundId);
+    const card = round && round.players.find((p) => p.id === id);
+    if (!card) return;
+    if (!force) {
+      if (card.scoresComplete === true || (card.scoresComplete === undefined && isScoreComplete(card))) {
+        setEntryNotice(`${card.name}'s card has already been completed.`);
+        return;
+      }
+      if (lockHeldByOther(card, deviceId)) {
+        setEntryNotice(`${card.name}'s card is being entered on another phone.`);
+        return;
+      }
+    }
+    setEntryNotice("");
+    const now = Date.now();
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => (p.id === id ? { ...p, entryLock: { by: deviceId, claimedAt: now, at: now } } : p)),
+    }), { immediate: true });
+    setActiveId(id);
+  };
+
+  const releaseCard = (id) => {
+    if (!id) return;
+    const round = stateRef.current.rounds.find((r) => r.id === activeRoundId);
+    const card = round && round.players.find((p) => p.id === id);
+    if (!card || !card.entryLock || card.entryLock.by !== deviceId) return;
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => (p.id === id && p.entryLock && p.entryLock.by === deviceId ? { ...p, entryLock: null } : p)),
+    }), { immediate: true });
+  };
+
+  const closeCard = () => {
+    releaseCard(activeId);
+    setActiveId(null);
   };
 
   // Lets a handicap be edited straight from the draw builder — looks up
@@ -1721,12 +1869,14 @@ function AppInner() {
     // against a negative or non-numeric entry.
     const num = Number(val);
     const clean = val === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
-    updateRound({
-      players: players.map((p) =>
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) =>
         p.id === id
           ? {
               ...p,
               scores: p.scores.map((s, i) => (i === holeIdx ? clean : s)),
+              // typing keeps this phone's hold on the card alive
+              entryLock: p.entryLock && p.entryLock.by === deviceId ? { ...p.entryLock, at: Date.now() } : p.entryLock,
               // Pin down the card's status the first time it's touched:
               // a brand-new card starts as "in progress" (hidden from the
               // leaderboard until COMPLETE is pressed); a card that already
@@ -1735,7 +1885,7 @@ function AppInner() {
             }
           : p
       ),
-    });
+    }));
   };
 
   const removePlayer = (id) => updateRound({ players: players.filter((p) => p.id !== id) });
@@ -2539,6 +2689,19 @@ function AppInner() {
           >
             Your Handicap
           </button>
+          {activeRound.publicScoreEntry && !isMatchPlay && (
+          <button
+            onClick={() => { closeCard(); setEntryNotice(""); setMode("entry"); setShowCourseSetup(false); load(); }}
+            style={{
+              flex: "1 1 100%", padding: "10px 0", borderRadius: 7, border: `2px solid ${accentColor}`,
+              background: mode === "entry" ? "#F1EFE3" : accentColor,
+              color: mode === "entry" ? headerColor : "#FFFFFF",
+              fontSize: 13, fontWeight: 800, letterSpacing: "0.04em",
+            }}
+          >
+            Enter scores
+          </button>
+          )}
           {adminVisible && (
           <button
             onClick={handleScorerTap}
@@ -2591,6 +2754,38 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
         />
+      ) : mode === "entry" && activeRound.publicScoreEntry && !isMatchPlay ? (
+        // Players helping to put cards in — only while Admin has it switched on.
+        active ? (
+          <ScoreEntry
+            publicMode
+            course={course}
+            player={active}
+            onBack={closeCard}
+            onUpdate={(patch) => updatePlayer(active.id, patch)}
+            onScore={(hole, val) => updateScore(active.id, hole, val)}
+            headerColor={headerColor}
+            isFoursomes={format === "foursomes"}
+            isMedal={isMedal}
+            handicapAllowance={handicapAllowance}
+          />
+        ) : (
+          <PublicScoreList
+            ranked={ranked}
+            isFoursomes={isFoursomes}
+            deviceId={deviceId}
+            notice={entryNotice}
+            roundLabel={activeRound.label}
+            onSelect={async (id) => {
+              // Fetch the very latest first, so a card someone else opened a
+              // moment ago is refused here rather than sorted out afterwards.
+              await load();
+              claimCard(id);
+            }}
+            headerColor={headerColor}
+            accentColor={accentColor}
+          />
+        )
       ) : !scorerUnlocked ? (
         // Guard: mode can only reach "scorer" via handleScorerTap, which
         // requires scorerUnlocked — but if that state is ever false here
@@ -2601,7 +2796,7 @@ function AppInner() {
         <ScoreEntry
           course={course}
           player={active}
-          onBack={() => setActiveId(null)}
+          onBack={closeCard}
           onUpdate={(patch) => updatePlayer(active.id, patch)}
           onScore={(hole, val) => updateScore(active.id, hole, val)}
           headerColor={headerColor}
@@ -2754,7 +2949,8 @@ function AppInner() {
         <EnterScores
           course={course}
           ranked={ranked}
-          onSelect={setActiveId}
+          onSelect={(id) => claimCard(id, { force: true })}
+          deviceId={deviceId}
           onAdd={addPlayer}
           onRemove={removePlayer}
           onLoadExample={loadExample}
@@ -2830,7 +3026,10 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
           onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
-          onHideAdmin={() => { setAdminDevice(eventCode, false); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          publicScoreEntry={activeRound.publicScoreEntry}
+          onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
+          roundLabel={activeRound.label}
+          onHideAdmin={() => { setAdminDevice(eventCode, false); rememberAdminPin(eventCode, ""); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -2839,7 +3038,10 @@ function AppInner() {
           pin={pin}
           accentColor={accentColor}
           headerColor={headerColor}
+          initialEntry={adminVisible ? rememberedAdminPin(eventCode) : ""}
+          description={adminVisible && rememberedAdminPin(eventCode) ? "Your PIN is filled in — just press Unlock." : undefined}
           onSuccess={() => {
+            if (adminVisible) rememberAdminPin(eventCode, pin);
             setScorerUnlocked(true);
             setShowPinPrompt(false);
             setMode("scorer");
@@ -2906,8 +3108,8 @@ function AppInner() {
   );
 }
 
-function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel, title = "Admin PIN", description = "Enter the PIN to enter scores or edit the course." }) {
-  const [entry, setEntry] = useState("");
+function PinPrompt({ pin, accentColor, headerColor, onSuccess, onCancel, title = "Admin PIN", description = "Enter the PIN to enter scores or edit the course.", initialEntry = "" }) {
+  const [entry, setEntry] = useState(initialEntry);
   const [error, setError] = useState(false);
 
   const submit = () => {
@@ -6405,7 +6607,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock, onHideAdmin }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -6418,6 +6620,29 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
       >
         <Clipboard size={16} /> Enter scores
       </button>
+      {!isMatchPlay && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, border: `1px solid ${publicScoreEntry ? accentColor : "#E4E0D0"}`, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>Players can enter scores — {roundLabel}</div>
+              <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 2 }}>
+                {publicScoreEntry
+                  ? "ON — everyone sees an Enter scores button. Switch off when the cards are in."
+                  : "Off — only Admin can enter scores."}
+              </div>
+            </div>
+            <button
+              onClick={onTogglePublicScoreEntry}
+              style={{
+                minWidth: 64, padding: "9px 0", borderRadius: 20, border: "none", fontWeight: 800, fontSize: 12.5,
+                background: publicScoreEntry ? accentColor : "#D8D4C0", color: "#FFFFFF",
+              }}
+            >
+              {publicScoreEntry ? "ON" : "OFF"}
+            </button>
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <button
           onClick={onOpenCourseSetup}
@@ -6585,7 +6810,7 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
 // then refused to scroll any further) — a genuine separate screen, which
 // every other Admin destination already is, sidesteps that class of bug
 // entirely rather than patching around it.
-function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onRemoveNotInDraw, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
+function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onRemoveNotInDraw, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -6797,6 +7022,9 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
                   : `${getTee(course, p.tee)?.label} tee`}
                 {" "}· thru {p.thru}/18 · {p.thru > 0 ? `${p.pts} pts` : "not started"}
               </div>
+              {lockHeldByOther(p, deviceId) && (
+                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: "#8A5A00" }}>● Being entered on another phone right now</div>
+              )}
               {p.thru > 0 && (
                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: isScoreComplete(p) ? "#2F6B3F" : "#B5442E" }}>
                   {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : "In progress — not on the leaderboard yet"}
@@ -6883,6 +7111,74 @@ function EnterScores({ course, ranked, onSelect, onAdd, onRemove, onLoadExample,
   );
 }
 
+// What players see under "Enter scores" when Admin has switched it on: a
+// searchable list of this day's cards. A finished card can't be reopened
+// from here (only Admin can), and one that's open on another phone is
+// greyed out until that phone finishes or lets go of it.
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, headerColor, accentColor }) {
+  const [search, setSearch] = useState("");
+  const cards = [...ranked]
+    .filter((p) => p.name)
+    .map((p) => ({ ...p, label: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name }))
+    .filter((p) => !search.trim() || p.label.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const doneCount = ranked.filter((p) => p.name && p.thru > 0 && isScoreComplete(p)).length;
+  const totalCount = ranked.filter((p) => p.name).length;
+
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>Enter scores — {roundLabel}</div>
+      <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
+        Tap a card, type in the gross score for each hole, then press COMPLETE. {doneCount} of {totalCount} cards done.
+      </div>
+      {notice && (
+        <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", color: "#6B4E00", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
+          {notice}
+        </div>
+      )}
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={`Search ${isFoursomes ? "pair" : "player"}…`}
+        style={{ width: "100%", fontSize: 15, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box" }}
+      />
+      {cards.length === 0 && (
+        <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>No matching cards.</div>
+      )}
+      {cards.map((p) => {
+        const done = p.thru > 0 && isScoreComplete(p);
+        const busy = !done && lockHeldByOther(p, deviceId);
+        const disabled = done || busy;
+        const status = done
+          ? "✓ Complete"
+          : busy
+          ? "● Being entered on another phone"
+          : p.thru > 0
+          ? `In progress (${p.thru}/18) — tap to continue`
+          : "Tap to enter";
+        return (
+          <button
+            key={p.id}
+            onClick={() => !disabled && onSelect(p.id)}
+            disabled={disabled}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+              background: disabled ? "#F5F3E9" : "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8,
+              border: `1px solid ${disabled ? "#E4E0D0" : headerColor}`, opacity: disabled ? 0.75 : 1,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: disabled ? "#8A8774" : "#1B1B1B" }}>{p.label}</div>
+              <div style={{ fontSize: 11.5, fontWeight: 600, marginTop: 2, color: done ? "#2F6B3F" : busy ? "#8A5A00" : p.thru > 0 ? "#B5442E" : accentColor }}>{status}</div>
+            </div>
+            {!disabled && <ChevronRight size={16} color="#9B9885" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // A small +/- stepper for a one-off, per-day handicap adjustment — e.g. a
 // player who's won too many recent competitions getting shots deducted, or
 // a lady receiving extra shots for that specific event. Deliberately
@@ -6917,7 +7213,7 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false }) {
   const { ph, pts, netTotal, relToPar } = totals(course, player, handicapAllowance, isFoursomes);
   const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
   const allowedA = allowedHandicap(rawA, handicapAllowance) + (Number(player.handicapAdjustment) || 0);
@@ -7001,7 +7297,21 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         ← All players
       </button>
 
-      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+      {publicMode && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: headerColor }}>
+            {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name}
+          </div>
+          <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 4 }}>
+            Playing HCP {ph}{player.tee ? ` · ${player.tee} tee` : ""}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#8A5A00", marginTop: 8 }}>
+            Check this is the right card before you start. Enter the GROSS score for each hole, then press COMPLETE.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: publicMode ? "none" : "block", background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
         {isFoursomes ? (
           <>
             <div style={{ fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>Player A</div>
@@ -7212,12 +7522,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             <div style={{ marginTop: 14, background: "#EEF6EF", border: "1px solid #7FB88F", borderRadius: 10, padding: 14, textAlign: "center" }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: "#2F6B3F" }}>✓ Complete — showing on the leaderboard</div>
               <div style={{ fontSize: 11.5, color: "#4F6B55", marginTop: 4 }}>Any correction you make above shows on the leaderboard straight away.</div>
+              {!publicMode && (
               <button
                 onClick={() => onUpdate({ scoresComplete: false })}
                 style={{ marginTop: 10, background: "none", border: "none", color: "#B5442E", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}
               >
                 Reopen — take this card off the leaderboard
               </button>
+              )}
             </div>
           );
         }
