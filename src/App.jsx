@@ -545,19 +545,6 @@ const DEFAULT_STATE = {
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
-// Which day the app opens on. Today's round if there is one (the first
-// in the list when several share today's date), otherwise the next
-// upcoming dated round, otherwise whatever was last saved as active.
-function defaultRoundIdFor(rounds, savedActiveRoundId) {
-  const d = new Date();
-  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const todays = rounds.find((r) => r.date === today);
-  if (todays) return todays.id;
-  const upcomingDates = rounds.filter((r) => r.date && r.date > today).map((r) => r.date).sort();
-  if (upcomingDates.length > 0) return rounds.find((r) => r.date === upcomingDates[0]).id;
-  return savedActiveRoundId;
-}
-
 function sanitizeState(parsed) {
   // Competitions used to be one event-wide list shared by every round.
   // They're now stored per-round instead, so a new day always starts
@@ -1085,7 +1072,6 @@ function AppInner() {
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
-  const [showPrintDraw, setShowPrintDraw] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
   const [showSocietyRoster, setShowSocietyRoster] = useState(false);
   const [showMatchesSetup, setShowMatchesSetup] = useState(false);
@@ -1124,7 +1110,7 @@ function AppInner() {
       const loaded = res ? sanitizeState(JSON.parse(res.value)) : DEFAULT_STATE;
       setState(loaded);
       if (!hasSeededActiveRoundRef.current) {
-        setLocalActiveRoundId(defaultRoundIdFor(loaded.rounds, loaded.activeRoundId));
+        setLocalActiveRoundId(loaded.activeRoundId);
         hasSeededActiveRoundRef.current = true;
       }
       setLive(true);
@@ -2356,28 +2342,6 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
-      ) : showPrintDraw ? (
-        <PrintDraw
-          draw={draw}
-          players={players}
-          course={course}
-          handicapAllowance={handicapAllowance}
-          isFoursomes={isFoursomes}
-          visOpts={{
-            showIndex: activeRound.publicShowIndex,
-            showCH: activeRound.publicShowCH,
-            showTee: activeRound.publicShowTee,
-            showComp: activeRound.publicShowComp,
-            showStartTee: activeRound.publicShowStartTee,
-          }}
-          startingHole={startingHole}
-          drawNote={activeRound.drawNote}
-          roundLabel={activeRound.label}
-          roundDateDisplay={formatDisplayDateLong(activeRound.date)}
-          orgName={state.orgName}
-          onBack={() => setShowPrintDraw(false)}
-          headerColor={headerColor}
-        />
       ) : showPrintLabels ? (
         <PrintLabels
           course={course}
@@ -2469,10 +2433,9 @@ function AppInner() {
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
           onOpenSocietyRoster={() => setShowSocietyRoster(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
-          onOpenPrintDraw={() => setShowPrintDraw(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -3345,7 +3308,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
               {filteredRows.map((r) => (
                 <tr key={r.name} style={{ borderTop: "1px solid #EFEDE0" }}>
                   <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{r.name}</td>
-                  <td className="mono" style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 700, color: headerColor, whiteSpace: "nowrap" }}>{r.time}</td>
+                  <td className="mono" style={{ padding: "9px 10px", fontSize: 12.5, whiteSpace: "nowrap" }}>{r.time}</td>
                   {publicShowTee && <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.tee}</td>}
                   <td style={{ padding: "9px 10px", fontSize: 12.5 }}>{r.others.join(" + ") || "—"}</td>
                 </tr>
@@ -4867,7 +4830,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
         .label-competition { font-size: 10.5px; color: #1B1B1B; font-weight: 700; margin-bottom: 3px; }
         .label-partners { font-size: 9.5px; color: #6B6B5F; margin-bottom: 4px; }
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
-        .label-note { font-size: 11px; color: #6B6B5F; font-style: italic; margin-top: 6px; }
+        .label-note { font-size: 9px; color: #6B6B5F; font-style: italic; }
 
         /* Print output — matched exactly to Avery L7161's real measurements,
            so each card lands precisely on a real adhesive label. Same
@@ -4898,169 +4861,7 @@ function PrintLabels({ course, players, draw, roundDateDisplay, drawNote, compet
           .label-name { font-size: 17px !important; font-weight: 700 !important; margin: 3px 0 !important; line-height: 1.1 !important; }
           .label-partners { font-size: 9px !important; color: #000 !important; margin-bottom: 1px !important; line-height: 1.1 !important; }
           .label-hcp { font-size: 11px !important; color: #000 !important; font-weight: 800 !important; margin-bottom: 2px !important; line-height: 1.1 !important; }
-          .label-note { font-size: 10.5px !important; color: #000 !important; font-style: italic !important; font-weight: 600 !important; line-height: 1.15 !important; margin-top: 5px !important; }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// Printable draw for anyone without the app — reached from Admin. Two
-// sheets, either or both: the draw in tee-time order, and an A–Z list
-// of players each with their own tee time and playing partners. Shows
-// the same handicap/tee/competition details as the public Draw tab, so
-// paper and phone always agree.
-function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visOpts, startingHole, drawNote, roundLabel, roundDateDisplay, orgName, onBack, headerColor }) {
-  const [which, setWhich] = useState("both"); // times | individual | both
-  const { showIndex, showCH, showTee, showComp, showStartTee } = visOpts;
-  const anyStartTee = showStartTee && draw.some((e) => e.startTee);
-
-  const individualRows = draw
-    .flatMap((entry) =>
-      (entry.players || []).filter(Boolean).map((name) => ({
-        name,
-        time: entry.time,
-        startTee: entry.startTee || "",
-        tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
-        others: (entry.players || []).filter((n) => n && n !== name),
-      }))
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const sheetHeader = (subtitle) => (
-    <div style={{ marginBottom: 10 }}>
-      {orgName && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>{orgName}</div>}
-      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>{roundLabel} — {subtitle}</div>
-      <div style={{ fontSize: 13, marginTop: 2 }}>
-        {[course.name, roundDateDisplay, startingHole && startingHole.trim() ? `Starting from the ${startingHole} tee` : ""].filter(Boolean).join("  ·  ")}
-      </div>
-      {drawNote && drawNote.trim() && (
-        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 6, padding: "5px 8px", border: "1px solid #000" }}>{drawNote}</div>
-      )}
-    </div>
-  );
-
-  const th = { textAlign: "left", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000", whiteSpace: "nowrap" };
-  const td = { padding: "6px 8px", fontSize: 13, borderBottom: "1px solid #999", verticalAlign: "top" };
-  const timeCell = { ...td, fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" };
-
-  const timesSheet = (
-    <div className="print-sheet">
-      {sheetHeader("Draw")}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={th}>Tee Time</th>
-            {anyStartTee && <th style={th}>Start</th>}
-            <th style={th}>Players</th>
-          </tr>
-        </thead>
-        <tbody>
-          {draw.map((entry) => (
-            <tr key={entry.id} className="print-row">
-              <td className="mono" style={timeCell}>{entry.time}</td>
-              {anyStartTee && <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{entry.startTee || ""}</td>}
-              <td style={td}>
-                {entry.players && entry.players.filter(Boolean).length > 0
-                  ? formatGroupLines(entry.players, course, players, handicapAllowance, isFoursomes, { showIndex, showCH, showTee, showComp }).map((line, i) => (
-                      <div key={i} style={{ marginBottom: 1 }}>{line}</div>
-                    ))
-                  : entry.group || "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const individualSheet = (
-    <div className="print-sheet">
-      {sheetHeader("Draw by Player (A–Z)")}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={th}>Player</th>
-            <th style={th}>Tee Time</th>
-            {anyStartTee && <th style={th}>Start</th>}
-            {showTee && <th style={th}>Tee</th>}
-            <th style={th}>Playing With</th>
-          </tr>
-        </thead>
-        <tbody>
-          {individualRows.map((r) => (
-            <tr key={r.name} className="print-row">
-              <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{r.name}</td>
-              <td className="mono" style={timeCell}>{r.time}</td>
-              {anyStartTee && <td style={{ ...td, whiteSpace: "nowrap" }}>{r.startTee}</td>}
-              {showTee && <td style={{ ...td, whiteSpace: "nowrap" }}>{r.tee}</td>}
-              <td style={td}>{r.others.join(", ") || "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const choice = (value, label) => (
-    <button
-      onClick={() => setWhich(value)}
-      style={{
-        flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700,
-        border: `1px solid ${headerColor}`,
-        background: which === value ? headerColor : "#FFFFFF",
-        color: which === value ? "#FFFFFF" : headerColor,
-      }}
-    >
-      {label}
-    </button>
-  );
-
-  return (
-    <div style={{ padding: "12px 14px 40px" }}>
-      <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
-          ← Back
-        </button>
-        <button
-          onClick={() => window.print()}
-          disabled={draw.length === 0}
-          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5, opacity: draw.length === 0 ? 0.5 : 1 }}
-        >
-          <Printer size={15} /> Print
-        </button>
-      </div>
-      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        {choice("both", "Both sheets")}
-        {choice("times", "Tee time order")}
-        {choice("individual", "By player")}
-      </div>
-      <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 14 }}>
-        Preview below. Prints on A4; with "Both sheets" the by-player list starts on a new page. Handicaps, tees and
-        competitions follow the "Show on public draw tab" switches in Draw setup, so paper matches what players see.
-      </div>
-
-      {draw.length === 0 ? (
-        <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>
-          There's no draw for {roundLabel} yet — add one under Draw first.
-        </div>
-      ) : (
-        <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
-          {(which === "both" || which === "times") && timesSheet}
-          {which === "both" && <div className="print-break" style={{ height: 24 }} />}
-          {(which === "both" || which === "individual") && individualSheet}
-        </div>
-      )}
-
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          @page { size: A4; margin: 12mm; }
-          body { background: #FFFFFF !important; }
-          .print-area { border: none !important; padding: 0 !important; border-radius: 0 !important; }
-          .print-break { break-after: page; page-break-after: always; height: 0 !important; }
-          .print-row { break-inside: avoid; page-break-inside: avoid; }
-          thead { display: table-header-group; }
+          .label-note { font-size: 8px !important; color: #000 !important; font-style: italic !important; line-height: 1.1 !important; }
         }
       `}</style>
     </div>
@@ -5788,7 +5589,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, headerColor, accentColor, onLock }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, headerColor, accentColor, onLock }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -5916,19 +5717,6 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
       >
         <Printer size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Print scorecard labels</span>
-        <ChevronRight size={15} color="#9B9885" />
-      </button>
-
-      <button
-        onClick={onOpenPrintDraw}
-        style={{
-          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
-          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
-          color: headerColor, fontSize: 12.5, fontWeight: 600,
-        }}
-      >
-        <Printer size={14} />
-        <span style={{ flex: 1, textAlign: "left" }}>Print the draw (tee time order &amp; by player)</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
     </div>
