@@ -1346,13 +1346,13 @@ function AppInner() {
   // write — used by the draw's slot editor, which edits both at once.
   const updatePlayerDetailsByName = (name, newIndex, newTee, newCompetition) => {
     const target = (name || "").trim().toLowerCase();
-    updateRound({
-      players: players.map((p) => {
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
         if ((p.name || "").trim().toLowerCase() === target) return { ...p, index: newIndex, tee: newTee, competition: newCompetition };
         if ((p.partnerName || "").trim().toLowerCase() === target) return { ...p, partnerIndex: newIndex, partnerTee: newTee, partnerCompetition: newCompetition };
         return p;
       }),
-    });
+    }));
   };
 
   const updateScore = (id, holeIdx, val) => {
