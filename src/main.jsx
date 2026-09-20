@@ -1,33 +1,31 @@
-import "./storageShim.js";
+import "./storageShim.js"; // MUST stay first: sets up window.storage, which loads and saves every event
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import { registerSW } from "virtual:pwa-register";
 
-// The default auto-injected registration script only calls
-// navigator.serviceWorker.register(...) and nothing else — it has no
-// logic to actually reload the page once a newly-deployed service
-// worker takes over. So a new deploy would install correctly in the
-// background, but the tab that's already open (and the next one or two
-// reloads of it) would keep being served by the OLD service worker,
-// which was still the one controlling that page — only a reload that
-// happens to land after the handover would show the update. That's the
-// "have to deploy/refresh two or three times" symptom.
-//
-// Registering through the virtual:pwa-register module instead gives us
-// a controllerchange listener: the moment the new service worker
-// actually takes control, we force exactly one reload right then, so
-// the very next paint shows the new deploy — not the third or fourth.
+// Getting a new deploy onto the screen at the FIRST refresh:
+// 1. onNeedRefresh: a new version has downloaded and is waiting. Tell it
+//    to take over immediately rather than wait for every tab to close.
+// 2. controllerchange: the moment it has taken over, reload once so the
+//    page on screen is the new version.
+// 3. Check for a new version on load, every 10 minutes, and whenever the
+//    app comes back to the front, which matters on phones where the app
+//    stays open in the background for days.
 let reloaded = false;
-registerSW({
+const updateSW = registerSW({
   immediate: true,
+  onNeedRefresh() {
+    updateSW(true);
+  },
   onRegisteredSW(_url, registration) {
     if (!registration) return;
-    // Ask immediately, then keep checking — covers both "a new version
-    // was already waiting when this tab loaded" and "one appears later
-    // while the tab stays open".
-    registration.update();
-    setInterval(() => registration.update(), 60 * 60 * 1000);
+    const check = () => registration.update().catch(() => {});
+    check();
+    setInterval(check, 10 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") check();
+    });
   },
 });
 navigator.serviceWorker?.addEventListener("controllerchange", () => {
