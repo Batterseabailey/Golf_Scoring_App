@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 39";
+const APP_VERSION = "21 Sep 2026 · build 40";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1851,7 +1851,30 @@ function AppInner() {
     // switch always meant starting a brand new event — but it's also used
     // to compare different saved courses for the *same* day/draw, where
     // wiping the roster loses real work for no reason.)
-    updateRound({ course: entry.course });
+    //
+    // What DOES have to change is each player's tee: it's stored as the tee's
+    // name, and the new course very likely names its tees differently
+    // ("Weekday" rather than "Back"). Left alone, the old name stays on the
+    // player — the draw goes on SHOWING "Back" while every calculation
+    // quietly uses the new course's first tee. So anyone on a tee this
+    // course doesn't have is moved to its first tee (blank tees are left
+    // blank, so "no tee set" still shows). Returns how many were moved.
+    let moved = 0;
+    const labels = (entry.course.tees || []).map((t) => t.label);
+    const first = labels[0] || "";
+    const fix = (tee) => {
+      if (!tee || labels.some((l) => normalizeName(l) === normalizeName(tee))) return tee;
+      moved += 1;
+      return first;
+    };
+    updateRound((prevRound) => {
+      moved = 0;
+      return {
+        course: entry.course,
+        players: prevRound.players.map((p) => ({ ...p, tee: fix(p.tee), ...(p.partnerName ? { partnerTee: fix(p.partnerTee) } : {}) })),
+      };
+    });
+    return { moved, tee: first };
   };
 
   // Brings saved courses in from a file exported on another site (e.g.
@@ -2438,14 +2461,14 @@ function AppInner() {
   // writes to .tee for "primary" or .partnerTee for "partner" on the
   // matching record, rather than assuming one row = one person.
   const bulkSetTee = (selections, tee) => {
-    updateRound({
-      players: players.map((p) => {
+    updateRound((prevRound) => ({
+      players: prevRound.players.map((p) => {
         const setsPrimary = selections.some((s) => s.recordId === p.id && s.role === "primary");
         const setsPartner = selections.some((s) => s.recordId === p.id && s.role === "partner");
         if (!setsPrimary && !setsPartner) return p;
         return { ...p, ...(setsPrimary ? { tee } : {}), ...(setsPartner ? { partnerTee: tee } : {}) };
       }),
-    });
+    }));
   };
 
   // Sets ONE person's per-day handicap adjustment — addressed the same way
@@ -4466,7 +4489,11 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                   <>
                     <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Load this course?</span>
                     <button
-                      onClick={() => { onLoadFromLibrary(entry); setConfirmLoadId(null); }}
+                      onClick={() => {
+                        const r = onLoadFromLibrary(entry);
+                        setConfirmLoadId(null);
+                        if (r && r.moved > 0) window.alert(`${r.moved} player${r.moved === 1 ? " was" : "s were"} on a tee that ${entry.name} doesn't have, and ${r.moved === 1 ? "has" : "have"} been moved to its "${r.tee}" tee. Use Bulk-set tee to change anyone who plays a different one.`);
+                      }}
                       style={{ fontSize: 11.5, fontWeight: 700, color: headerColor, background: "none", border: "none", padding: "4px 6px" }}
                     >
                       Yes, switch
@@ -5067,8 +5094,32 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
+  const strayTeePeople = teeableePeople.filter((person) => person.tee && teeMismatch(course, person.tee));
+  const strayTeeNames = [...new Set(strayTeePeople.map((person) => person.tee))];
+
   return (
     <div>
+      {strayTeePeople.length > 0 && (
+        <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B4E00", marginBottom: 4 }}>
+            {strayTeePeople.length} player{strayTeePeople.length === 1 ? " is" : "s are"} on a tee this course doesn't have ({strayTeeNames.map((t) => `"${t}"`).join(", ")})
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6B4E00", marginBottom: 8 }}>
+            Left over from before {course.name} was loaded into this day. Their handicaps are being worked out off "{course.tees[0]?.label}", but the draw still shows the old name. Move them all at once:
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {course.tees.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => onBulkSetTee(strayTeePeople.map(({ recordId, role }) => ({ recordId, role })), t.label)}
+                style={{ padding: "8px 12px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12.5 }}
+              >
+                Move all {strayTeePeople.length} to {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <button
         onClick={saveDraw}
         style={{ width: "100%", padding: "11px 0", borderRadius: 10, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14, marginBottom: 12 }}
@@ -8804,7 +8855,11 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
                 <>
                   <span style={{ fontSize: 10, color: "#8A8774", marginRight: 2 }}>Load this course?</span>
                   <button
-                    onClick={() => { onLoadFromLibrary(entry); setConfirmLoadId(null); }}
+                    onClick={() => {
+                        const r = onLoadFromLibrary(entry);
+                        setConfirmLoadId(null);
+                        if (r && r.moved > 0) window.alert(`${r.moved} player${r.moved === 1 ? " was" : "s were"} on a tee that ${entry.name} doesn't have, and ${r.moved === 1 ? "has" : "have"} been moved to its "${r.tee}" tee. Use Bulk-set tee to change anyone who plays a different one.`);
+                      }}
                     style={{ fontSize: 11.5, fontWeight: 700, color: headerColor, background: "none", border: "none", padding: "4px 6px" }}
                   >
                     Yes, load
