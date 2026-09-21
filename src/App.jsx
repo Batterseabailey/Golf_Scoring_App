@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 33";
+const APP_VERSION = "21 Sep 2026 · build 34";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -4703,18 +4703,24 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
     setSelected(null);
   };
 
-  // Any slot tap: if someone's picked up (from the pool, or mid-move),
-  // that always takes priority and places/swaps them. Otherwise, tapping
-  // a filled slot opens its editor; an empty slot with nothing picked up
-  // does nothing.
+  // Tap-tap swapping. Tapping a player in the draw picks them up (they're
+  // highlighted); tapping a second player swaps the two, and tapping an
+  // empty slot moves them there. Tapping the SAME player a second time
+  // opens their details instead (handicap, tee, competition, withdraw) —
+  // as does "Edit details" in the bar at the top. An empty slot with
+  // nobody picked up does nothing.
   const tapSlot = (rowId, slotIdx, name) => {
     if (selected) {
+      const sameSlot = selected.from && selected.from.rowId === rowId && selected.from.slotIdx === slotIdx;
+      if (sameSlot) {
+        setSelected(null);
+        if (name) setEditingSlot({ rowId, slotIdx, name });
+        return;
+      }
       placeOrSwap(rowId, slotIdx);
       return;
     }
-    if (name) {
-      setEditingSlot({ rowId, slotIdx, name });
-    }
+    if (name) pickUpFromSlot(rowId, slotIdx, name);
   };
 
   const setTime = (rowId, time) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, time } : r)));
@@ -4823,8 +4829,9 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
         }}
       >
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-          On a computer, drag a player straight onto a slot. On a phone, tap a player below then tap a slot to
-          place them — tap a filled slot to view, edit, or move them elsewhere.
+          <strong>To swap two players:</strong> tap one, then tap the other. To move someone, tap them, then tap an
+          empty slot. To see or change a player's details, tap them twice. New players: tap a name below, then a
+          slot. On a computer you can also drag. Changes save by themselves after a couple of seconds.
         </div>
         {selected && (
           <div
@@ -4833,7 +4840,17 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
               borderRadius: 7, padding: "6px 9px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
             }}
           >
-            <span>{selected.from ? "Moving" : "Placing"} {selected.name} — tap a slot</span>
+            <span style={{ flex: 1 }}>
+              {selected.from ? `${selected.name} picked up — tap another player to swap, or an empty slot to move` : `Placing ${selected.name} — tap a slot`}
+            </span>
+            {selected.from && (
+              <button
+                onClick={() => { const { rowId, slotIdx } = selected.from; const name = selected.name; setSelected(null); setEditingSlot({ rowId, slotIdx, name }); }}
+                style={{ background: "none", border: `1px solid ${accentColor}`, borderRadius: 6, color: accentColor, fontWeight: 700, padding: "3px 8px", whiteSpace: "nowrap" }}
+              >
+                Edit details
+              </button>
+            )}
             <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: accentColor, fontWeight: 700, padding: 0 }}>
               Cancel
             </button>
