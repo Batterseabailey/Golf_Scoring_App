@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 36";
+const APP_VERSION = "21 Sep 2026 · build 37";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1431,7 +1431,15 @@ function AppInner() {
     stateRef.current = next;
     setState(next);
   }, []);
-  const activeRoundId = localActiveRoundId || savedActiveRoundId;
+  // Always resolves to a day that really exists. On a brand-new event
+  // neither value is set yet, and every day-level change (course, draw,
+  // players, format…) is applied to "the day whose id matches" — with no
+  // id to match, those changes were silently dropped until the event had
+  // been saved and reloaded once. Falling back to the first day fixes that.
+  const activeRoundId =
+    (localActiveRoundId && rounds.some((r) => r.id === localActiveRoundId) && localActiveRoundId) ||
+    (savedActiveRoundId && rounds.some((r) => r.id === savedActiveRoundId) && savedActiveRoundId) ||
+    rounds[0].id;
   const activeRound = rounds.find((r) => r.id === activeRoundId) || rounds[0];
   const { course, players, draw, matches, localRules, startingHole, format, scoring, handicapAllowance, drawStartTime, drawInterval, competitions } = activeRound;
   const isFoursomes = format === "foursomes";
@@ -1797,6 +1805,28 @@ function AppInner() {
     // to compare different saved courses for the *same* day/draw, where
     // wiping the roster loses real work for no reason.)
     updateRound({ course: entry.course });
+  };
+
+  // Brings saved courses in from a file exported on another site (e.g.
+  // Lucifer's Royal St George's into the ORGS app). A course with the same
+  // name as one already saved here replaces it; everything else is added.
+  const importCoursesToLibrary = async (entries) => {
+    const valid = (entries || []).filter((e) => e && typeof e.name === "string" && e.name.trim() && isValidCourse(e.course));
+    if (valid.length === 0) return { added: 0, replaced: 0 };
+    let added = 0, replaced = 0;
+    let next = [...library];
+    valid.forEach((e) => {
+      const i = next.findIndex((x) => x.name.trim().toLowerCase() === e.name.trim().toLowerCase());
+      const entry = { id: i >= 0 ? next[i].id : crypto.randomUUID(), name: e.name.trim(), course: e.course };
+      if (i >= 0) { next[i] = entry; replaced += 1; } else { next.push(entry); added += 1; }
+    });
+    setLibrary(next);
+    try {
+      await window.storage.set(LIBRARY_KEY, JSON.stringify(next), true);
+    } catch {
+      return { added, replaced, failed: true };
+    }
+    return { added, replaced };
   };
 
   const deleteCourseFromLibrary = async (id) => {
@@ -3298,6 +3328,7 @@ function AppInner() {
           onSaveToLibrary={saveCourseToLibrary}
           onLoadFromLibrary={loadCourseFromLibrary}
           onDeleteFromLibrary={deleteCourseFromLibrary}
+          onImportLibrary={importCoursesToLibrary}
           rounds={rounds}
           activeRoundId={activeRoundId}
           onAddRound={addRound}
@@ -8253,10 +8284,12 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, onImportLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
+  const [libraryMsg, setLibraryMsg] = useState("");
+  const libraryFileRef = useRef(null);
   const setHole = (idx, field, val) => {
     const clean = val === "" ? "" : Math.max(1, Math.min(field === "par" ? 7 : 18, Number(val)));
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
@@ -8653,6 +8686,61 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             </div>
           ))
         )}
+
+        {/* Moving saved courses between sites (e.g. Lucifer -> ORGS): each
+            site keeps its own library, so a course is carried across as a
+            small file — downloaded here, imported there. */}
+        <div style={{ borderTop: "1px solid #EFEDE0", marginTop: 12, paddingTop: 12 }}>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+            <strong>Use a course on another of your sites:</strong> download the saved courses here, then on the other
+            site come to this same screen and import the file. It then appears in that site's list to Load.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              disabled={library.length === 0}
+              onClick={() => {
+                const d = new Date();
+                const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                downloadTextFile(`golf-courses-${stamp}.json`, JSON.stringify({ kind: "golf-course-library", formatVersion: 1, courses: library }, null, 1));
+                setLibraryMsg(`Saved ${library.length} course${library.length === 1 ? "" : "s"} to this device's downloads.`);
+              }}
+              style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontSize: 12.5, fontWeight: 600, opacity: library.length === 0 ? 0.45 : 1 }}
+            >
+              Download saved courses
+            </button>
+            <button
+              onClick={() => libraryFileRef.current && libraryFileRef.current.click()}
+              style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontSize: 12.5, fontWeight: 600 }}
+            >
+              Import courses file…
+            </button>
+          </div>
+          <input
+            ref={libraryFileRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files && e.target.files[0];
+              e.target.value = "";
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = async () => {
+                try {
+                  const parsed = JSON.parse(String(reader.result || ""));
+                  if (!parsed || parsed.kind !== "golf-course-library" || !Array.isArray(parsed.courses)) throw new Error("wrong file");
+                  const r = await onImportLibrary(parsed.courses);
+                  if (r.added + r.replaced === 0) setLibraryMsg(`"${file.name}" had no usable courses in it — nothing changed.`);
+                  else setLibraryMsg(`Imported: ${r.added} added${r.replaced ? `, ${r.replaced} updated` : ""}${r.failed ? " — but it couldn't be saved; check your connection and try again" : ""}. Tap Load next to a course to use it for this day.`);
+                } catch {
+                  setLibraryMsg(`"${file.name}" isn't a courses file from this app — nothing changed.`);
+                }
+              };
+              reader.readAsText(file);
+            }}
+          />
+          {libraryMsg && <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginTop: 8 }}>{libraryMsg}</div>}
+        </div>
       </div>
     </div>
   );
