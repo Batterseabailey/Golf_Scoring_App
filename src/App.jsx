@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 37";
+const APP_VERSION = "21 Sep 2026 · build 38";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1099,14 +1099,46 @@ function looksLikeCompetitionCode(raw) {
   return /^[A-Za-z]{2,6}$/.test((raw || "").trim());
 }
 
-function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
+// Does this look like a tee time? 9:00, 09.05, 12.24, 0905, 9:00am…
+function looksLikeTime(raw) {
+  const v = (raw || "").trim();
+  return /^\d{1,2}\s*[:.h]\s*\d{2}\s*(am|pm)?$/i.test(v) || /^\d{3,4}$/.test(v);
+}
+
+// Splits pasted or uploaded text into rows and columns. A spreadsheet
+// paste separates columns with tabs and a .csv file with commas; if there
+// is a tab anywhere, tabs win. (Left to guess, the parser can pick the
+// wrong one when many lines have only a single column — a list where most
+// players have just a name — and then glues a whole line into one "name".)
+function splitPastedRows(text) {
+  const t = (text || "").trim();
+  return Papa.parse(t, t.includes("\t") ? { delimiter: "\t", skipEmptyLines: true } : { skipEmptyLines: true }).data;
+}
+
+// A draw file/paste has the tee time in its first column. A plain list of
+// players (Name, Handicap, Tee…) doesn't — and reading one as a draw used
+// to put each NAME where the tee time belongs, with nobody in the group.
+function pasteHasTeeTimes(text) {
+  return splitPastedRows(text).some((cols) => looksLikeTime(cols[0]));
+}
+
+function looksLikeHeaderRow(cols) {
+  return (cols || []).some((c) => /^(name|player|players|handicap|hcp|h'?cap|index|whs|tee|tees|time|tee time|comp|competition)s?$/i.test((c || "").trim()));
+}
+
+function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
   // Auto-detects the delimiter (rather than forcing tabs) so this works
   // equally well with a tab-separated spreadsheet paste and a genuine
   // comma-separated .csv file upload.
-  const parsed = Papa.parse(text.trim(), { skipEmptyLines: true });
-  let rows = parsed.data;
+  let rows = splitPastedRows(text);
   if (rows.length === 0) return [];
-  if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
+  if (opts && opts.noTimeColumn) {
+    // A players-only list: drop a header row if there is one, then give
+    // every row a placeholder first cell so the same column-reading logic
+    // (names, handicaps, tees, competitions in any order) can be reused.
+    if (looksLikeHeaderRow(rows[0])) rows = rows.slice(1);
+    rows = rows.map((cols, i) => [`row${i}`, ...cols]);
+  } else if (!/\d/.test(rows[0][0] || "")) rows = rows.slice(1);
 
   const abbrevSet = new Set((knownAbbreviations || []).map((a) => a.trim().toUpperCase()).filter(Boolean));
 
@@ -1176,6 +1208,21 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels) {
     }
   });
   return merged;
+}
+
+// Reads a players-only list into [{ name, index, tee, competition }].
+function parsePastedPeople(text, knownAbbreviations, courseTeeLabels) {
+  const rows = walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, { noTimeColumn: true });
+  const people = [];
+  rows.forEach((r) => {
+    r.names.forEach((name) => {
+      const h = r.handicaps.find((x) => x.name === name);
+      const t = r.tees.find((x) => x.name === name);
+      const c = r.comps.find((x) => x.name === name);
+      people.push({ name: name.trim(), index: h ? h.index : "", tee: t ? t.tee : "", competition: c ? c.abbreviation : "" });
+    });
+  });
+  return people.filter((p) => p.name);
 }
 
 function parsePastedDraw(text, knownAbbreviations, courseTeeLabels) {
@@ -2634,6 +2681,42 @@ function AppInner() {
     });
   };
 
+  // A players-only list pasted/uploaded on the Draw screen: everyone is
+  // added to this day's list (the pool on the Build tab) ready to be
+  // placed; anyone already there has any blank details filled in. New
+  // names also join the Society roster, as they do from a draw.
+  const addPeopleToDay = (people) => {
+    let added = 0, updated = 0;
+    save((prev) => {
+      const round = prev.rounds.find((r) => r.id === activeRoundId);
+      if (!round) return {};
+      const firstTee = round.course.tees[0]?.label || "";
+      let nextPlayers = [...round.players];
+      people.forEach((person) => {
+        const target = normalizeName(person.name);
+        const i = nextPlayers.findIndex((p) => normalizeName(p.name) === target);
+        if (i === -1) {
+          nextPlayers.push({ id: crypto.randomUUID(), name: person.name, index: person.index || "", tee: person.tee || firstTee, competition: person.competition || "", scores: Array(18).fill("") });
+          added += 1;
+        } else {
+          const p = nextPlayers[i];
+          const patched = { ...p, index: person.index || p.index, tee: person.tee || p.tee, competition: person.competition || p.competition };
+          if (patched.index !== p.index || patched.tee !== p.tee || patched.competition !== p.competition) updated += 1;
+          nextPlayers[i] = patched;
+        }
+      });
+      const rosterNames = new Set(prev.societyRoster.map((m) => normalizeName(m.name)));
+      const newRoster = people
+        .filter((person) => !rosterNames.has(normalizeName(person.name)))
+        .map((person) => ({ id: crypto.randomUUID(), name: person.name, index: person.index || "", tee: person.tee || firstTee }));
+      return {
+        rounds: prev.rounds.map((r) => (r.id === activeRoundId ? { ...r, players: nextPlayers } : r)),
+        societyRoster: newRoster.length > 0 ? [...prev.societyRoster, ...newRoster] : prev.societyRoster,
+      };
+    });
+    return { added, updated };
+  };
+
   const updateLocalRules = (text) => updateRound({ localRules: text });
 
   const updateStartingHole = (hole) => updateRound({ startingHole: hole });
@@ -3174,6 +3257,7 @@ function AppInner() {
           onUpdatePlayerDetails={updatePlayerDetailsByName}
           competitions={competitions}
           onEnsureCompetitionsExist={ensureCompetitionsExist}
+          onAddPeople={addPeopleToDay}
           onAddPlayerQuick={addPlayerQuick}
           onRemovePlayer={removePlayer}
         />
@@ -4250,7 +4334,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -4268,6 +4352,25 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
     const courseTeeLabels = course.tees.map((t) => t.label);
+    if (pasteText.trim() && !pasteHasTeeTimes(pasteText)) {
+      // No tee times anywhere in the first column: this is a list of
+      // players, not a draw. Add them to the day instead of making a
+      // nonsense draw out of their names.
+      const people = parsePastedPeople(pasteText, abbrevs, courseTeeLabels);
+      if (people.length === 0) {
+        setMsg("Nothing usable found. For a draw, each line starts with a tee time (e.g. 9:00); for a list of players, each line starts with a name.");
+        return;
+      }
+      const newAbbrevs = onEnsureCompetitionsExist(people.map((p) => p.competition).filter(Boolean));
+      const r = onAddPeople(people);
+      setMsg(
+        `No tee times in this file, so it's been read as a list of players rather than a draw: ${r.added} added to ${roundLabel}` +
+        `${r.updated ? `, ${r.updated} already there had details filled in` : ""}. The draw itself hasn't changed — go to "Build from players" to place them into tee times.` +
+        (newAbbrevs.length > 0 ? ` New competition code${newAbbrevs.length === 1 ? "" : "s"}: ${newAbbrevs.join(", ")}.` : "")
+      );
+      setPasteText("");
+      return;
+    }
     const parsed = parsePastedDraw(pasteText, abbrevs, courseTeeLabels);
     if (parsed.length === 0) {
       setMsg("No rows found — make sure each line starts with a time.");
@@ -4632,11 +4735,13 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Paste the draw</div>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-              One tee time per line: Time, then each player in their own column (copy straight from your
+              <strong>For a draw:</strong> one tee time per line: Time, then each player in their own column (copy straight from your
               spreadsheet, or upload a .csv file below). A handicap number right after a name is picked up
               automatically, so is a tee column — write "Back" or "Front" (or just B/F) — and so is a competition
               abbreviation you've already set up in Admin (e.g. "JHB"). All added straight to the roster. Pasting
-              or uploading replaces the whole draw below.
+              or uploading replaces the whole draw below. <strong>For a list of players with no tee times</strong> (each
+              line starting with a name), they're simply added to this day ready to place in "Build from players" —
+              the draw isn't touched.
             </div>
             <input
               ref={csvFileInputRef}
