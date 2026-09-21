@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 30";
+const APP_VERSION = "21 Sep 2026 · build 31";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -7228,6 +7228,9 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
                   </span>
                 ) : null}
               </div>
+              <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: handicapSummary(p, isFoursomes).missing ? "#B5442E" : headerColor, margin: "1px 0" }}>
+                {handicapSummary(p, isFoursomes).text}{handicapSummary(p, isFoursomes).missing ? " — handicap missing" : ""}
+              </div>
               <div className="mono" style={{ fontSize: 11, color: teeMismatch(course, p.tee) ? "#B5442E" : "#8A8774" }}>
                 {teeMismatch(course, p.tee)
                   ? `⚠ Tee "${p.tee || "not set"}" doesn't match this course — check it`
@@ -7323,6 +7326,18 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
   );
 }
 
+// "WHS 17.1 · Playing 28" — a player's handicap index followed by what
+// they actually play off on this day's course (after the day's allowance
+// and any one-off adjustment, marked *). For a Foursomes pair: both
+// partners' indexes, then the pair's combined playing handicap.
+function handicapSummary(p, isFoursomes) {
+  const show = (v) => (v !== "" && v != null ? v : "–");
+  const missing = p.index === "" || p.index == null || (isFoursomes && p.partnerName && (p.partnerIndex === "" || p.partnerIndex == null));
+  const adjusted = Number(p.handicapAdjustment) || (isFoursomes && Number(p.partnerHandicapAdjustment));
+  const whs = isFoursomes && p.partnerName ? `${show(p.index)} / ${show(p.partnerIndex)}` : show(p.index);
+  return { text: `WHS ${whs} · Playing ${p.ph}${adjusted ? "*" : ""}`, missing };
+}
+
 // What players see under "Enter scores" when Admin has switched it on: a
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
@@ -7381,6 +7396,7 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 700, color: disabled ? "#8A8774" : "#1B1B1B" }}>{p.label}</div>
+              <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: disabled ? "#8A8774" : headerColor, marginTop: 1 }}>{handicapSummary(p, isFoursomes).text}</div>
               <div style={{ fontSize: 11.5, fontWeight: 600, marginTop: 2, color: done ? "#2F6B3F" : busy ? "#8A5A00" : p.thru > 0 ? "#B5442E" : accentColor }}>{status}</div>
             </div>
             {!disabled && <ChevronRight size={16} color="#9B9885" />}
@@ -7564,7 +7580,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name}
           </div>
           <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 4 }}>
-            Playing HCP {ph}{Number(player.handicapAdjustment) || (isFoursomes && Number(player.partnerHandicapAdjustment)) ? "*" : ""}{player.tee ? ` · ${player.tee} tee` : ""}
+            {handicapSummary({ ...player, ph }, isFoursomes).text}{player.tee ? ` · ${player.tee} tee` : ""}
           </div>
           <div style={{ fontSize: 11.5, color: "#8A5A00", marginTop: 8 }}>
             Check this is the right card before you start. Enter the GROSS score for each hole, then press COMPLETE.
