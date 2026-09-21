@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 34";
+const APP_VERSION = "21 Sep 2026 · build 35";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1410,6 +1410,7 @@ function AppInner() {
   const [showPrintLabels, setShowPrintLabels] = useState(false);
   const [showPrintDraw, setShowPrintDraw] = useState(false);
   const [showPrintBoard, setShowPrintBoard] = useState(false);
+  const [showBackup, setShowBackup] = useState(false);
   const [showEnterScores, setShowEnterScores] = useState(false);
   const [showSocietyRoster, setShowSocietyRoster] = useState(false);
   const [showMatchesSetup, setShowMatchesSetup] = useState(false);
@@ -3038,6 +3039,23 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
+      ) : showBackup ? (
+        <BackupRestore
+          eventCode={eventCode}
+          state={state}
+          onRestore={(restored) => {
+            // Goes through the normal safe-save, so every phone picks it up.
+            // Card locks from the moment of the backup are dropped — nobody
+            // has those cards open now.
+            const clean = sanitizeState(restored);
+            clean.rounds = clean.rounds.map((r) => ({ ...r, players: r.players.map((p) => ({ ...p, entryLock: null })) }));
+            save(() => clean, { immediate: true });
+            setLocalActiveRoundId(defaultRoundIdFor(clean.rounds, clean.activeRoundId));
+          }}
+          onBack={() => setShowBackup(false)}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showPrintBoard ? (
         <PrintLeaderboard
           rounds={rounds}
@@ -3164,13 +3182,14 @@ function AppInner() {
           onOpenPrintLabels={() => setShowPrintLabels(true)}
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
+          onOpenBackup={() => setShowBackup(true)}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
           publicScoreEntry={activeRound.publicScoreEntry}
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
           roundLabel={activeRound.label}
-          onHideAdmin={() => { setAdminDevice(eventCode, false); rememberAdminPin(eventCode, ""); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onHideAdmin={() => { setAdminDevice(eventCode, false); rememberAdminPin(eventCode, ""); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -5695,6 +5714,164 @@ const PRINT_ORG_NAME_STYLE = {
   WebkitPrintColorAdjust: "exact", printColorAdjust: "exact",
 };
 
+// ---- Backup & restore ----
+// A backup is the whole event — every day, draw, handicap, competition,
+// score, the society roster, colours and PINs — written to one dated file
+// on THIS device (it goes wherever the browser saves downloads). Restoring
+// puts a chosen backup back as the live event for everyone. PDFs under
+// Information are not inside the file (they're large, and stored
+// separately); their list is, and the PDFs themselves are untouched.
+function backupFileName(eventCode) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${eventCode}-backup-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
+}
+
+function buildBackup(eventCode, state) {
+  return JSON.stringify({ kind: "golf-event-backup", formatVersion: 1, eventCode, savedAt: new Date().toISOString(), appVersion: APP_VERSION, state }, null, 1);
+}
+
+function downloadTextFile(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function describeState(st) {
+  const rounds = Array.isArray(st.rounds) ? st.rounds : [];
+  const people = new Set(rounds.flatMap((r) => (r.players || []).flatMap((p) => [p.name, p.partnerName])).filter(Boolean).map(normalizeName));
+  const cards = rounds.reduce((n, r) => n + (r.players || []).filter((p) => (p.scores || []).some((v) => v !== "" && v != null)).length, 0);
+  return `${rounds.length} day${rounds.length === 1 ? "" : "s"}, ${people.size} player${people.size === 1 ? "" : "s"}, ${cards} card${cards === 1 ? "" : "s"} with scores`;
+}
+
+function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accentColor }) {
+  const fileRef = useRef(null);
+  const lastKey = `golf-last-backup-${eventCode}`;
+  const readLast = () => { try { return window.localStorage.getItem(lastKey) || ""; } catch { return ""; } };
+  const [lastBackup, setLastBackup] = useState(readLast);
+  const [msg, setMsg] = useState("");
+  const [pending, setPending] = useState(null); // a backup file that's been read and is awaiting confirmation
+  const canShare = typeof navigator !== "undefined" && typeof navigator.canShare === "function" && typeof File !== "undefined";
+
+  const noteBackupTaken = () => {
+    const when = new Date().toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    try { window.localStorage.setItem(lastKey, when); } catch { /* ignore */ }
+    setLastBackup(when);
+  };
+
+  const download = () => {
+    const name = backupFileName(eventCode);
+    downloadTextFile(name, buildBackup(eventCode, state));
+    noteBackupTaken();
+    setMsg(`Saved "${name}" to this device's downloads.`);
+  };
+
+  const share = async () => {
+    try {
+      const file = new File([buildBackup(eventCode, state)], backupFileName(eventCode), { type: "application/json" });
+      if (!navigator.canShare({ files: [file] })) { download(); return; }
+      await navigator.share({ files: [file], title: `${eventCode} backup` });
+      noteBackupTaken();
+      setMsg("Backup shared.");
+    } catch {
+      // cancelled — nothing to do
+    }
+  };
+
+  const readFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result || ""));
+        const st = parsed && parsed.kind === "golf-event-backup" ? parsed.state : null;
+        if (!st || !Array.isArray(st.rounds) || st.rounds.length === 0) throw new Error("not a backup");
+        setPending({ fileName: file.name, eventCode: parsed.eventCode || "?", savedAt: parsed.savedAt || "", state: st });
+        setMsg("");
+      } catch {
+        setPending(null);
+        setMsg(`"${file.name}" isn't a backup file from this app — nothing has been changed.`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const confirmRestore = () => {
+    // Safety net first: keep a copy of what's about to be replaced.
+    downloadTextFile(backupFileName(`${eventCode}-before-restore`), buildBackup(eventCode, state));
+    onRestore(pending.state);
+    setMsg(`Restored from "${pending.fileName}". A copy of what was there before has been saved to this device too, in case you need to go back.`);
+    setPending(null);
+  };
+
+  const card = { background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 };
+  const bigBtn = (bg, fg, border) => ({ width: "100%", padding: "12px 0", borderRadius: 8, border: border || "none", background: bg, color: fg, fontWeight: 700, fontSize: 14 });
+  const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? "unknown time" : d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+        ← Back
+      </button>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: headerColor, marginBottom: 4 }}>Back up this event</div>
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>
+          Saves everything in <strong>{eventCode}</strong> — {describeState(state)} — as one dated file on this device.
+          Worth doing before each day's play, and again once the last card is in.
+        </div>
+        <button onClick={download} style={bigBtn(headerColor, "#FFFFFF")}>Download backup</button>
+        {canShare && (
+          <button onClick={share} style={{ ...bigBtn("transparent", headerColor, `1px solid ${headerColor}`), marginTop: 8 }}>
+            Share / email backup instead
+          </button>
+        )}
+        <div style={{ fontSize: 11.5, color: "#8A8774", marginTop: 8 }}>
+          {lastBackup ? `Last backup taken on this device: ${lastBackup}.` : "No backup has been taken on this device yet."}
+        </div>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: "#B5442E", marginBottom: 4 }}>Restore from a backup</div>
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>
+          Replaces the live event — for everyone — with the contents of a backup file. Anything entered since that
+          backup was taken will be lost, so this is for putting right a mistake, not for everyday use.
+        </div>
+        <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={readFile} />
+        {!pending ? (
+          <button onClick={() => fileRef.current && fileRef.current.click()} style={bigBtn("transparent", "#B5442E", "1px solid #B5442E")}>
+            Choose a backup file…
+          </button>
+        ) : (
+          <div style={{ background: "#FDF2EF", border: "1px solid #B5442E", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{pending.fileName}</div>
+            <div style={{ fontSize: 12, color: "#1B1B1B", marginBottom: 4 }}>Taken {fmtWhen(pending.savedAt)} · {describeState(pending.state)}</div>
+            <div style={{ fontSize: 12, color: "#1B1B1B", marginBottom: 8 }}>Live event now: {describeState(state)}</div>
+            {pending.eventCode !== eventCode && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#B5442E", marginBottom: 8 }}>
+                Careful: this backup came from event {pending.eventCode}, not {eventCode}.
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={confirmRestore} style={{ ...bigBtn("#B5442E", "#FFFFFF"), flex: 1, fontSize: 13 }}>Yes, replace the live event</button>
+              <button onClick={() => setPending(null)} style={{ ...bigBtn("#FFFFFF", "#6B6B5F", "1px solid #D8D4C0"), flex: 1, fontSize: 13 }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {msg && <div style={{ fontSize: 12.5, fontWeight: 600, color: headerColor, textAlign: "center", padding: "0 6px" }}>{msg}</div>}
+    </div>
+  );
+}
+
 // Printable leaderboard, reached from Admin. Two views: the selected
 // day on its own (gross / net / points) or the running total across all
 // days of the same format. Only cards that have been marked COMPLETE
@@ -6836,7 +7013,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
+function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -7013,6 +7190,19 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
       >
         <Printer size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Print the leaderboard</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenBackup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Upload size={14} style={{ transform: "rotate(180deg)" }} />
+        <span style={{ flex: 1, textAlign: "left" }}>Backup &amp; restore</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
