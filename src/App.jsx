@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 43";
+const APP_VERSION = "21 Sep 2026 · build 44";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -5909,6 +5909,27 @@ function fitLabelName(names) {
   return { stack: true, size: Math.max(fit(longest, 15.5), 9) };
 }
 
+// ---- Label alignment, fine-tuned per device ----
+// Printers don't all feed a sheet identically, and browsers/printer drivers
+// sometimes nudge or very slightly shrink a page. These four small
+// corrections (in mm) are remembered on the device that does the printing,
+// so once the labels line up on a given computer + printer they stay so.
+const LABEL_CAL_KEY = "golf-label-calibration-v1";
+const LABEL_CAL_DEFAULT = { x: 0, y: 0, colGap: 0, rowPitch: 0 };
+function readLabelCal() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LABEL_CAL_KEY) || "null");
+    if (!parsed) return LABEL_CAL_DEFAULT;
+    const num = (v, lim) => (typeof v === "number" && isFinite(v) ? Math.max(-lim, Math.min(lim, v)) : 0);
+    return { x: num(parsed.x, 5), y: num(parsed.y, 5), colGap: num(parsed.colGap, 3), rowPitch: num(parsed.rowPitch, 1.5) };
+  } catch {
+    return LABEL_CAL_DEFAULT;
+  }
+}
+function writeLabelCal(cal) {
+  try { window.localStorage.setItem(LABEL_CAL_KEY, JSON.stringify(cal)); } catch { /* ignore */ }
+}
+
 function PrintLabels({ societyRoster = [], course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
@@ -5998,8 +6019,33 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
   const sheetsOfCards = [];
   for (let i = 0; i < cards.length; i += 18) sheetsOfCards.push(cards.slice(i, i + 18));
 
+  const [cal, setCal] = useState(readLabelCal);
+  const [outlines, setOutlines] = useState(false);
+  const [showCal, setShowCal] = useState(false);
+  const calLimits = { x: 5, y: 5, colGap: 3, rowPitch: 1.5 };
+  const nudge = (field, by) => setCal((prev) => {
+    const lim = calLimits[field];
+    const next = { ...prev, [field]: Math.round(Math.max(-lim, Math.min(lim, prev[field] + by)) * 100) / 100 };
+    writeLabelCal(next);
+    return next;
+  });
+  const resetCal = () => { setCal(LABEL_CAL_DEFAULT); writeLabelCal(LABEL_CAL_DEFAULT); };
+  const calChanged = cal.x !== 0 || cal.y !== 0 || cal.colGap !== 0 || cal.rowPitch !== 0;
+  const fmtMm = (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} mm`;
+  const calRow = (field, title, minusLabel, plusLabel, step) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid #EFEDE0" }}>
+      <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{title}</div>
+      <button onClick={() => nudge(field, -step)} style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", fontSize: 11.5, fontWeight: 700, color: "#3F3F38" }}>{minusLabel}</button>
+      <span className="mono" style={{ minWidth: 70, textAlign: "center", fontSize: 12.5, fontWeight: 700, color: cal[field] !== 0 ? headerColor : "#9B9885" }}>{fmtMm(cal[field])}</span>
+      <button onClick={() => nudge(field, step)} style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", fontSize: 11.5, fontWeight: 700, color: "#3F3F38" }}>{plusLabel}</button>
+    </div>
+  );
+
   return (
-    <div className="label-page" style={{ padding: "12px 14px 40px" }}>
+    <div
+      className={`label-page${outlines ? " label-outlines" : ""}`}
+      style={{ padding: "12px 14px 40px", "--lx": `${cal.x}mm`, "--ly": `${cal.y}mm`, "--lcg": `${cal.colGap}mm`, "--lrp": `${cal.rowPitch}mm` }}
+    >
       <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
           ← Back
@@ -6018,7 +6064,45 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
       </div>
       <div className="no-print" style={{ fontSize: 11, color: "#B5442E", marginBottom: 14, fontWeight: 600 }}>
         In the print dialog, set Scale to "100%" or "Actual size" — not "Fit to page" — or the labels won't line up
-        with the sheet. Worth a test print on plain paper first, held up against a real sheet to check alignment.
+        with the sheet — and leave Margins on "Default". Worth a test print on plain paper first (with the label
+        outlines switched on, below), held up against a real sheet to the light.
+      </div>
+      <div className="no-print" style={{ background: "#FFFFFF", borderRadius: 10, border: `1px solid ${calChanged ? headerColor : "#E4E0D0"}`, padding: 12, marginBottom: 14 }}>
+        <button
+          onClick={() => setShowCal((v) => !v)}
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}
+        >
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: headerColor }}>
+            Line the labels up with your printer{calChanged ? " — adjusted" : ""}
+          </span>
+          <ChevronRight size={15} color="#9B9885" style={{ transform: showCal ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+        </button>
+        {showCal && (
+          <div style={{ marginTop: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, padding: "4px 0 8px", cursor: "pointer" }}>
+              <input type="checkbox" checked={outlines} onChange={() => setOutlines((v) => !v)} />
+              Print an outline round every label (for a test on plain paper — switch off for the real sheet)
+            </label>
+            <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+              Print a test page with outlines on plain paper and hold it against a label sheet to the light. Then
+              correct whatever is out. Each tap is a quarter of a millimetre; the settings are remembered on this device.
+            </div>
+            {calRow("x", "Whole page left / right", "◀ Left", "Right ▶", 0.25)}
+            {calRow("y", "Whole page up / down", "▲ Up", "Down ▼", 0.25)}
+            {calRow("colGap", "Space between columns", "Narrower", "Wider", 0.25)}
+            {calRow("rowPitch", "Height of each row", "Shorter", "Taller", 0.1)}
+            <div style={{ fontSize: 11, color: "#8A8774", marginTop: 8 }}>
+              If the first column is right but the third is off, change "Space between columns". If the top row is
+              right but the bottom row has drifted, change "Height of each row". If everything is out by the same
+              amount, move the whole page.
+            </div>
+            {calChanged && (
+              <button onClick={resetCal} style={{ marginTop: 8, background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+                Reset to Avery's standard measurements
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {cards.length === 0 ? (
         <div style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>No players yet on this day.</div>
@@ -6071,39 +6155,43 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
         .label-note { font-size: 11px; color: #6B6B5F; font-style: italic; margin-top: 6px; }
 
-        /* Print output — matched to Avery L7161's real measurements, so
-           each card lands on a real adhesive label:
+        /* Print output — matched to Avery L7161's published measurements,
+           so each card lands on a real adhesive label:
              label 63.5 x 46.6mm, 3 across x 6 down on A4 (210 x 297mm)
-             across: 7.25 + 63.5 + 2.5 + 63.5 + 2.5 + 63.5 + 7.25 = 210
-             down:   8.7 + (6 x 46.6 = 279.6) + 8.7 = 297  (no gap between rows)
-           The gap between COLUMNS is 2.5mm and there is NO gap between
-           rows. (An earlier version had these the wrong way round — a
-           "gap" shorthand lists rows first — which pushed the sixth row
-           off the page and closed the columns up so the right-hand one
-           drifted onto the label's edge.) Everything around the sheet —
-           the screen padding, the browser's own body margin — is zeroed
-           so the only offset is the page margin itself. */
+             across: 7.21 margin, then labels every 66.04mm (a 2.54mm gap)
+             down:   8.7 margin, then labels every 46.6mm (no gap)
+           The page itself has NO margin — the sheet's margins are built
+           into each page's own padding instead — so the position of the
+           labels doesn't depend on how a particular browser or printer
+           treats page margins. The four --l* values are the per-device
+           corrections from "Line the labels up with your printer". */
         @media print {
           .no-print { display: none !important; }
-          @page { size: A4; margin: 8.7mm 7.25mm 0mm 7.25mm; }
+          @page { size: A4; margin: 0; }
           html, body { margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
           .label-page { padding: 0 !important; margin: 0 !important; }
           .label-grid {
             display: grid;
-            width: 195.5mm;
-            height: 279.6mm;
+            box-sizing: border-box;
+            width: 209mm;
+            height: 296mm;
             margin: 0 !important;
+            padding: calc(8.7mm + var(--ly, 0mm)) 0 0 calc(7.21mm + var(--lx, 0mm));
             grid-template-columns: repeat(3, 63.5mm);
-            grid-template-rows: repeat(6, 46.6mm);
-            column-gap: 2.5mm;
+            grid-template-rows: repeat(6, calc(46.6mm + var(--lrp, 0mm)));
+            column-gap: calc(2.54mm + var(--lcg, 0mm));
             row-gap: 0mm;
+            justify-content: start;
+            align-content: start;
             overflow: hidden;
             break-inside: avoid; page-break-inside: avoid;
             break-after: page; page-break-after: always;
           }
           .label-grid:last-of-type { break-after: auto; page-break-after: auto; }
+          .label-outlines .label-card { outline: 0.25mm solid #000; outline-offset: -0.125mm; border-radius: 2mm; }
           .label-card {
             border: none; padding: 1mm 2.5mm; min-height: 0;
+            width: 63.5mm; height: 46.6mm; align-self: start;
             box-sizing: border-box; overflow: hidden;
             break-inside: avoid;
             font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif;
