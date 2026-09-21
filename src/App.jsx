@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 40";
+const APP_VERSION = "21 Sep 2026 · build 41";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1473,6 +1473,8 @@ function AppInner() {
   const hasDataRef = useRef(false);                    // something real (live or saved copy) is on screen
   const lastSyncAtRef = useRef(0);
   const cachedMarkRef = useRef("");
+  const backoffUntilRef = useRef(0);
+  const backoffStepRef = useRef(0);
   const pumpingRef = useRef(false);
   const applyState = useCallback((next) => {
     stateRef.current = next;
@@ -1541,9 +1543,27 @@ function AppInner() {
       pumpingRef.current ||
       Date.now() - lastLocalSaveAtRef.current < 4000 ||
       eventCodeRef.current !== code;
+    // Being a good citizen when many phones are using the app at once:
+    //  • a phone whose app is in the background doesn't refresh at all;
+    //  • if the server ever says "too many requests", this phone backs
+    //    right off (30s, then 1, 2, 4… up to 5 minutes) instead of trying
+    //    again every few seconds and making matters worse;
+    //  • a routine refresh first asks "has anything changed since the
+    //    version I've got?" and gets a few bytes back when it hasn't —
+    //    rather than downloading the whole event every time.
+    if (hasDataRef.current && typeof document !== "undefined" && document.hidden) return;
+    if (Date.now() < backoffUntilRef.current) { setLoading(false); return; }
     try {
-      const res = await withTimeout(window.storage.get(storageKeyFor(code), true), 12000);
+      const inStep = hasDataRef.current && stateRef.current === syncedRef.current.state && syncedRef.current.etag && syncedRef.current.etag !== "new";
+      const res = await withTimeout(
+        inStep && typeof window.storage.getIfChanged === "function"
+          ? window.storage.getIfChanged(storageKeyFor(code), syncedRef.current.etag)
+          : window.storage.get(storageKeyFor(code), true),
+        12000
+      );
+      backoffStepRef.current = 0;
       if (eventCodeRef.current === code) { setOffline(false); setLoadFailed(false); lastSyncAtRef.current = Date.now(); }
+      if (res && res.unchanged) { setLive(true); return; }
       // Only skip applying a refresh while actively in the scorer screens
       // (Admin) — that's the one place a background update could yank the
       // screen out from under someone mid-edit — or while this device has
@@ -1579,6 +1599,10 @@ function AppInner() {
       }
       setLive(true);
     } catch (err) {
+      if (/\(429\)|too many/i.test(String(err))) {
+        backoffStepRef.current = Math.min(backoffStepRef.current + 1, 5);
+        backoffUntilRef.current = Date.now() + Math.min(15000 * 2 ** backoffStepRef.current, 5 * 60 * 1000);
+      }
       const notFound = String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404");
       if (!notFound && eventCodeRef.current === code) {
         // No signal (or the server didn't answer in time). Whatever is on
@@ -1942,7 +1966,11 @@ function AppInner() {
     // simply sitting open, without the app having to be reopened. Admin
     // and the handicap screen are left alone so nothing moves mid-edit.
     if (mode === "scorer" || mode === "handicap") return;
-    const every = mode === "board" || mode === "entry" ? 5000 : 20000;
+    // Leaderboard every 10s, the players' score list every 5s (few people,
+    // and they need to see each other's cards being taken), other screens
+    // every 20s. Each refresh is now only a few bytes unless something has
+    // actually changed.
+    const every = mode === "entry" ? 5000 : mode === "board" ? 10000 : 20000;
     pollRef.current = setInterval(load, every);
     // ...and straight away whenever the app is brought back to the front.
     const onVisible = () => { if (document.visibilityState === "visible") load(); };
