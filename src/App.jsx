@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "20 Sep 2026 · build 28";
+const APP_VERSION = "21 Sep 2026 · build 30";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2678,6 +2678,19 @@ function AppInner() {
 
   const active = players.find((p) => p.id === activeId);
 
+  // The "N players" figure in the header counts PEOPLE actually playing:
+  // everyone placed in the draw once there is one (so anyone still sitting
+  // unplaced in the pool isn't counted); before a draw exists, everyone
+  // named on the day's list. It used to count list entries — which on a
+  // Foursomes day are pairs, so a field of 40 showed as "20 players", and
+  // blank or unplaced entries were counted too.
+  const namesPlaying = new Set(draw.flatMap((entry) => entry.players || []).filter(Boolean).map(normalizeName));
+  const namesListed = new Set(players.flatMap((p) => [p.name, p.partnerName]).filter(Boolean).map(normalizeName));
+  const playingCount = namesPlaying.size > 0 ? namesPlaying.size : namesListed.size;
+  // ...and the format shown beside it is the day's real one, rather than
+  // always saying Stableford.
+  const headerFormatLabel = isMatchPlay ? "Match Play" : `${isMedal ? "Medal" : "Stableford"}${isFoursomes ? " Foursomes" : ""}`;
+
   if (!eventCode) {
     return <CodeGate onSubmit={enterEventCode} />;
   }
@@ -2731,7 +2744,7 @@ function AppInner() {
           </button>
         )}
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span>Stableford · Par {coursePar(course)} · {players.length} {players.length === 1 ? "player" : "players"}</span>
+          <span>{headerFormatLabel} · Par {coursePar(course)} · {playingCount} {playingCount === 1 ? "player" : "players"}</span>
           {scorerUnlocked && (
             <button
               onClick={switchEvent}
@@ -7423,6 +7436,45 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const timers = useRef({});
   const [confirmClearScores, setConfirmClearScores] = useState(false);
 
+  // ---- Pocket-proofing ----
+  // A hole's score locks 10 seconds after it was last typed, and any hole
+  // that already has a score when the card is opened starts locked. A
+  // locked hole can't be changed by a stray touch (a phone dropped in a
+  // pocket mid-round); tapping "Edit scores" makes every scored hole live
+  // again, and they re-lock 10 seconds after the last change. Empty holes
+  // are always live, so the next hole can simply be typed in. After 10
+  // quiet seconds the keyboard is also put away, so nothing is left armed.
+  const LOCK_AFTER_MS = 10000;
+  const touchedAt = useRef({});           // hole index -> when it was last typed
+  const lastActivityAt = useRef(Date.now());
+  const [editUntil, setEditUntil] = useState(0);
+  const [lockHint, setLockHint] = useState(false);
+  const [, setTick] = useState(0);
+  const scoreAt = (idx) => (Array.isArray(player.scores) ? player.scores[idx] : "");
+  const isLocked = (idx) => {
+    const v = scoreAt(idx);
+    if (v === "" || v == null) return false;
+    const now = Date.now();
+    return now > editUntil && now - (touchedAt.current[idx] || 0) > LOCK_AFTER_MS;
+  };
+  const anyLocked = course.holes.some((_, i) => isLocked(i));
+  const editing = Date.now() <= editUntil;
+  useEffect(() => {
+    // Re-check once a second so locks appear on time, and drop the
+    // keyboard once everything has gone quiet.
+    const t = setInterval(() => {
+      setTick((n) => n + 1);
+      const el = document.activeElement;
+      if (el && el.classList && el.classList.contains("scoreInput") && Date.now() - lastActivityAt.current > LOCK_AFTER_MS) el.blur();
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (!lockHint) return;
+    const t = setTimeout(() => setLockHint(false), 2500);
+    return () => clearTimeout(t);
+  }, [lockHint]);
+
   // Auto-advance to the next hole once a score looks "finished" — instantly
   // for single-digit scores that can't extend to two digits (2-9), after a
   // brief pause for scores starting "1" (which might become 10 or more), and
@@ -7433,13 +7485,17 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
 
   const focusNext = (idx) => {
     const next = inputRefs.current[idx + 1];
-    if (next) {
+    if (next && !isLocked(idx + 1)) {
       next.focus();
       next.select?.();
     }
   };
 
   const handleChange = (idx, rawVal) => {
+    if (isLocked(idx)) return; // belt and braces — a locked box is read-only anyway
+    touchedAt.current[idx] = Date.now();
+    lastActivityAt.current = Date.now();
+    if (Date.now() <= editUntil) setEditUntil(Date.now() + LOCK_AFTER_MS); // still correcting: keep the card open a little longer
     onScore(idx, rawVal);
     if (timers.current[idx]) clearTimeout(timers.current[idx]);
     if (rawVal === "") return;
@@ -7473,12 +7529,18 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               type="number"
               inputMode="numeric"
               value={val}
+              readOnly={isLocked(idx)}
+              onFocus={() => { lastActivityAt.current = Date.now(); }}
+              onClick={() => { if (isLocked(idx)) setLockHint(true); }}
               onChange={(e) => handleChange(idx, e.target.value)}
               onKeyDown={(e) => handleKeyDown(idx, e)}
               style={{
                 width: "100%", textAlign: "center", padding: "6px 0", marginTop: 2,
-                borderRadius: 6, border: "1px solid #D8D4C0", fontSize: 14, fontWeight: 700,
-                background: val !== "" ? `${headerColor}14` : "#FFF",
+                borderRadius: 6, fontSize: 14, fontWeight: 700,
+                // locked: solid tint, no outline. live with a score: white with a strong outline.
+                border: val !== "" && !isLocked(idx) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
+                background: isLocked(idx) ? `${headerColor}22` : "#FFF",
+                color: isLocked(idx) ? headerColor : "#1B1B1B",
               }}
             />
             <div className="mono" style={{ fontSize: 9, color: headerColor, marginTop: 2, minHeight: 12 }}>
@@ -7654,6 +7716,32 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         )}
       </div>
 
+      {(anyLocked || editing) && (
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9,
+            background: editing ? "#FFF6E0" : "#FFFFFF", border: `1px solid ${editing ? "#D9A400" : "#E4E0D0"}`,
+          }}
+        >
+          <Lock size={15} color={editing ? "#8A5A00" : "#8A8774"} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, fontSize: 11.5, color: editing ? "#6B4E00" : "#6B6B5F", fontWeight: lockHint ? 700 : 400 }}>
+            {editing
+              ? "Editing — scored holes are live. They lock again 10 seconds after your last change."
+              : lockHint
+              ? "That hole is locked. Tap Edit scores to change it."
+              : "Entered scores are locked so they can't be changed by accident."}
+          </div>
+          <button
+            onClick={() => { lastActivityAt.current = Date.now(); setLockHint(false); setEditUntil(editing ? 0 : Date.now() + LOCK_AFTER_MS); if (editing) touchedAt.current = {}; }}
+            style={{
+              flexShrink: 0, padding: "8px 12px", borderRadius: 8, fontWeight: 700, fontSize: 12.5,
+              border: `1px solid ${headerColor}`, background: editing ? "#FFFFFF" : headerColor, color: editing ? headerColor : "#FFFFFF",
+            }}
+          >
+            {editing ? "Lock now" : "Edit scores"}
+          </button>
+        </div>
+      )}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Out</div>
       {nine(OUT)}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
