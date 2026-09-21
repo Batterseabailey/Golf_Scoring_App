@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 35";
+const APP_VERSION = "21 Sep 2026 · build 36";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -140,6 +140,48 @@ function dataUrlToBlobUrl(dataUrl) {
 function isIOSDevice() {
   if (typeof navigator === "undefined") return false;
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+// ---- Working without a signal ----
+// Every time an event loads successfully, a copy is kept on the phone
+// itself. When the app is next opened that copy is shown straight away —
+// so the draw, local rules and the last-seen leaderboard are there even
+// with no signal at all, and appear instantly on a weak one — and it's
+// replaced by the live version as soon as the server answers. The copy
+// carries the server's version marker, so anything changed while offline
+// is still merged in safely (never blindly overwritten) once back online.
+function readCachedEvent(code) {
+  try {
+    const raw = window.localStorage.getItem(`golf-event-cache-${code}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.state || !Array.isArray(parsed.state.rounds)) return null;
+    // "pending" = changes made on this phone that hadn't reached the server
+    // when the app was last closed (scores typed with no signal, say).
+    // They're kept for 12 hours and sent as soon as there's a connection.
+    const pendingFresh = parsed.pending && Array.isArray(parsed.pending.rounds) && Date.now() - (parsed.pendingAt || 0) < 12 * 60 * 60 * 1000;
+    return { state: sanitizeState(parsed.state), etag: parsed.etag || null, savedAt: parsed.savedAt || 0, pending: pendingFresh ? sanitizeState(parsed.pending) : null };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedEvent(code, state, etag, pending) {
+  try {
+    window.localStorage.setItem(
+      `golf-event-cache-${code}`,
+      JSON.stringify({ state, etag: etag || null, savedAt: Date.now(), pending: pending || null, pendingAt: pending ? Date.now() : 0 })
+    );
+  } catch {
+    // storage full or blocked — the app simply won't have an offline copy
+  }
+}
+
+// A request on a very weak signal can hang for minutes without failing.
+// Give up after 12 seconds so the phone's saved copy (or a clear message)
+// is shown instead of an endless "Loading…".
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), ms))]);
 }
 
 // ---- Organiser access ----
@@ -1374,10 +1416,16 @@ function AppInner() {
   const dirtyRef = useRef(false);
   const staleSinceRef = useRef(0);
   const entryDebounceRef = useRef(null);
+  const pendingCacheTimerRef = useRef(null);
   const deviceIdRef = useRef(null);
   if (!deviceIdRef.current) deviceIdRef.current = getDeviceId();
   const deviceId = deviceIdRef.current;
   const [entryNotice, setEntryNotice] = useState("");
+  const [offline, setOffline] = useState(false);       // the last attempt to reach the server failed
+  const [loadFailed, setLoadFailed] = useState(false); // ...and there was no saved copy on this phone to fall back on
+  const hasDataRef = useRef(false);                    // something real (live or saved copy) is on screen
+  const lastSyncAtRef = useRef(0);
+  const cachedMarkRef = useRef("");
   const pumpingRef = useRef(false);
   const applyState = useCallback((next) => {
     stateRef.current = next;
@@ -1439,7 +1487,8 @@ function AppInner() {
       Date.now() - lastLocalSaveAtRef.current < 4000 ||
       eventCodeRef.current !== code;
     try {
-      const res = await window.storage.get(storageKeyFor(code), true);
+      const res = await withTimeout(window.storage.get(storageKeyFor(code), true), 12000);
+      if (eventCodeRef.current === code) { setOffline(false); setLoadFailed(false); lastSyncAtRef.current = Date.now(); }
       // Only skip applying a refresh while actively in the scorer screens
       // (Admin) — that's the one place a background update could yank the
       // screen out from under someone mid-edit — or while this device has
@@ -1464,16 +1513,33 @@ function AppInner() {
       staleSinceRef.current = 0;
       syncedRef.current = { state: loaded, etag: res ? res.etag || null : "new" };
       applyState(loaded);
+      hasDataRef.current = true;
+      if (res) {
+        const mark = `${code}:${res.etag || ""}:${loaded.rev || 0}`;
+        if (mark !== cachedMarkRef.current) { cachedMarkRef.current = mark; writeCachedEvent(code, loaded, res.etag); }
+      }
       if (!hasSeededActiveRoundRef.current) {
         setLocalActiveRoundId(defaultRoundIdFor(loaded.rounds, loaded.activeRoundId));
         hasSeededActiveRoundRef.current = true;
       }
       setLive(true);
     } catch (err) {
+      const notFound = String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404");
+      if (!notFound && eventCodeRef.current === code) {
+        // No signal (or the server didn't answer in time). Whatever is on
+        // screen — the live copy from earlier, or this phone's saved copy —
+        // stays there, marked as offline. Only if there is nothing at all
+        // to show does the "can't load" message appear; never a blank,
+        // made-up event that could be mistaken for the real one.
+        setOffline(true);
+        if (!hasDataRef.current) setLoadFailed(true);
+      }
       if (busy()) return;
-      if (String(err).toLowerCase().includes("not found") || String(err).toLowerCase().includes("404")) {
+      if (notFound) {
         syncedRef.current = { state: DEFAULT_STATE, etag: "new" };
         applyState(DEFAULT_STATE);
+        hasDataRef.current = true;
+        setOffline(false); setLoadFailed(false);
       }
       setLive(true);
     } finally {
@@ -1536,6 +1602,9 @@ function AppInner() {
           if (eventCodeRef.current !== code) return;
           if (result.ok) {
             syncedRef.current = { state: mine, etag: result.etag };
+            setOffline(false);
+            clearTimeout(pendingCacheTimerRef.current);
+            writeCachedEvent(code, mine, result.etag, stateRef.current !== mine ? stateRef.current : null);
             lastLocalSaveAtRef.current = Date.now();
             failures = 0;
             setSyncError(false);
@@ -1563,6 +1632,7 @@ function AppInner() {
           dirtyRef.current = true;
           failures += 1;
           setSyncError(true);
+          setOffline(true);
           if (failures > 12) return; // give up for now; the next change restarts it
           await wait(Math.min(1500 * failures, 10000));
         }
@@ -1598,6 +1668,13 @@ function AppInner() {
     lastLocalSaveAtRef.current = Date.now();
     applyState(next);
     dirtyRef.current = true;
+    // Keep the not-yet-sent version on the phone too, so closing the app
+    // with no signal doesn't lose what was typed. (Half a second's grace,
+    // so a run of keystrokes is written once rather than eighteen times.)
+    clearTimeout(pendingCacheTimerRef.current);
+    pendingCacheTimerRef.current = setTimeout(() => {
+      if (dirtyRef.current || pumpingRef.current) writeCachedEvent(code, syncedRef.current.state, syncedRef.current.etag, stateRef.current);
+    }, 500);
     // While players are helping enter scores, several phones are typing
     // at once — so their keystrokes are bundled into one save about a
     // second after the last one, rather than one save per hole. Far fewer
@@ -1618,11 +1695,32 @@ function AppInner() {
   useEffect(() => {
     if (!eventCode) return;
     setLoading(true);
-    applyState(DEFAULT_STATE);
-    syncedRef.current = { state: DEFAULT_STATE, etag: null };
+    setOffline(false);
+    setLoadFailed(false);
+    hasDataRef.current = false;
+    cachedMarkRef.current = "";
     dirtyRef.current = false;
-    setLocalActiveRoundId(null);
-    hasSeededActiveRoundRef.current = false;
+    const saved = readCachedEvent(eventCode);
+    if (saved) {
+      applyState(saved.pending || saved.state);
+      syncedRef.current = { state: saved.state, etag: saved.etag };
+      if (saved.pending) {
+        // Changes from last time that never reached the server — send them
+        // now (they're merged with anything others have done since).
+        dirtyRef.current = true;
+        setTimeout(() => pump(), 0);
+      }
+      hasDataRef.current = true;
+      lastSyncAtRef.current = saved.savedAt;
+      setLocalActiveRoundId(defaultRoundIdFor(saved.state.rounds, saved.state.activeRoundId));
+      hasSeededActiveRoundRef.current = true;
+      setLoading(false);
+    } else {
+      applyState(DEFAULT_STATE);
+      syncedRef.current = { state: DEFAULT_STATE, etag: null };
+      setLocalActiveRoundId(null);
+      hasSeededActiveRoundRef.current = false;
+    }
     setActiveId(null);
     setShowCourseSetup(false);
     setShowEnterScores(false);
@@ -1715,6 +1813,25 @@ function AppInner() {
     if (!eventCode) return;
     load();
   }, [eventCode, load]);
+
+  // Back in range: send anything that's waiting, then fetch the latest.
+  const resync = useCallback(() => {
+    if (dirtyRef.current) pump();
+    load();
+  }, [pump, load]);
+
+  useEffect(() => {
+    window.addEventListener("online", resync);
+    return () => window.removeEventListener("online", resync);
+  }, [resync]);
+
+  // While offline, keep trying every 15 seconds on every screen (the usual
+  // refresh only runs on some of them).
+  useEffect(() => {
+    if (!offline) return;
+    const t = setInterval(resync, 15000);
+    return () => clearInterval(t);
+  }, [offline, resync]);
 
   useEffect(() => {
     // The leaderboard refreshes itself — and so does the players' "Enter
@@ -2719,8 +2836,8 @@ function AppInner() {
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, opacity: 0.85 }}>
-            <Radio size={13} color={live ? "#7FB88F" : accentColor} />
-            {live ? "Live" : "Connecting…"}
+            <Radio size={13} color={offline ? "#E0A33A" : live ? "#7FB88F" : accentColor} />
+            {offline ? "Offline" : live ? "Live" : "Connecting…"}
           </div>
         </div>
         <div style={{ fontSize: 26, fontWeight: 700, marginTop: 6, letterSpacing: "-0.01em" }}>
@@ -2755,6 +2872,13 @@ function AppInner() {
             </button>
           )}
         </div>
+        {offline && !loadFailed && (
+          <div style={{ fontSize: 11.5, color: "#1B1B1B", background: "#F3D58A", borderRadius: 6, padding: "5px 8px", marginTop: 8, fontWeight: 600 }}>
+            No signal — showing the copy saved on this phone
+            {lastSyncAtRef.current ? ` at ${new Date(lastSyncAtRef.current).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}.
+            It will update by itself when the signal returns.
+          </div>
+        )}
         {syncError && (
           <div style={{ fontSize: 11, color: "#F1EFE3", background: "rgba(181,68,46,0.85)", borderRadius: 6, padding: "4px 8px", marginTop: 8 }}>
             Last change didn't save — check your connection and try again.
@@ -2861,6 +2985,20 @@ function AppInner() {
 
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Loading…</div>
+      ) : loadFailed ? (
+        <div style={{ padding: "40px 24px", textAlign: "center", color: "#1B1B1B" }}>
+          <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>No signal</div>
+          <div style={{ fontSize: 13.5, color: "#6B6B5F", marginBottom: 18, lineHeight: 1.5 }}>
+            This phone hasn't opened <strong>{eventCode}</strong> before, so there's no saved copy to show yet.
+            Once it has loaded once with a signal, the draw, rules and leaderboard will open here even without one.
+          </div>
+          <button
+            onClick={() => { setLoading(true); load(); }}
+            style={{ padding: "11px 26px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 14 }}
+          >
+            Try again
+          </button>
+        </div>
       ) : mode === "menu" ? (
         <PlayerMenu
           rounds={rounds}
