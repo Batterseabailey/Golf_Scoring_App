@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 31";
+const APP_VERSION = "21 Sep 2026 · build 32";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -7689,23 +7689,26 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           Playing HCP {ph} · {isMedal ? `net ${netTotal} (${formatRelToPar(relToPar)})` : `${pts} pts`} so far
         </div>
 
-        {isFoursomes ? (
-          <div style={{ display: "flex", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>{player.name || "Player A"} — adj. for this comp</div>
-              <HandicapAdjuster value={player.handicapAdjustment} onChange={(v) => onUpdate({ handicapAdjustment: v })} headerColor={headerColor} />
+        {/* Adjustments are made in one place only — Admin → Draw / tee times
+            → Adjust handicap — never from the scoring screen, where a slip
+            of the thumb mid-card could change what someone plays off. If
+            this player HAS been adjusted, that's shown here (read-only) so
+            the playing handicap above makes sense. */}
+        {(() => {
+          const fmt = (v) => (v > 0 ? `+${v}` : `${v}`);
+          const parts = [];
+          const a = Number(player.handicapAdjustment) || 0;
+          const b = isFoursomes ? Number(player.partnerHandicapAdjustment) || 0 : 0;
+          if (a) parts.push(`${isFoursomes ? `${player.name || "Player A"} ` : ""}${fmt(a)}`);
+          if (b) parts.push(`${player.partnerName || "Player B"} ${fmt(b)}`);
+          if (parts.length === 0) return null;
+          return (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0", fontSize: 11.5, color: "#6B6B5F" }}>
+              <strong style={{ color: headerColor }}>* Handicap adjusted for this competition: {parts.join(", ")} {parts.length === 1 && Math.abs(a || b) === 1 ? "shot" : "shots"}.</strong>{" "}
+              To change it, go to Admin → Draw / tee times → Adjust handicap.
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>{player.partnerName || "Player B"} — adj. for this comp</div>
-              <HandicapAdjuster value={player.partnerHandicapAdjustment} onChange={(v) => onUpdate({ partnerHandicapAdjustment: v })} headerColor={headerColor} />
-            </div>
-          </div>
-        ) : (
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
-            <div style={{ fontSize: 10, color: "#8A8774", marginBottom: 3 }}>Adjustment for this competition only</div>
-            <HandicapAdjuster value={player.handicapAdjustment} onChange={(v) => onUpdate({ handicapAdjustment: v })} headerColor={headerColor} />
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
