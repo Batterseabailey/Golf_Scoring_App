@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 42";
+const APP_VERSION = "21 Sep 2026 · build 43";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -5992,9 +5992,14 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
   const sheets = Math.ceil(cards.length / 18);
   const ladyNames = new Set(societyRoster.filter((m) => m.isLady).map((m) => normalizeName(m.name)));
   const isLadyName = (name) => ladyNames.has(normalizeName(name));
+  // One block per physical sheet of 18, so each sheet is laid out (and
+  // page-broken) on its own rather than trusting the browser to wrap a
+  // single long grid at exactly the right row.
+  const sheetsOfCards = [];
+  for (let i = 0; i < cards.length; i += 18) sheetsOfCards.push(cards.slice(i, i + 18));
 
   return (
-    <div style={{ padding: "12px 14px 40px" }}>
+    <div className="label-page" style={{ padding: "12px 14px 40px" }}>
       <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>
           ← Back
@@ -6018,8 +6023,9 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
       {cards.length === 0 ? (
         <div style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>No players yet on this day.</div>
       ) : (
-        <div className="label-grid">
-          {cards.map((c) => (
+        sheetsOfCards.map((sheetCards, sheetIdx) => (
+        <div className="label-grid" key={sheetIdx}>
+          {sheetCards.map((c) => (
             <div className="label-card" key={c.id}>
               {c.competitionName && (
                 <div className="label-competition">{c.competitionName}</div>
@@ -6048,10 +6054,11 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
             </div>
           ))}
         </div>
+        ))
       )}
       <style>{`
         /* On-screen preview only — doesn't need to be exact, just readable */
-        .label-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .label-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 18px; }
         .label-card {
           border: 1px dashed #B5AF9A; padding: 10px 12px; min-height: 112px;
           display: flex; flex-direction: column; justify-content: center;
@@ -6064,24 +6071,37 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
         .label-hcp { font-size: 10.5px; color: #555; margin-bottom: 6px; }
         .label-note { font-size: 11px; color: #6B6B5F; font-style: italic; margin-top: 6px; }
 
-        /* Print output — matched exactly to Avery L7161's real measurements,
-           so each card lands precisely on a real adhesive label. Same
-           column width/count as L7160, just taller rows (46.6mm vs
-           38.1mm) and one fewer row per sheet (6 vs 7, so 18 vs 21 per
-           sheet) — top/bottom margin recalculated to fit exactly: A4 is
-           297mm tall, 6 × 46.6mm = 279.6mm, leaving 17.4mm split evenly
-           as 8.7mm top and bottom. */
+        /* Print output — matched to Avery L7161's real measurements, so
+           each card lands on a real adhesive label:
+             label 63.5 x 46.6mm, 3 across x 6 down on A4 (210 x 297mm)
+             across: 7.25 + 63.5 + 2.5 + 63.5 + 2.5 + 63.5 + 7.25 = 210
+             down:   8.7 + (6 x 46.6 = 279.6) + 8.7 = 297  (no gap between rows)
+           The gap between COLUMNS is 2.5mm and there is NO gap between
+           rows. (An earlier version had these the wrong way round — a
+           "gap" shorthand lists rows first — which pushed the sixth row
+           off the page and closed the columns up so the right-hand one
+           drifted onto the label's edge.) Everything around the sheet —
+           the screen padding, the browser's own body margin — is zeroed
+           so the only offset is the page margin itself. */
         @media print {
           .no-print { display: none !important; }
-          @page { size: A4; margin: 8.7mm 7mm 4.5mm 7mm; }
+          @page { size: A4; margin: 8.7mm 7.25mm 0mm 7.25mm; }
+          html, body { margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
+          .label-page { padding: 0 !important; margin: 0 !important; }
           .label-grid {
             display: grid;
+            width: 195.5mm;
+            height: 279.6mm;
+            margin: 0 !important;
             grid-template-columns: repeat(3, 63.5mm);
-            grid-auto-rows: 46.6mm;
-            column-gap: 2.75mm;
+            grid-template-rows: repeat(6, 46.6mm);
+            column-gap: 2.5mm;
             row-gap: 0mm;
-            gap: 2.75mm 0mm;
+            overflow: hidden;
+            break-inside: avoid; page-break-inside: avoid;
+            break-after: page; page-break-after: always;
           }
+          .label-grid:last-of-type { break-after: auto; page-break-after: auto; }
           .label-card {
             border: none; padding: 1mm 2.5mm; min-height: 0;
             box-sizing: border-box; overflow: hidden;
