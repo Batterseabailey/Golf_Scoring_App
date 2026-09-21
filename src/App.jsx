@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 41";
+const APP_VERSION = "21 Sep 2026 · build 42";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2248,7 +2248,16 @@ function AppInner() {
     }));
   };
 
-  const removePlayer = (id) => updateRound({ players: players.filter((p) => p.id !== id) });
+  const removePlayer = (id) => updateRound((prevRound) => ({ players: prevRound.players.filter((p) => p.id !== id) }));
+
+  // Removes a given set of players from this day in one go — used by the
+  // Build tab's "Remove all unplaced" button, which passes exactly the
+  // players showing in its pool (so someone just dropped into a slot, but
+  // not yet auto-saved, is never caught by it).
+  const removePlayersByIds = (ids) => {
+    const gone = new Set(ids);
+    updateRound((prevRound) => ({ players: prevRound.players.filter((p) => !gone.has(p.id)) }));
+  };
 
   const clearAllPlayers = () => updateRound({ players: [], draw: [] });
 
@@ -3318,6 +3327,7 @@ function AppInner() {
           onAddPeople={addPeopleToDay}
           onAddPlayerQuick={addPlayerQuick}
           onRemovePlayer={removePlayer}
+          onRemovePlayers={removePlayersByIds}
         />
       ) : showLocalRulesSetup ? (
         <LocalRulesSetup
@@ -4393,7 +4403,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, onRemovePlayers, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -4792,7 +4802,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       {tab === "build" ? (
-        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} onBulkSetHandicapAdjustment={onBulkSetHandicapAdjustment} onWithdrawPlayer={onWithdrawPlayer} competitions={competitions} visOpts={visOpts} />
+        <DrawBuilder draw={draw} players={players} onUpdate={onUpdate} headerColor={headerColor} accentColor={accentColor} course={course} handicapAllowance={handicapAllowance} isFoursomes={format === "foursomes"} startTime={drawStartTime} onUpdateStartTime={onUpdateDrawStartTime} intervalMinutes={drawInterval} onUpdateInterval={onUpdateDrawInterval} onUpdatePlayerIndex={onUpdatePlayerIndex} onUpdatePlayerDetails={onUpdatePlayerDetails} onAddPlayerQuick={onAddPlayerQuick} onRemovePlayer={onRemovePlayer} onRemovePlayers={onRemovePlayers} roundKey={roundKey} societyRoster={societyRoster} onAddFromRoster={onAddFromRoster} onBulkSetTee={onBulkSetTee} onSetHandicapAdjustment={onSetHandicapAdjustment} onBulkSetHandicapAdjustment={onBulkSetHandicapAdjustment} onWithdrawPlayer={onWithdrawPlayer} competitions={competitions} visOpts={visOpts} />
       ) : (
         <>
           <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
@@ -4906,7 +4916,7 @@ function buildRowsFromDraw(draw) {
   return [{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }];
 }
 
-function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, competitions, visOpts }) {
+function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, accentColor, course, handicapAllowance, isFoursomes, startTime, onUpdateStartTime, intervalMinutes, onUpdateInterval, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, competitions, visOpts }) {
   // Local working copy — rows of up to 4 player slots each. Seeded from
   // whatever draw already exists so re-opening this doesn't lose work.
   const [rows, setRows] = useState(() => buildRowsFromDraw(draw));
@@ -4917,6 +4927,7 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [confirmDeleteName, setConfirmDeleteName] = useState(null);
   const [confirmClearRows, setConfirmClearRows] = useState(false);
+  const [confirmClearPool, setConfirmClearPool] = useState(false);
   const [bulkTeeTarget, setBulkTeeTarget] = useState("");
   const [selectedTeeIds, setSelectedTeeIds] = useState(new Set());
   const [teeSavedMsg, setTeeSavedMsg] = useState(false);
@@ -5236,9 +5247,40 @@ function DrawBuilder({ draw, players, onUpdate, headerColor, accentColor, course
             </button>
           </div>
         )}
-        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
-          Players {pool.length > 0 ? `(${pool.length} unplaced)` : "— all placed"}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774" }}>
+            Players {pool.length > 0 ? `(${pool.length} unplaced)` : "— all placed"}
+          </div>
+          {pool.length > 1 && !confirmClearPool && (
+            <button onClick={() => setConfirmClearPool(true)} style={{ fontSize: 11.5, fontWeight: 600, color: "#B5442E", background: "none", border: "none", padding: 0 }}>
+              Remove all {pool.length} unplaced
+            </button>
+          )}
         </div>
+        {confirmClearPool && (
+          <div style={{ background: "#FDF2EF", border: "1px solid #B5442E", borderRadius: 8, padding: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#B5442E", marginBottom: 4 }}>
+              Remove all {pool.length} unplaced players from this day?
+            </div>
+            <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+              Everyone already placed in a tee time stays. They also stay on the Society roster, so they can be added back.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => { onRemovePlayers(pool.filter((p) => !(p.partnerName && assignedNames.has(p.partnerName))).map((p) => p.id)); setConfirmClearPool(false); setSelected(null); }}
+                style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "none", background: "#B5442E", color: "#FFFFFF", fontWeight: 700, fontSize: 12.5 }}
+              >
+                Yes, remove them
+              </button>
+              <button
+                onClick={() => setConfirmClearPool(false)}
+                style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F", fontWeight: 600, fontSize: 12.5 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 140, overflowY: "auto" }}>
           {pool.length === 0 && (
             <div style={{ fontSize: 12, color: "#9B9885" }}>
