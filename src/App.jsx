@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 38";
+const APP_VERSION = "21 Sep 2026 · build 39";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2385,6 +2385,13 @@ function AppInner() {
     save((prev) => ({ societyRoster: prev.societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
   };
 
+  // Empties the Society roster in one go (it only ever removes the ids it
+  // is given, so a member added on another device in the meantime stays).
+  const clearSocietyRoster = (ids) => {
+    const gone = new Set(ids);
+    save((prev) => ({ societyRoster: prev.societyRoster.filter((m) => !gone.has(m.id)) }));
+  };
+
   const removeSocietyMember = (id) => {
     save((prev) => ({ societyRoster: prev.societyRoster.filter((m) => m.id !== id) }));
   };
@@ -3384,6 +3391,7 @@ function AppInner() {
           onUpdate={updateSocietyMember}
           onRemove={removeSocietyMember}
           onImport={importSocietyMembers}
+          onClearAll={clearSocietyRoster}
           course={course}
           roundPlayers={players}
           roundLabel={activeRound.label}
@@ -6659,12 +6667,13 @@ function MatchesSetup({ matches, players, onAdd, onUpdate, onRemove, onBack, hea
   );
 }
 
-function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor }) {
+function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
   const [genderFilter, setGenderFilter] = useState("all"); // all | ladies | gents
+  const [confirmClearRoster, setConfirmClearRoster] = useState(false);
 
   const alphaSorted = [...roster]
     .filter((m) => genderFilter === "all" || (genderFilter === "ladies" ? m.isLady : !m.isLady))
@@ -6743,6 +6752,41 @@ function SocietyRosterSetup({ roster, onAdd, onUpdate, onRemove, onImport, cours
         )}
         {importMsg && !pasteOpen && (
           <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginBottom: 8 }}>{importMsg}</div>
+        )}
+
+        {roster.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            {confirmClearRoster ? (
+              <div style={{ background: "#FDF2EF", border: "1px solid #B5442E", borderRadius: 8, padding: 10 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#B5442E", marginBottom: 4 }}>
+                  Remove all {roster.length} member{roster.length === 1 ? "" : "s"} from the Society roster?
+                </div>
+                <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+                  This only empties this list. Players already on a day's draw or scoresheet are not touched.
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => { onClearAll(roster.map((m) => m.id)); setConfirmClearRoster(false); setImportMsg("Society roster emptied."); }}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "none", background: "#B5442E", color: "#FFFFFF", fontWeight: 700, fontSize: 12.5 }}
+                  >
+                    Yes, remove them all
+                  </button>
+                  <button
+                    onClick={() => setConfirmClearRoster(false)}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F", fontWeight: 600, fontSize: 12.5 }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ textAlign: "right" }}>
+                <button onClick={() => setConfirmClearRoster(true)} style={{ fontSize: 11.5, color: "#B5442E", background: "none", border: "none", padding: "2px 0" }}>
+                  Empty the whole roster ({roster.length})
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>
