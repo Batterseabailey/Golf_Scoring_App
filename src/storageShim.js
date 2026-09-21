@@ -19,6 +19,25 @@ async function getItem(key) {
   return { key, value: data.value, etag: data.etag || null, shared: true };
 }
 
+// A cheap refresh: "give me the event only if it's changed since version
+// <etag>". Returns { unchanged: true } (a few bytes) when it hasn't,
+// otherwise the same as getItem. Used for the every-few-seconds refresh, so
+// a phone sitting on the leaderboard isn't downloading the whole event
+// over and over.
+async function getItemIfChanged(key, etag) {
+  if (!etag) return getItem(key);
+  const res = await fetch(`${API}?key=${encodeURIComponent(key)}&ifNoneMatch=${encodeURIComponent(etag)}`, { cache: "no-store" });
+  if (res.status === 404) {
+    throw new Error("Not found");
+  }
+  if (!res.ok) {
+    throw new Error(`Storage get failed (${res.status})`);
+  }
+  const data = await res.json();
+  if (data.unchanged) return { key, unchanged: true, etag: data.etag || etag, shared: true };
+  return { key, value: data.value, etag: data.etag || null, shared: true };
+}
+
 async function setItem(key, value) {
   const res = await fetch(API, {
     method: "POST",
@@ -62,6 +81,7 @@ async function deleteItem(key) {
 
 window.storage = {
   get: (key) => getItem(key),
+  getIfChanged: (key, etag) => getItemIfChanged(key, etag),
   set: (key, value) => setItem(key, value),
   setIfMatch: (key, value, etag) => setItemIfMatch(key, value, etag),
   delete: (key) => deleteItem(key),
