@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 32";
+const APP_VERSION = "21 Sep 2026 · build 33";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -7537,8 +7537,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         const netVsPar = val !== "" ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
         return (
           <div key={h} style={{ textAlign: "center" }}>
-            <div className="mono" style={{ fontSize: 9.5, color: "#9B9885" }}>{h}</div>
-            <div className="mono" style={{ fontSize: 8.5, color: "#C2BEA9" }}>Par {course.holes[idx].par}</div>
+            <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>{h}</div>
+            <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[idx].par}</div>
             <input
               ref={(el) => (inputRefs.current[idx] = el)}
               className="mono scoreInput"
@@ -7559,7 +7559,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 color: isLocked(idx) ? headerColor : "#1B1B1B",
               }}
             />
-            <div className="mono" style={{ fontSize: 9, color: headerColor, marginTop: 2, minHeight: 12 }}>
+            <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: headerColor, marginTop: 2, minHeight: 14 }}>
               {isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (p !== null ? `${p}pt` : "")}
             </div>
           </div>
