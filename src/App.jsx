@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 44";
+const APP_VERSION = "21 Sep 2026 · build 46";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -395,7 +395,7 @@ function parsePastedPlayers(text, course) {
         const match = course.tees.find(
           (t) => t.label.toLowerCase() === teeRaw || t.id.toLowerCase() === teeRaw
         );
-        if (match) teeId = match.id;
+        if (match) teeId = match.label; // the tee's NAME is what's stored on a player (it used to store the internal id, which never matched)
       }
       return { id: crypto.randomUUID(), name, index, tee: teeId, scores: Array(18).fill("") };
     })
@@ -1068,14 +1068,21 @@ function isTeeToken(raw, courseTeeLabels) {
 
 function normalizeTeeIndicator(raw, courseTeeLabels) {
   const cleaned = (raw || "").replace(/[^a-zA-Z]/g, "").toLowerCase();
-  if (cleaned === "b" || cleaned === "back") return "Back";
-  if (cleaned === "f" || cleaned === "front") return "Front";
+  // "Back"/"Front" (or B/F) in a spreadsheet only mean something if THIS
+  // course actually has a tee called that. They used to be written onto
+  // the player regardless — so a file saying "Back", loaded into a day at
+  // a course whose tees are called something else, left everyone on a tee
+  // that doesn't exist ("Tee "Back" doesn't match this course"), and
+  // re-uploading the file put it straight back after it had been fixed.
+  // Now a word that matches none of the course's tees returns null and is
+  // reported, and the player's existing tee is left alone.
+  const generic = cleaned === "b" || cleaned === "back" ? "Back" : cleaned === "f" || cleaned === "front" ? "Front" : null;
+  if (generic) return matchCourseTeeLabel(generic, courseTeeLabels);
   // Return the course's own actual label (correctly cased, and in full —
   // e.g. "Purple Tee" even though the token itself was just "Purple") if
   // this token matches one, so the stored value exactly matches an entry
   // in the course's tees list.
-  const match = matchCourseTeeLabel(raw, courseTeeLabels);
-  return match || (raw || "").trim();
+  return matchCourseTeeLabel(raw, courseTeeLabels);
 }
 
 // Single shared pass over a pasted draw sheet — classifies every column
@@ -1148,6 +1155,7 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
     const handicaps = [];
     const tees = [];
     const comps = [];
+    const unmatchedTees = []; // tee words in the file that this course has no tee for
     let lastName = null;
     for (let i = 1; i < cols.length; i++) {
       const val = (cols[i] || "").trim();
@@ -1155,7 +1163,9 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
       if (isNumericToken(val)) {
         if (lastName) handicaps.push({ name: lastName, index: val });
       } else if (isTeeToken(val, courseTeeLabels)) {
-        if (lastName) tees.push({ name: lastName, tee: normalizeTeeIndicator(val, courseTeeLabels) });
+        const teeLabel = normalizeTeeIndicator(val, courseTeeLabels);
+        if (lastName && teeLabel) tees.push({ name: lastName, tee: teeLabel });
+        else if (lastName) unmatchedTees.push({ name: lastName, raw: val });
       } else if (abbrevSet.has(val.toUpperCase()) || looksLikeCompetitionCode(val)) {
         if (lastName) comps.push({ name: lastName, abbreviation: val.toUpperCase() });
       } else {
@@ -1177,7 +1187,7 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
         tees.push({ name, tee: carryTee });
       }
     });
-    return { time, names, handicaps, tees, comps };
+    return { time, names, handicaps, tees, comps, unmatchedTees };
   });
 
   // Merges consecutive rows that share the same tee time — or that have a
@@ -1197,6 +1207,7 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
       last.handicaps.push(...row.handicaps);
       last.tees.push(...row.tees);
       last.comps.push(...row.comps);
+      last.unmatchedTees.push(...row.unmatchedTees);
     } else {
       merged.push({
         time: row.time || (last ? last.time : ""),
@@ -1204,6 +1215,7 @@ function walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts) {
         handicaps: [...row.handicaps],
         tees: [...row.tees],
         comps: [...row.comps],
+        unmatchedTees: [...row.unmatchedTees],
       });
     }
   });
@@ -1247,6 +1259,12 @@ function extractHandicapsFromDrawPaste(text, knownAbbreviations, courseTeeLabels
 // already defined in Admin, so a genuine name can never be mistaken for one.
 function extractCompetitionsFromDrawPaste(text, knownAbbreviations, courseTeeLabels) {
   return walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels).flatMap((r) => r.comps);
+}
+
+// Tee words in the paste that don't match any tee on this day's course —
+// reported back to the organiser rather than silently stored or dropped.
+function unmatchedTeeWordsInPaste(text, knownAbbreviations, courseTeeLabels, opts) {
+  return [...new Set(walkPastedDrawRows(text, knownAbbreviations, courseTeeLabels, opts).flatMap((r) => r.unmatchedTees.map((u) => u.raw.trim())))];
 }
 
 // Pulls {name, tee} pairs out of the same draw paste, in any column order
@@ -3851,6 +3869,60 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
   );
 }
 
+// ---- Results-sheet look for the leaderboards ----
+// Modelled on a traditional club results sheet: a plain serif title and
+// sub-title, a solid bar across the head of the table, then one quiet row
+// per player — position ("1st"), name with the playing handicap in
+// brackets, and the score on the right — divided by hairlines, with every
+// other row very faintly shaded.
+const RESULTS_FONT = "Georgia, 'Iowan Old Style', 'Times New Roman', serif";
+
+function ordinal(n) {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] || "th"}`;
+}
+
+// "Monday 21st September 2026"
+function formatResultsDate(dateStr) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const date = new Date(y, m - 1, d);
+  return `${date.toLocaleDateString("en-GB", { weekday: "long" })} ${ordinal(d)} ${date.toLocaleDateString("en-GB", { month: "long" })} ${y}`;
+}
+
+// "Black & Green Tees" — the tees actually in use, in the course's own order.
+function teesInUseText(course, players) {
+  const used = new Set(players.flatMap((p) => [p.name ? p.tee : null, p.partnerName ? p.partnerTee : null]).filter(Boolean).map(normalizeName));
+  const labels = course.tees.map((t) => t.label).filter((l) => used.has(normalizeName(l)));
+  if (labels.length === 0) return "";
+  const joined = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(", ")} & ${labels[labels.length - 1]}`;
+  return `${joined} Tee${labels.length === 1 ? "" : "s"}`;
+}
+
+function ResultsHeading({ title, subtitle, note }) {
+  return (
+    <div style={{ fontFamily: RESULTS_FONT, marginBottom: 12 }}>
+      <div style={{ fontSize: 23, fontWeight: 400, lineHeight: 1.2, color: "#2B2B2B" }}>{title}</div>
+      {subtitle && <div style={{ fontSize: 16.5, fontWeight: 400, lineHeight: 1.3, color: "#2B2B2B", marginTop: 6 }}>{subtitle}</div>}
+      {note && <div style={{ fontSize: 12.5, color: "#3F3F38", marginTop: 8 }}>{note}</div>}
+    </div>
+  );
+}
+
+const resultsStyles = (headerColor) => ({
+  frame: { background: "#FBFBFB", border: `1px solid ${headerColor}`, padding: "16px 14px 14px", fontFamily: RESULTS_FONT },
+  table: { width: "100%", borderCollapse: "collapse", fontFamily: RESULTS_FONT },
+  headRow: { background: headerColor },
+  th: { textAlign: "left", padding: "11px 10px", fontSize: 14, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none" },
+  thRight: { textAlign: "right", padding: "11px 10px", fontSize: 14, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none" },
+  row: (i) => ({ borderBottom: "1px solid #DDDDDD", background: i % 2 === 0 ? "#F7F7F7" : "#FBFBFB" }),
+  pos: { padding: "12px 10px", fontSize: 15, color: "#2B2B2B", whiteSpace: "nowrap", width: 48 },
+  name: { padding: "12px 10px", fontSize: 15.5, color: headerColor, whiteSpace: "nowrap" },
+  num: { padding: "12px 10px", fontSize: 15.5, color: headerColor, textAlign: "right", whiteSpace: "nowrap" },
+});
+
 // A single day's own leaderboard — as opposed to OverallBoard's running
 // total across every day — with gross, net, and Stableford points each
 // shown as their own independently switchable, independently sortable
@@ -3899,6 +3971,8 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
       // to follow a Stableford leaderboard live.
       return {
         name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+        ph: t.ph,
+        adjusted: !!(Number(p.handicapAdjustment) || (isFoursomes && Number(p.partnerHandicapAdjustment))),
         gross: complete ? t.grossTotal : null,
         net: complete ? t.netTotal : null,
         grossDisplay: complete ? t.grossTotal : t.thru > 0 ? "NR" : "–",
@@ -3947,8 +4021,15 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
     );
   }
 
+  const rs = resultsStyles(headerColor);
+  const subFilterName = subFilter ? ((competitions.find((c) => c.abbreviation.toUpperCase() === subFilter.toUpperCase()) || {}).fullName || subFilter) : "";
   return (
-    <div>
+    <div style={rs.frame}>
+      <ResultsHeading
+        title={[round.label, subFilterName].filter(Boolean).join(" — ")}
+        subtitle={[formatResultsDate(round.date), teesInUseText(round.course, effectivePlayers), round.course.name].filter(Boolean).join(", ")}
+        note={`${round.scoring === "medal" ? "Medal" : "Stableford"}${isFoursomes ? " Foursomes" : ""}${round.handicapAllowance !== 100 ? ` (${round.handicapAllowance}% handicap allowance)` : ""}`}
+      />
       {compsInUse.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
           <button
@@ -3994,67 +4075,40 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
             : `No ${isFoursomes ? "pair" : "player"} in this competition yet.`}
         </div>
       ) : (
+      <>
       <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
+      <table style={rs.table}>
         <thead>
-          <tr style={{ background: `${headerColor}12` }}>
-            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
-            <th
-              onClick={() => clickSort("name")}
-              style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none" }}
-            >
-              {isFoursomes ? "Pair" : "Player"}{sortArrow("name")}
-            </th>
+          <tr style={rs.headRow}>
+            <th colSpan={2} onClick={() => clickSort("name")} style={{ ...rs.th, cursor: "pointer" }}>Results{sortArrow("name")}</th>
             {round.publicShowGross !== false && (
-              <th
-                onClick={() => clickSort("gross")}
-                className="mono"
-                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-              >
-                Gross{sortArrow("gross")}
-              </th>
+              <th onClick={() => clickSort("gross")} style={{ ...rs.thRight, cursor: "pointer" }}>Gross{sortArrow("gross")}</th>
             )}
             {round.publicShowNet !== false && (
-              <th
-                onClick={() => clickSort("net")}
-                className="mono"
-                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-              >
-                Net{sortArrow("net")}
-              </th>
+              <th onClick={() => clickSort("net")} style={{ ...rs.thRight, cursor: "pointer" }}>Nett{sortArrow("net")}</th>
             )}
             {round.publicShowPoints !== false && (
-              <th
-                onClick={() => clickSort("points")}
-                className="mono"
-                style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-              >
-                Pts{sortArrow("points")}
-              </th>
+              <th onClick={() => clickSort("points")} style={{ ...rs.thRight, cursor: "pointer" }}>Points{sortArrow("points")}</th>
             )}
           </tr>
         </thead>
         <tbody>
-          {standings.map((row) => (
-            <tr key={row.name} style={{ borderTop: "1px solid #EFEDE0" }}>
-              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: row.rank <= 3 && row.thru > 0 ? headerColor : "#9B9885" }}>
-                {row.rank}
-              </td>
-              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
-              {round.publicShowGross !== false && (
-                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.grossDisplay}</td>
-              )}
-              {round.publicShowNet !== false && (
-                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>{row.netDisplay}</td>
-              )}
-              {round.publicShowPoints !== false && (
-                <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13, fontWeight: 700, color: headerColor }}>{row.points ?? "–"}</td>
-              )}
+          {standings.map((row, i) => (
+            <tr key={row.name} style={rs.row(i)}>
+              <td style={rs.pos}>{sortBy === "name" ? "" : row.thru > 0 ? ordinal(row.rank) : "–"}</td>
+              <td style={rs.name}>{row.name}({row.ph}{row.adjusted ? "*" : ""})</td>
+              {round.publicShowGross !== false && <td style={rs.num}>{row.grossDisplay}</td>}
+              {round.publicShowNet !== false && <td style={rs.num}>{row.netDisplay}</td>}
+              {round.publicShowPoints !== false && <td style={rs.num}>{row.points ?? "–"}</td>}
             </tr>
           ))}
         </tbody>
       </table>
       </div>
+      {standings.some((row) => row.adjusted) && (
+        <div style={{ fontSize: 11.5, fontStyle: "italic", color: "#3F3F38", marginTop: 8 }}>{ADJUSTED_FOOTNOTE}</div>
+      )}
+      </>
       )}
     </div>
   );
@@ -4088,8 +4142,14 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
     );
   }
 
+  const rs = resultsStyles(headerColor);
   return (
-    <div>
+    <div style={rs.frame}>
+      <ResultsHeading
+        title={`Overall Leaderboard${rowLabel === "Pair" ? " — Foursomes" : ""}`}
+        subtitle={rounds.map((r) => r.label).join(", ")}
+        note="Stableford points, all days added together"
+      />
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -4102,42 +4162,28 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
         </div>
       ) : (
       <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: 10, overflow: "hidden" }}>
+      <table style={rs.table}>
         <thead>
-          <tr style={{ background: `${headerColor}12` }}>
-            <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700 }}>#</th>
-            <th
-              onClick={() => setSortAlpha((v) => !v)}
-              style={{ textAlign: "left", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, cursor: "pointer", userSelect: "none" }}
-            >
-              {rowLabel} {sortAlpha ? "▲ A–Z" : "⇅"}
+          <tr style={rs.headRow}>
+            <th colSpan={2} onClick={() => setSortAlpha((v) => !v)} style={{ ...rs.th, cursor: "pointer" }}>
+              Results{sortAlpha ? " ▲ A–Z" : ""}
             </th>
-            {rounds.map((r) => (
-              <th key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>
-                {r.label}
-              </th>
+            {rounds.length > 1 && rounds.map((r) => (
+              <th key={r.id} style={{ ...rs.thRight, whiteSpace: "normal", maxWidth: 92, fontSize: 12.5, lineHeight: 1.2 }}>{r.label}</th>
             ))}
-            <th className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 11, color: headerColor, fontWeight: 700 }}>Total</th>
+            <th style={rs.thRight}>{rounds.length > 1 ? "Total" : "Points"}</th>
           </tr>
         </thead>
         <tbody>
-          {standings.map((row) => (
-            <tr key={row.name} style={{ borderTop: "1px solid #EFEDE0" }}>
-              <td className="mono" style={{ padding: "9px 10px", fontSize: 13, fontWeight: 700, color: row.rank <= 3 && row.anyPlayed ? headerColor : "#9B9885" }}>
-                {row.rank}
-              </td>
-              <td style={{ padding: "9px 10px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" }}>{row.name}</td>
-              {rounds.map((r) => {
+          {standings.map((row, i) => (
+            <tr key={row.name} style={rs.row(i)}>
+              <td style={rs.pos}>{row.anyPlayed ? ordinal(row.rank) : "–"}</td>
+              <td style={rs.name}>{row.name}</td>
+              {rounds.length > 1 && rounds.map((r) => {
                 const t = row.perRound[r.id];
-                return (
-                  <td key={r.id} className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 13 }}>
-                    {t && t.thru > 0 ? t.pts : "–"}
-                  </td>
-                );
+                return <td key={r.id} style={{ ...rs.num, color: "#2B2B2B" }}>{t && t.thru > 0 ? t.pts : "–"}</td>;
               })}
-              <td className="mono" style={{ textAlign: "right", padding: "9px 10px", fontSize: 14, fontWeight: 700, color: headerColor }}>
-                {row.anyPlayed ? row.total : "–"}
-              </td>
+              <td style={rs.num}>{row.anyPlayed ? row.total : "–"}</td>
             </tr>
           ))}
         </tbody>
@@ -4432,7 +4478,9 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       }
       const newAbbrevs = onEnsureCompetitionsExist(people.map((p) => p.competition).filter(Boolean));
       const r = onAddPeople(people);
+      const strayWords = unmatchedTeeWordsInPaste(pasteText, abbrevs, courseTeeLabels, { noTimeColumn: true });
       setMsg(
+        (strayWords.length > 0 ? `NOTE: the file's tee column says ${strayWords.map((w) => `"${w}"`).join(", ")}, but ${course.name}'s tees are ${courseTeeLabels.map((l) => `"${l}"`).join(", ")} — those entries were ignored, so check everyone's tee (Bulk-set tee). ` : "") +
         `No tee times in this file, so it's been read as a list of players rather than a draw: ${r.added} added to ${roundLabel}` +
         `${r.updated ? `, ${r.updated} already there had details filled in` : ""}. The draw itself hasn't changed — go to "Build from players" to place them into tee times.` +
         (newAbbrevs.length > 0 ? ` New competition code${newAbbrevs.length === 1 ? "" : "s"}: ${newAbbrevs.join(", ")}.` : "")
@@ -4457,6 +4505,10 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
     let message =
       `Draw set — ${parsed.length} group${parsed.length === 1 ? "" : "s"}` +
       (extras.length > 0 ? `, ${extras.join(", ")} added to the roster.` : ".");
+    const strayWords = unmatchedTeeWordsInPaste(pasteText, abbrevs, courseTeeLabels);
+    if (strayWords.length > 0) {
+      message += ` NOTE: the file's tee column says ${strayWords.map((w) => `"${w}"`).join(", ")}, but ${course.name}'s tees are ${courseTeeLabels.map((l) => `"${l}"`).join(", ")} — those entries were ignored, so check everyone's tee (Bulk-set tee).`;
+    }
     if (newAbbrevs.length > 0) {
       message += ` New competition code${newAbbrevs.length === 1 ? "" : "s"} found: ${newAbbrevs.join(", ")} — give ${newAbbrevs.length === 1 ? "it" : "them"} a full name in Admin.`;
     }
@@ -5758,7 +5810,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
         <SlotHandicapEditor
           name={editingSlot.name}
           currentIndex={(findIndividualByName(players, editingSlot.name) || {}).index || ""}
-          currentTee={getTee(course, (findIndividualByName(players, editingSlot.name) || {}).tee).label}
+          currentTee={(findIndividualByName(players, editingSlot.name) || {}).tee || ""}
           currentCompetition={(findIndividualByName(players, editingSlot.name) || {}).competition || ""}
           currentAdjustment={Number((findIndividualByName(players, editingSlot.name) || {}).handicapAdjustment) || 0}
           competitions={competitions}
@@ -5821,6 +5873,9 @@ function SlotHandicapEditor({ currentAdjustment = 0, name, currentIndex, current
           onChange={(e) => setTee(e.target.value)}
           style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
         >
+          {teeMismatch(course, tee) && (
+            <option value={tee || ""}>{tee ? `⚠ ${tee} — not a tee here` : "Choose tee…"}</option>
+          )}
           {course.tees.map((t) => (
             <option key={t.id} value={t.label}>{t.label}</option>
           ))}
@@ -7398,6 +7453,9 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
                 onChange={(e) => saveTee(r.roundId, e.target.value)}
                 style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 12px", borderRadius: 8, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
+                {!r.teeOptions.includes(r.tee) && (
+                  <option value={r.tee || ""}>{r.tee ? `⚠ ${r.tee} — not a tee on this day's course` : "Choose tee…"}</option>
+                )}
                 {r.teeOptions.map((label) => (
                   <option key={label} value={label}>{label}</option>
                 ))}
@@ -7842,6 +7900,33 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
         ← Back
       </button>
 
+      {(() => {
+        const stray = teeableePeople.filter((person) => teeMismatch(course, person.tee));
+        if (stray.length === 0) return null;
+        const words = [...new Set(stray.map((person) => person.tee || "no tee"))];
+        return (
+          <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#6B4E00", marginBottom: 4 }}>
+              {stray.length} player{stray.length === 1 ? " is" : "s are"} on a tee {course.name} doesn't have ({words.map((t) => `"${t}"`).join(", ")})
+            </div>
+            <div style={{ fontSize: 11.5, color: "#6B4E00", marginBottom: 8 }}>
+              Until it's put right their playing handicaps are worked out off "{course.tees[0]?.label}". Put them all on the right tee in one go
+              (then use Bulk-set tee below for anyone who plays a different one):
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {course.tees.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => onBulkSetTee(stray.map(({ recordId, role }) => ({ recordId, role })), t.label)}
+                  style={{ padding: "9px 12px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12.5 }}
+                >
+                  Move all {stray.length} to {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       {ranked.length > 0 && (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Bulk-set tee</div>
@@ -8367,6 +8452,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 onChange={(e) => onUpdate({ tee: e.target.value })}
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
+                {teeMismatch(course, player.tee) && (
+                  <option value={player.tee || ""}>{player.tee ? `⚠ ${player.tee} — not a tee here` : "Choose tee…"}</option>
+                )}
                 {course.tees.map((t) => (
                   <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
@@ -8390,10 +8478,13 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0" }}
               />
               <select
-                value={player.partnerTee || course.tees[0]?.label}
+                value={player.partnerTee || ""}
                 onChange={(e) => onUpdate({ partnerTee: e.target.value })}
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
+                {teeMismatch(course, player.partnerTee) && (
+                  <option value={player.partnerTee || ""}>{player.partnerTee ? `⚠ ${player.partnerTee} — not a tee here` : "Choose tee…"}</option>
+                )}
                 {course.tees.map((t) => (
                   <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
@@ -8427,6 +8518,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 onChange={(e) => onUpdate({ tee: e.target.value })}
                 style={{ fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
               >
+                {teeMismatch(course, player.tee) && (
+                  <option value={player.tee || ""}>{player.tee ? `⚠ ${player.tee} — not a tee here` : "Choose tee…"}</option>
+                )}
                 {course.tees.map((t) => (
                   <option key={t.id} value={t.label}>{t.label}</option>
                 ))}
