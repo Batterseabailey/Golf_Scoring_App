@@ -66,6 +66,20 @@ exports.handler = async (event) => {
       if (!key) {
         return { statusCode: 400, headers, body: JSON.stringify({ error: "key required" }) };
       }
+      // "Has anything changed since the copy I've got?" — the app sends the
+      // version marker (etag) of what it's showing. If that's still the
+      // current version, answer with a few bytes instead of sending the
+      // whole event again. With a field of phones refreshing every few
+      // seconds this is nearly all requests, so it cuts the data sent (by
+      // Netlify, and used from each member's phone allowance) enormously.
+      // Older copies of the app don't ask, and simply get the full event.
+      const known = event.queryStringParameters?.ifNoneMatch;
+      if (known) {
+        const meta = await store.getMetadata(key);
+        if (meta && meta.etag && meta.etag === known) {
+          return { statusCode: 200, headers, body: JSON.stringify({ unchanged: true, etag: meta.etag }) };
+        }
+      }
       const entry = await store.getWithMetadata(key);
       if (entry === null) {
         return { statusCode: 404, headers, body: JSON.stringify({ error: "not found" }) };
