@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 51";
+const APP_VERSION = "21 Sep 2026 · build 53";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -3518,7 +3518,7 @@ function AppInner() {
           headerColor={headerColor}
           accentColor={accentColor}
         />
-      ) : showCourseSetup ? (
+      ) : showCourseSetup && isOwner ? (
         <CourseSetup
           orgName={orgName}
           onUpdateOrgName={updateOrgName}
@@ -4497,12 +4497,11 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
   const csvFileInputRef = useRef(null);
   // Admin-only visibility switches for the draw-building/preview displays
   // (never affects what players see on the public draw screen).
-  const [showIndex, setShowIndex] = useState(true);
-  const [showCH, setShowCH] = useState(true);
-  const [showTee, setShowTee] = useState(true);
-  const [showComp, setShowComp] = useState(true);
-  const [showStartTee, setShowStartTee] = useState(true);
-  const visOpts = { showIndex, showCH, showTee, showComp, showStartTee };
+  // The admin-side previews always show every detail (index, course
+  // handicap, tee, competition, start tee) — the switches for what
+  // PLAYERS see are the "Show on public draw tab" ones below.
+  const showStartTee = true;
+  const visOpts = { showIndex: true, showCH: true, showTee: true, showComp: true, showStartTee: true };
 
   const doImport = () => {
     const abbrevs = competitions.map((c) => c.abbreviation).filter(Boolean);
@@ -4773,33 +4772,6 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
             style={{ width: 80, fontSize: 14, fontWeight: 700, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0" }}
           />
           <span style={{ fontSize: 13, color: "#6B6B5F" }}>%</span>
-        </div>
-      </div>
-
-      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
-          Show in draw preview (admin only)
-        </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {[
-            { key: "index", label: "Handicap index", value: showIndex, set: setShowIndex },
-            { key: "ch", label: "Course handicap", value: showCH, set: setShowCH },
-            { key: "tee", label: "Tee", value: showTee, set: setShowTee },
-            { key: "comp", label: "Competition", value: showComp, set: setShowComp },
-            { key: "starttee", label: "Start tee", value: showStartTee, set: setShowStartTee },
-          ].map((sw) => (
-            <button
-              key={sw.key}
-              onClick={() => sw.set((v) => !v)}
-              style={{
-                flex: "1 1 30%", padding: "8px 4px", borderRadius: 7, border: `1px solid ${sw.value ? headerColor : "#D8D4C0"}`,
-                background: sw.value ? headerColor : "transparent", color: sw.value ? "#FFFFFF" : "#9B9885",
-                fontWeight: 600, fontSize: 11.5,
-              }}
-            >
-              {sw.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -5843,8 +5815,10 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
             })}
           </div>
           {row.slots.some(Boolean) && (
-            <div className="mono" style={{ fontSize: 10.5, color: "#8A8774", marginTop: 6 }}>
-              {withBoldFigures(formatGroupNamesWithShots(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts))}
+            <div style={{ fontSize: 12.5, color: "#1B1B1B", marginTop: 8, lineHeight: 1.5 }}>
+              {formatGroupLines(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts).map((line, i) => (
+                <div key={i}>{withBoldFigures(line)}</div>
+              ))}
             </div>
           )}
         </div>
@@ -7713,6 +7687,7 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {isOwner ? (
         <button
           onClick={onOpenCourseSetup}
           style={{
@@ -7725,6 +7700,18 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
           <span style={{ flex: 1, textAlign: "left" }}>{course.name} · {course.eventName}</span>
           <ChevronRight size={15} color="#9B9885" />
         </button>
+        ) : (
+        <div
+          style={{
+            flex: 1, display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+            borderRadius: 10, border: "1px solid #E4E0D0", background: "#F5F3E9",
+            color: "#8A8774", fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          <Lock size={14} />
+          <span style={{ flex: 1, textAlign: "left" }}>{course.name} · {course.eventName}</span>
+        </div>
+        )}
         <button
           onClick={onLock}
           title="Lock Admin"
@@ -7872,7 +7859,7 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
       )}
       {!isOwner && (
         <div style={{ fontSize: 11.5, color: "#8A8774", textAlign: "center", marginTop: 4 }}>
-          Helper access — PINs, backups and switching event are the organiser's only.
+          Helper access — Course setup (tees, slope, holes), PINs, backups and switching event are the organiser's only.
         </div>
       )}
 
