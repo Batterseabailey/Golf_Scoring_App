@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 61";
+const APP_VERSION = "21 Sep 2026 · build 62";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -392,6 +392,28 @@ function isScoreComplete(p) {
 // card directly, as before, and Admin can sign any waiting card.
 function awaitingSignature(p) {
   return !!(p && p.submitted && p.scoresComplete !== true);
+}
+
+// ---- A player's own private card ----
+// While marking someone else's card on their phone, a player can keep
+// their OWN scores alongside it. That copy lives only on this phone —
+// it is never sent to the server and never reaches a leaderboard — and
+// is there purely so that, when their marker's card comes to them to
+// sign, they can compare the two hole by hole.
+function ownCardKey(code, roundId) {
+  return `golf-own-card-${code}-${roundId}`;
+}
+function readOwnCard(code, roundId) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(ownCardKey(code, roundId)) || "null");
+    if (!parsed || !Array.isArray(parsed.scores) || parsed.scores.length !== 18) return { name: "", scores: Array(18).fill("") };
+    return { name: typeof parsed.name === "string" ? parsed.name : "", scores: parsed.scores };
+  } catch {
+    return { name: "", scores: Array(18).fill("") };
+  }
+}
+function writeOwnCard(code, roundId, card) {
+  try { window.localStorage.setItem(ownCardKey(code, roundId), JSON.stringify(card)); } catch { /* ignore */ }
 }
 
 // What the leaderboards are allowed to see of a player: their real card
@@ -3298,6 +3320,13 @@ function AppInner() {
             publicMode
             requireSignature={activeRound.requireSignature !== false}
             deviceId={deviceId}
+            ownCardStore={{ code: eventCode, roundId: activeRoundId }}
+            groupNames={(() => {
+              const target = normalizeName(active.name);
+              const entry = draw.find((e) => (e.players || []).some((n) => normalizeName(n) === target));
+              const names = entry ? entry.players.filter((n) => normalizeName(n) !== target) : [];
+              return names.length > 0 ? names : players.map((p) => p.name).filter((n) => n && normalizeName(n) !== target);
+            })()}
             course={course}
             player={active}
             onBack={closeCard}
@@ -8421,7 +8450,22 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [] }) {
+  // The marker's own private card (see readOwnCard) — only in players' mode.
+  const [ownCard, setOwnCard] = useState(() => (ownCardStore ? readOwnCard(ownCardStore.code, ownCardStore.roundId) : { name: "", scores: Array(18).fill("") }));
+  const [showOwnCard, setShowOwnCard] = useState(() => !!(ownCardStore && readOwnCard(ownCardStore.code, ownCardStore.roundId).scores.some((v) => v !== "")));
+  const updateOwnCard = (patch) => setOwnCard((prev) => {
+    const next = { ...prev, ...patch };
+    if (ownCardStore) writeOwnCard(ownCardStore.code, ownCardStore.roundId, next);
+    return next;
+  });
+  const setOwnScore = (idx, raw) => {
+    const num = Number(raw);
+    const clean = raw === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
+    updateOwnCard({ scores: ownCard.scores.map((v, i) => (i === idx ? clean : v)) });
+  };
+  // When reviewing a card that's mine, compare it with my private notes.
+  const ownMatchesThisCard = !!(ownCardStore && ownCard.name && normalizeName(ownCard.name) === normalizeName(player.name));
   // Review mode: a card a marker has submitted, now being checked and
   // signed by the player on their own phone. Scores can't be changed here —
   // either sign it, or send it back to the marker to correct.
@@ -8784,6 +8828,79 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       {nine(OUT)}
       <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
       {nine(IN)}
+
+      {reviewing && ownMatchesThisCard && (() => {
+        const diffs = [];
+        for (let i = 0; i < 18; i++) {
+          const mine = ownCard.scores[i], theirs = Array.isArray(player.scores) ? player.scores[i] : "";
+          if (mine === "" || mine == null) continue;
+          if (String(mine) !== String(theirs)) diffs.push({ hole: i + 1, mine, theirs: theirs === "" || theirs == null ? "–" : theirs });
+        }
+        const noted = ownCard.scores.filter((v) => v !== "" && v != null).length;
+        return (
+          <div style={{ background: diffs.length ? "#FFF6E0" : "#EEF6EF", border: `1px solid ${diffs.length ? "#D9A400" : "#7FB88F"}`, borderRadius: 10, padding: 12, marginTop: 4, marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: diffs.length ? "#6B4E00" : "#2F6B3F" }}>
+              {diffs.length === 0 ? `Matches your own card on all ${noted} holes you noted` : `Differs from your own card on ${diffs.length} hole${diffs.length === 1 ? "" : "s"}`}
+            </div>
+            {diffs.length > 0 && (
+              <div className="mono" style={{ fontSize: 12, color: "#6B4E00", marginTop: 4 }}>
+                {diffs.map((d) => `Hole ${d.hole}: marker ${d.theirs}, you ${d.mine}`).join(" · ")}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 4 }}>Your own card is a private note on this phone; the marker's card is the one that counts.</div>
+          </div>
+        );
+      })()}
+
+      {publicMode && !reviewing && ownCardStore && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px dashed #B5AF9A", padding: 12, marginTop: 4, marginBottom: 10 }}>
+          <button
+            onClick={() => setShowOwnCard((v) => !v)}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>My own card{ownCard.name ? ` — ${ownCard.name}` : ""} (private, this phone only)</span>
+            <ChevronRight size={15} color="#9B9885" style={{ transform: showOwnCard ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+          </button>
+          {showOwnCard && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+                Keep your own scores here while you mark {player.name || "this"} card. Nothing here is sent anywhere or shown to anyone —
+                it's just so you can check your marker's card against it when it comes to you to sign.
+              </div>
+              <select
+                value={ownCard.name}
+                onChange={(e) => updateOwnCard({ name: e.target.value })}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", marginBottom: 8 }}
+              >
+                <option value="">I am…</option>
+                {[...new Set([ownCard.name, ...groupNames].filter(Boolean))].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              {[OUT, IN].map((holes, hi) => (
+                <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 6 }}>
+                  {holes.map((h) => (
+                    <div key={h} style={{ textAlign: "center" }}>
+                      <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#8A8774" }}>{h}</div>
+                      <input
+                        className="mono scoreInput"
+                        type="number"
+                        inputMode="numeric"
+                        value={ownCard.scores[h - 1]}
+                        onChange={(e) => setOwnScore(h - 1, e.target.value)}
+                        style={{ width: "100%", textAlign: "center", padding: "6px 0", borderRadius: 6, fontSize: 13, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FBFAF6" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {ownCard.scores.some((v) => v !== "") && (
+                <button onClick={() => updateOwnCard({ scores: Array(18).fill("") })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+                  Clear my own card
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {(() => {
         // Card totals — Out / In / Total for gross, net and Stableford
