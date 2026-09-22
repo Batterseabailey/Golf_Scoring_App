@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 58";
+const APP_VERSION = "21 Sep 2026 · build 59";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -381,6 +381,17 @@ function isScoreComplete(p) {
   if (p.scoresComplete === true) return true;
   if (p.scoresComplete === false) return false;
   return Array.isArray(p.scores) && p.scores.some((s) => s !== "" && s != null);
+}
+
+// ---- Attesting a card (players' score entry only) ----
+// When a marker presses COMPLETE on someone else's card from their own
+// phone, the card isn't posted straight away: it's "submitted" and waits
+// for the player to check it and sign, from a DIFFERENT phone (the one
+// that submitted it can't sign it). Only then does scoresComplete go true
+// and the card reach the leaderboard. Admin's own entry screen posts a
+// card directly, as before, and Admin can sign any waiting card.
+function awaitingSignature(p) {
+  return !!(p && p.submitted && p.scoresComplete !== true);
 }
 
 // What the leaderboards are allowed to see of a player: their real card
@@ -2065,7 +2076,7 @@ function AppInner() {
     if (!activeId) return;
     const card = players.find((p) => p.id === activeId);
     if (!card) { setActiveId(null); return; }
-    if (lockHeldByOther(card, deviceId)) {
+    if (!awaitingSignature(card) && lockHeldByOther(card, deviceId)) {
       setEntryNotice(`${card.name}'s card is being entered on another phone — please pick a different one.`);
       setActiveId(null);
     }
@@ -3283,6 +3294,7 @@ function AppInner() {
         active ? (
           <ScoreEntry
             publicMode
+            deviceId={deviceId}
             course={course}
             player={active}
             onBack={closeCard}
@@ -3306,6 +3318,7 @@ function AppInner() {
               await load();
               claimCard(id);
             }}
+            onReview={async (id) => { await load(); setEntryNotice(""); setActiveId(id); }}
             headerColor={headerColor}
             accentColor={accentColor}
           />
@@ -8151,7 +8164,7 @@ function EnterScores({ deviceId, course, ranked, unplaced = [], onSelect, onAdd,
               )}
               {p.thru > 0 && (
                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: isScoreComplete(p) ? "#2F6B3F" : "#B5442E" }}>
-                  {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : "In progress — not on the leaderboard yet"}
+                  {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : awaitingSignature(p) ? "✍ Submitted by a marker — waiting for the player to sign (or press COMPLETE here to post it)" : "In progress — not on the leaderboard yet"}
                 </div>
               )}
             </div>
@@ -8269,7 +8282,9 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, headerColor, accentColor }) {
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor }) {
+  const waiting = ranked.filter((p) => p.name && awaitingSignature(p));
+  const waitingForMe = waiting.filter((p) => p.submittedBy !== deviceId);
   const [search, setSearch] = useState("");
   const cards = [...ranked]
     .filter((p) => p.name)
@@ -8290,6 +8305,12 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           {notice}
         </div>
       )}
+      {waitingForMe.length > 0 && (
+        <div style={{ background: "#EEF3FB", border: `1px solid ${accentColor}`, color: "#1B1B1B", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
+          ✍ {waitingForMe.length === 1 ? "1 card is" : `${waitingForMe.length} cards are`} waiting to be signed: {waitingForMe.map((p) => p.label).join(", ")}.
+          If one of them is yours, tap it, check every hole, and sign it.
+        </div>
+      )}
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -8301,10 +8322,16 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
       )}
       {cards.map((p) => {
         const done = p.thru > 0 && isScoreComplete(p);
-        const busy = !done && lockHeldByOther(p, deviceId);
-        const disabled = done || busy;
+        const waitingSig = !done && awaitingSignature(p);
+        const mine = waitingSig && p.submittedBy === deviceId;
+        const busy = !done && !waitingSig && lockHeldByOther(p, deviceId);
+        const disabled = done || busy || mine;
         const status = done
-          ? "✓ Complete"
+          ? "✓ Complete — signed"
+          : mine
+          ? "✍ Submitted — waiting for the player to sign it on their own phone"
+          : waitingSig
+          ? "✍ Waiting to be signed — tap to check and sign"
           : busy
           ? "● Being entered on another phone"
           : p.thru > 0
@@ -8313,18 +8340,18 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
         return (
           <button
             key={p.id}
-            onClick={() => !disabled && onSelect(p.id)}
+            onClick={() => !disabled && (waitingSig ? onReview(p.id) : onSelect(p.id))}
             disabled={disabled}
             style={{
               width: "100%", display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-              background: disabled ? "#F5F3E9" : "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8,
-              border: `1px solid ${disabled ? "#E4E0D0" : headerColor}`, opacity: disabled ? 0.75 : 1,
+              background: disabled ? "#F5F3E9" : waitingSig ? "#EEF3FB" : "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8,
+              border: `1px solid ${disabled ? "#E4E0D0" : waitingSig ? accentColor : headerColor}`, opacity: disabled ? 0.75 : 1,
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 700, color: disabled ? "#8A8774" : "#1B1B1B" }}>{p.label}</div>
               <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: disabled ? "#8A8774" : headerColor, marginTop: 1 }}>{handicapSummary(p, isFoursomes).text}</div>
-              <div style={{ fontSize: 11.5, fontWeight: 600, marginTop: 2, color: done ? "#2F6B3F" : busy ? "#8A5A00" : p.thru > 0 ? "#B5442E" : accentColor }}>{status}</div>
+              <div style={{ fontSize: 11.5, fontWeight: 600, marginTop: 2, color: done ? "#2F6B3F" : waitingSig ? accentColor : busy ? "#8A5A00" : p.thru > 0 ? "#B5442E" : accentColor }}>{status}</div>
             </div>
             {!disabled && <ChevronRight size={16} color="#9B9885" />}
           </button>
@@ -8368,7 +8395,13 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "" }) {
+  // Review mode: a card a marker has submitted, now being checked and
+  // signed by the player on their own phone. Scores can't be changed here —
+  // either sign it, or send it back to the marker to correct.
+  const reviewing = publicMode && awaitingSignature(player);
+  const submittedHere = reviewing && player.submittedBy === deviceId;
+  const [agreed, setAgreed] = useState(false);
   const { ph, pts, netTotal, relToPar } = totals(course, player, handicapAllowance, isFoursomes);
   const rawA = playingHandicap(course, Number(player.index) || 0, player.tee);
   const allowedA = allowedHandicap(rawA, handicapAllowance) + (Number(player.handicapAdjustment) || 0);
@@ -8435,7 +8468,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   };
 
   const handleChange = (idx, rawVal) => {
-    if (isLocked(idx)) return; // belt and braces — a locked box is read-only anyway
+    if (isLocked(idx) || reviewing) return; // belt and braces — a locked box is read-only anyway
     touchedAt.current[idx] = Date.now();
     lastActivityAt.current = Date.now();
     if (Date.now() <= editUntil) setEditUntil(Date.now() + LOCK_AFTER_MS); // still correcting: keep the card open a little longer
@@ -8477,7 +8510,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               type="number"
               inputMode="numeric"
               value={val}
-              readOnly={isLocked(idx)}
+              readOnly={isLocked(idx) || reviewing}
               onFocus={() => { lastActivityAt.current = Date.now(); }}
               onClick={() => { if (isLocked(idx)) setLockHint(true); }}
               onChange={(e) => handleChange(idx, e.target.value)}
@@ -8683,7 +8716,19 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         )}
       </div>
 
-      {(anyLocked || editing) && (
+      {reviewing && (
+        <div style={{ background: "#EEF3FB", border: `1px solid ${headerColor}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: headerColor }}>
+            {submittedHere ? "Submitted — waiting for the player's signature" : "Check this card, then sign it"}
+          </div>
+          <div style={{ fontSize: 12, color: "#3F3F38", marginTop: 4 }}>
+            {submittedHere
+              ? "The player signs it on their own phone (Enter scores → tap the card). The card can't be signed from the phone that entered it."
+              : "Go through every hole against your paper card. If it's all correct, tick the box and sign; if anything's wrong, send it back and the marker can correct it."}
+          </div>
+        </div>
+      )}
+      {!reviewing && (anyLocked || editing) && (
         <div
           style={{
             display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9,
@@ -8779,7 +8824,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               <div style={{ fontSize: 11.5, color: "#4F6B55", marginTop: 4 }}>Any correction you make above shows on the leaderboard straight away.</div>
               {!publicMode && (
               <button
-                onClick={() => onUpdate({ scoresComplete: false })}
+                onClick={() => onUpdate({ scoresComplete: false, submitted: false, submittedBy: null })}
                 style={{ marginTop: 10, background: "none", border: "none", color: "#B5442E", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}
               >
                 Reopen — take this card off the leaderboard
@@ -8788,10 +8833,41 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             </div>
           );
         }
+        if (reviewing) {
+          if (submittedHere) return null;
+          return (
+            <div style={{ marginTop: 14, background: "#FFFFFF", border: `1px solid ${headerColor}`, borderRadius: 10, padding: 14 }}>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+                <input type="checkbox" checked={agreed} onChange={() => setAgreed((v) => !v)} style={{ width: 20, height: 20, marginTop: 1, flexShrink: 0 }} />
+                <span>I have checked this card hole by hole and it is correct.</span>
+              </label>
+              <button
+                onClick={() => { onUpdate({ scoresComplete: true, signedBy: deviceId, signedAt: Date.now() }); onBack(); }}
+                disabled={!agreed}
+                style={{
+                  width: "100%", marginTop: 12, padding: "15px 0", borderRadius: 10, border: "none",
+                  background: agreed ? headerColor : "#D8D4C0", color: "#FFFFFF", fontWeight: 800, fontSize: 16, letterSpacing: "0.08em",
+                }}
+              >
+                SIGN CARD
+              </button>
+              <button
+                onClick={() => { onUpdate({ submitted: false, submittedBy: null, submittedAt: null, scoresComplete: false }); onBack(); }}
+                style={{ width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 8, border: "1px solid #B5442E", background: "transparent", color: "#B5442E", fontWeight: 600, fontSize: 13 }}
+              >
+                Something's wrong — send it back to be corrected
+              </button>
+            </div>
+          );
+        }
         return (
           <div style={{ marginTop: 14 }}>
             <button
-              onClick={() => { onUpdate({ scoresComplete: true }); onBack(); }}
+              onClick={() => {
+                if (publicMode) onUpdate({ submitted: true, submittedBy: deviceId, submittedAt: Date.now(), scoresComplete: false });
+                else onUpdate({ scoresComplete: true });
+                onBack();
+              }}
               disabled={entered === 0}
               style={{
                 width: "100%", padding: "15px 0", borderRadius: 10, border: "none",
@@ -8803,9 +8879,11 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             </button>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", textAlign: "center", marginTop: 6 }}>
               {entered === 0
-                ? "Enter the scores, then press COMPLETE to post them to the leaderboard."
+                ? `Enter the scores, then press COMPLETE${publicMode ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
                 : entered < 18
-                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE (an unfinished card will show as NR).`
+                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until ${publicMode ? "it's completed and signed" : "you press COMPLETE"} (an unfinished card will show as NR).`
+                : publicMode
+                ? "All 18 holes entered. Press COMPLETE, then the player checks and signs it on their own phone before it goes on the leaderboard."
                 : "All 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE."}
             </div>
           </div>
