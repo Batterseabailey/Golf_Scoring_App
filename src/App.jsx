@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 70";
+const APP_VERSION = "21 Sep 2026 · build 72";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8479,7 +8479,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     return next;
   });
   // The private card behaves like the real one: a box moves on to the
-  // next hole by itself, and locks 5 seconds after it was last typed.
+  // next hole by itself, and locks 3 seconds after it was last typed.
   const ownRefs = useRef({});
   const ownTimers = useRef({});
   const ownTouchedAt = useRef({});
@@ -8488,23 +8488,78 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     const v = ownCard.scores[idx];
     if (v === "" || v == null) return false;
     const now = Date.now();
-    return now > ownEditUntil && now - (ownTouchedAt.current[idx] || 0) > 5000;
+    return now > ownEditUntil && now - (ownTouchedAt.current[idx] || 0) > 3000;
   };
   const ownFocusNext = (idx) => {
     const next = ownRefs.current[idx + 1];
     if (next && !ownLocked(idx + 1)) { next.focus(); next.select?.(); }
+  };
+  const [ownPadHole, setOwnPadHole] = useState(null);
+  const [ownTypingHole, setOwnTypingHole] = useState(null);
+  const ownNextOpen = (idx) => { for (let i = idx + 1; i < 18; i++) if (!ownLocked(i)) return i; return null; };
+  const ownTap = (idx) => {
+    if (ownLocked(idx)) return;
+    setOwnTypingHole(null);
+    setOwnPadHole(ownPadHole === idx ? null : idx);
+  };
+  const ownChoose = (idx, v) => {
+    if (ownLocked(idx)) return;
+    const clean = Math.max(0, Math.round(Number(v)));
+    ownTouchedAt.current[idx] = Date.now();
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 3000);
+    updateOwnCard({ scores: ownCard.scores.map((s0, i) => (i === idx ? clean : s0)) });
+    setOwnPadHole(ownNextOpen(idx));
+  };
+  const ownPad = (idx) => {
+    const par = Number(course.holes[idx].par) || 4;
+    const val = ownCard.scores[idx];
+    const vals = [];
+    for (let v = Math.max(1, par - 2); v <= par + 4; v++) vals.push(v);
+    const btn = (label, v, muted) => (
+      <button
+        key={label}
+        onClick={() => ownChoose(idx, v)}
+        style={{
+          flex: 1, minWidth: 0, padding: "11px 0", borderRadius: 9, fontSize: 17, fontWeight: 800,
+          border: `2px solid ${v === par ? headerColor : muted ? "#D8D4C0" : "#B5AF9A"}`,
+          background: String(val) === String(v) && val !== "" ? headerColor : v === par ? `${headerColor}14` : "#FFFFFF",
+          color: String(val) === String(v) && val !== "" ? "#FFFFFF" : muted ? "#8A8774" : "#1B1B1B",
+        }}
+      >
+        {label}
+      </button>
+    );
+    return (
+      <div style={{ gridColumn: "1 / -1", background: "#FFFFFF", border: `1px solid ${headerColor}`, borderRadius: 10, padding: "8px 8px 6px", marginTop: 2 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: headerColor }}>My hole {idx + 1} · Par {par}{ownShots(idx) > 0 ? ` · ${ownShots(idx)} shot${ownShots(idx) > 1 ? "s" : ""}` : ""}</span>
+          <button onClick={() => setOwnPadHole(null)} style={{ background: "none", border: "none", color: "#8A8774", fontSize: 12, padding: 0 }}>Close</button>
+        </div>
+        <div style={{ display: "flex", gap: 5 }}>{vals.map((v) => btn(String(v), v, false))}</div>
+        <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
+          {btn("0 · picked up", 0, true)}
+          <button
+            onClick={() => { setOwnTypingHole(idx); setOwnPadHole(null); setTimeout(() => { const el = ownRefs.current[idx]; if (el) { el.focus(); el.select?.(); } }, 0); }}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 9, fontSize: 12.5, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F" }}
+          >
+            Keyboard (other score)
+          </button>
+        </div>
+      </div>
+    );
   };
   const setOwnScore = (idx, raw) => {
     if (ownLocked(idx)) return;
     const num = Number(raw);
     const clean = raw === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
     ownTouchedAt.current[idx] = Date.now();
-    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 5000);
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 3000);
     updateOwnCard({ scores: ownCard.scores.map((v, i) => (i === idx ? clean : v)) });
     if (ownTimers.current[idx]) clearTimeout(ownTimers.current[idx]);
     if (raw === "") return;
-    if (!(raw.length === 1 && Number(raw) === 1)) { ownFocusNext(idx); return; }
-    ownTimers.current[idx] = setTimeout(() => ownFocusNext(idx), 700);
+    const moveOn = () => { setOwnTypingHole(null); const el = ownRefs.current[idx]; if (el) el.blur(); setOwnPadHole(ownNextOpen(idx)); };
+    if (!(raw.length === 1 && Number(raw) === 1)) { moveOn(); return; }
+    ownTimers.current[idx] = setTimeout(moveOn, 700);
   };
   // The marker's own playing handicap for the day, so their private card
   // can show where THEY get a shot — from their own name, or a pair "A & B".
@@ -8550,14 +8605,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const [typingHole, setTypingHole] = useState(null);  // hole index using the keyboard instead
 
   // ---- Pocket-proofing ----
-  // A hole's score locks 5 seconds after it was last typed, and any hole
+  // A hole's score locks 3 seconds after it was last typed, and any hole
   // that already has a score when the card is opened starts locked. A
   // locked hole can't be changed by a stray touch (a phone dropped in a
   // pocket mid-round); tapping "Edit scores" makes every scored hole live
-  // again, and they re-lock 5 seconds after the last change. Empty holes
+  // again, and they re-lock 3 seconds after the last change. Empty holes
   // are always live, so the next hole can simply be typed in. After 10
   // quiet seconds (5) the keyboard is also put away, so nothing is left armed.
-  const LOCK_AFTER_MS = 5000;
+  const LOCK_AFTER_MS = 3000;
   const touchedAt = useRef({});           // hole index -> when it was last typed
   const lastActivityAt = useRef(Date.now());
   const [editUntil, setEditUntil] = useState(0);
@@ -8964,7 +9019,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <Lock size={15} color={editing ? "#8A5A00" : "#8A8774"} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, fontSize: 11.5, color: editing ? "#6B4E00" : "#6B6B5F", fontWeight: lockHint ? 700 : 400 }}>
             {editing
-              ? "Editing — scored holes are live. They lock again 5 seconds after your last change."
+              ? "Editing — scored holes are live. They lock again 3 seconds after your last change."
               : lockHint
               ? "That hole is locked. Tap Edit scores to change it."
               : "Entered scores are locked so they can't be changed by accident."}
@@ -9044,14 +9099,18 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                         ref={(el) => (ownRefs.current[h - 1] = el)}
                         className="mono scoreInput"
                         type="number"
-                        inputMode="numeric"
+                        inputMode={ownTypingHole === h - 1 ? "numeric" : "none"}
                         value={ownCard.scores[h - 1]}
-                        readOnly={ownLocked(h - 1)}
+                        readOnly={ownLocked(h - 1) || ownTypingHole !== h - 1}
+                        onClick={() => ownTap(h - 1)}
+                        onBlur={() => { if (ownTypingHole === h - 1) setOwnTypingHole(null); }}
                         onChange={(e) => setOwnScore(h - 1, e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); ownFocusNext(h - 1); } }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setOwnTypingHole(null); e.target.blur(); setOwnPadHole(ownNextOpen(h - 1)); } }}
                         style={{
-                          width: "100%", textAlign: "center", padding: "10px 0", borderRadius: 8, fontSize: 17, fontWeight: 800,
-                          border: ownShots(h - 1) > 0 && !ownLocked(h - 1)
+                          width: "100%", textAlign: "center", padding: "10px 0", borderRadius: 8, fontSize: 17, fontWeight: 800, caretColor: ownTypingHole === h - 1 ? "auto" : "transparent",
+                          border: ownPadHole === h - 1
+                            ? `3px solid ${headerColor}`
+                            : ownShots(h - 1) > 0 && !ownLocked(h - 1)
                             ? `${ownCard.scores[h - 1] !== "" ? 2 : 1.5}px solid #C00000`
                             : ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
                           background: ownLocked(h - 1) ? `${headerColor}22` : ownShots(h - 1) > 0 ? "#FFF3F3" : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
@@ -9059,12 +9118,13 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                       />
                     </div>
                   ))}
+                  {ownPadHole !== null && holes.includes(ownPadHole + 1) && ownPad(ownPadHole)}
                 </div>
               ))}
               {ownCard.scores.some((v) => v !== "") && (
                 <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
                   <button
-                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 5000); if (editing) ownTouchedAt.current = {}; }}
+                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 3000); if (editing) ownTouchedAt.current = {}; }}
                     style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
                   >
                     {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
