@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 69";
+const APP_VERSION = "21 Sep 2026 · build 70";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2239,8 +2239,12 @@ function AppInner() {
     }
     setEntryNotice("");
     const now = Date.now();
+    // A leftover "submitted" flag on a card that has since been cleared
+    // (a test that was wiped, say) would spring back to life with the
+    // first new score. Opening an empty card for entry starts it afresh.
+    const stale = !!card.submitted && !awaitingSignature(card);
     updateRound((prevRound) => ({
-      players: prevRound.players.map((p) => (p.id === id ? { ...p, entryLock: { by: deviceId, claimedAt: now, at: now } } : p)),
+      players: prevRound.players.map((p) => (p.id === id ? { ...p, entryLock: { by: deviceId, claimedAt: now, at: now }, ...(stale ? { submitted: false, submittedBy: null, submittedAt: null } : {}) } : p)),
     }), { immediate: true });
     setActiveId(id);
   };
@@ -2344,6 +2348,9 @@ function AppInner() {
               // leaderboard until COMPLETE is pressed); a card that already
               // had scores from before this feature stays visible.
               scoresComplete: p.scoresComplete === undefined ? isScoreComplete(p) : p.scoresComplete,
+              // typing a score means the card is being entered, not signed —
+              // so it can't also be "submitted and waiting"
+              ...(p.submitted && p.scoresComplete !== true ? { submitted: false, submittedBy: null, submittedAt: null } : {}),
             }
           : p
       ),
