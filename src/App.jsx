@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 62";
+const APP_VERSION = "21 Sep 2026 · build 63";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -391,7 +391,8 @@ function isScoreComplete(p) {
 // and the card reach the leaderboard. Admin's own entry screen posts a
 // card directly, as before, and Admin can sign any waiting card.
 function awaitingSignature(p) {
-  return !!(p && p.submitted && p.scoresComplete !== true);
+  if (!p || !p.submitted || p.scoresComplete === true) return false;
+  return Array.isArray(p.scores) && p.scores.some((v) => v !== "" && v != null);
 }
 
 // ---- A player's own private card ----
@@ -9022,7 +9023,10 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             </button>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", textAlign: "center", marginTop: 6 }}>
               {!publicMode && awaitingSignature(player)
-                ? "This card was entered by a marker on their phone and is waiting for the player to sign it. If you've seen the signed paper card, approve it here and it goes on the leaderboard."
+                ? <>This card was entered by a marker on their phone and is waiting for the player to sign it. If you've seen the signed paper card, approve it here and it goes on the leaderboard.{" "}
+                    <button onClick={() => onUpdate({ submitted: false, submittedBy: null, submittedAt: null, scoresComplete: false })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}>
+                      Or cancel the submission
+                    </button> — the scores stay, the card just goes back to "in progress".</>
                 : entered === 0
                 ? `Enter the scores, then press COMPLETE${publicMode && requireSignature ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
                 : entered < 18
@@ -9049,7 +9053,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 <button
                   onClick={() => {
                     Object.values(timers.current).forEach(clearTimeout);
-                    onUpdate({ scores: Array(18).fill(""), scoresComplete: false });
+                    onUpdate({ scores: Array(18).fill(""), scoresComplete: false, submitted: false, submittedBy: null, submittedAt: null });
                     setConfirmClearScores(false);
                     const first = inputRefs.current[0];
                     if (first) first.focus();
