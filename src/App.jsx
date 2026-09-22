@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 63";
+const APP_VERSION = "21 Sep 2026 · build 64";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1631,6 +1631,8 @@ function AppInner() {
   const pollRef = useRef(null);
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
+  const activeIdRef = useRef(null);
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
   const load = useCallback(async () => {
     const code = eventCodeRef.current;
@@ -1638,6 +1640,7 @@ function AppInner() {
     // True when it's unsafe to replace what's on screen with a server copy.
     const busy = () =>
       modeRef.current === "scorer" ||
+      (modeRef.current === "entry" && !!activeIdRef.current) || // a card is open on this phone
       dirtyRef.current ||
       pumpingRef.current ||
       Date.now() - lastLocalSaveAtRef.current < 4000 ||
@@ -8509,11 +8512,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   useEffect(() => {
     // Re-check once a second so locks appear on time, and drop the
     // keyboard once everything has gone quiet.
-    const t = setInterval(() => {
-      setTick((n) => n + 1);
-      const el = document.activeElement;
-      if (el && el.classList && el.classList.contains("scoreInput") && Date.now() - lastActivityAt.current > LOCK_AFTER_MS) el.blur();
-    }, 1000);
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
   useEffect(() => {
@@ -8799,10 +8798,11 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </div>
         </div>
       )}
-      {!reviewing && (anyLocked || editing) && (
+      {!reviewing && (
         <div
           style={{
-            display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9,
+            display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9, minHeight: 36,
+            visibility: anyLocked || editing ? "visible" : "hidden",
             background: editing ? "#FFF6E0" : "#FFFFFF", border: `1px solid ${editing ? "#D9A400" : "#E4E0D0"}`,
           }}
         >
