@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 53";
+const APP_VERSION = "21 Sep 2026 · build 54";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8362,14 +8362,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const [confirmClearScores, setConfirmClearScores] = useState(false);
 
   // ---- Pocket-proofing ----
-  // A hole's score locks 10 seconds after it was last typed, and any hole
+  // A hole's score locks 5 seconds after it was last typed, and any hole
   // that already has a score when the card is opened starts locked. A
   // locked hole can't be changed by a stray touch (a phone dropped in a
   // pocket mid-round); tapping "Edit scores" makes every scored hole live
-  // again, and they re-lock 10 seconds after the last change. Empty holes
+  // again, and they re-lock 5 seconds after the last change. Empty holes
   // are always live, so the next hole can simply be typed in. After 10
-  // quiet seconds the keyboard is also put away, so nothing is left armed.
-  const LOCK_AFTER_MS = 10000;
+  // quiet seconds (5) the keyboard is also put away, so nothing is left armed.
+  const LOCK_AFTER_MS = 5000;
   const touchedAt = useRef({});           // hole index -> when it was last typed
   const lastActivityAt = useRef(Date.now());
   const [editUntil, setEditUntil] = useState(0);
@@ -8663,7 +8663,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <Lock size={15} color={editing ? "#8A5A00" : "#8A8774"} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, fontSize: 11.5, color: editing ? "#6B4E00" : "#6B6B5F", fontWeight: lockHint ? 700 : 400 }}>
             {editing
-              ? "Editing — scored holes are live. They lock again 10 seconds after your last change."
+              ? "Editing — scored holes are live. They lock again 5 seconds after your last change."
               : lockHint
               ? "That hole is locked. Tap Edit scores to change it."
               : "Entered scores are locked so they can't be changed by accident."}
