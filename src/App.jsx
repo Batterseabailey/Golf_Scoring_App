@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 68";
+const APP_VERSION = "21 Sep 2026 · build 69";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8533,6 +8533,15 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const timers = useRef({});
   const [confirmClearScores, setConfirmClearScores] = useState(false);
 
+  // ---- Score pad ----
+  // Tapping a hole opens a row of big buttons beneath it — the scores
+  // around par for that hole, plus 0 for a picked-up hole — instead of the
+  // phone's keyboard. Tap one and the pad moves on to the next hole by
+  // itself. "Keyboard" on the pad switches to typing for that hole (for a
+  // score off the end of the pad).
+  const [padHole, setPadHole] = useState(null);        // hole index the pad is open for
+  const [typingHole, setTypingHole] = useState(null);  // hole index using the keyboard instead
+
   // ---- Pocket-proofing ----
   // A hole's score locks 5 seconds after it was last typed, and any hole
   // that already has a score when the card is opened starts locked. A
@@ -8584,6 +8593,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     }
   };
 
+  const handleChangeNoFocus = (idx, rawVal) => {
+    if (isLocked(idx) || reviewing) return;
+    touchedAt.current[idx] = Date.now();
+    lastActivityAt.current = Date.now();
+    if (Date.now() <= editUntil) setEditUntil(Date.now() + LOCK_AFTER_MS);
+    onScore(idx, rawVal);
+  };
+
   const handleChange = (idx, rawVal) => {
     if (isLocked(idx) || reviewing) return; // belt and braces — a locked box is read-only anyway
     touchedAt.current[idx] = Date.now();
@@ -8598,20 +8615,88 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     // in the same keystroke; only a leading "1" (which might become 10 or
     // more) waits, and then Enter/Return or a tap moves on.
     const isAmbiguousOne = rawVal.length === 1 && Number(rawVal) === 1;
-    if (!isAmbiguousOne) { focusNext(idx); return; }
-    timers.current[idx] = setTimeout(() => focusNext(idx), 700);
+    const moveOn = () => { setTypingHole(null); const el = inputRefs.current[idx]; if (el) el.blur(); setPadHole(nextOpenHole(idx)); };
+    if (!isAmbiguousOne) { moveOn(); return; }
+    timers.current[idx] = setTimeout(moveOn, 700);
   };
 
   const handleKeyDown = (idx, e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       if (timers.current[idx]) clearTimeout(timers.current[idx]);
-      focusNext(idx);
+      setTypingHole(null);
+      e.target.blur();
+      setPadHole(nextOpenHole(idx));
     }
   };
 
-  const nine = (holes) => (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 10 }}>
+  const padValuesFor = (idx) => {
+    const par = Number(course.holes[idx].par) || 4;
+    const vals = [];
+    for (let v = Math.max(1, par - 2); v <= par + 4; v++) vals.push(v);
+    return vals;
+  };
+  const nextOpenHole = (idx) => {
+    for (let i = idx + 1; i < 18; i++) if (!isLocked(i)) return i;
+    return null;
+  };
+  const chooseFromPad = (idx, v) => {
+    if (isLocked(idx)) return;
+    handleChangeNoFocus(idx, String(v));
+    setPadHole(nextOpenHole(idx));
+  };
+  const tapHole = (idx) => {
+    if (reviewing) return;
+    if (isLocked(idx)) { setLockHint(true); return; }
+    lastActivityAt.current = Date.now();
+    setTypingHole(null);
+    setPadHole(padHole === idx ? null : idx);
+  };
+
+  const scorePad = (idx) => {
+    const par = Number(course.holes[idx].par) || 4;
+    const val = Array.isArray(player.scores) ? player.scores[idx] : "";
+    const btn = (label, v, opts = {}) => (
+      <button
+        key={label}
+        onClick={() => chooseFromPad(idx, v)}
+        style={{
+          flex: 1, minWidth: 0, padding: "13px 0", borderRadius: 9, fontSize: 18, fontWeight: 800,
+          border: `2px solid ${v === par ? headerColor : opts.muted ? "#D8D4C0" : "#B5AF9A"}`,
+          background: String(val) === String(v) && val !== "" ? headerColor : v === par ? `${headerColor}14` : "#FFFFFF",
+          color: String(val) === String(v) && val !== "" ? "#FFFFFF" : opts.muted ? "#8A8774" : "#1B1B1B",
+        }}
+      >
+        {label}
+      </button>
+    );
+    return (
+      <div style={{ gridColumn: "1 / -1", background: "#FFFFFF", border: `1px solid ${headerColor}`, borderRadius: 10, padding: "8px 8px 6px", marginTop: 2 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: headerColor }}>
+            Hole {idx + 1} · Par {par}{strokesOnHole(course, ph, idx) > 0 ? ` · ${strokesOnHole(course, ph, idx)} shot${strokesOnHole(course, ph, idx) > 1 ? "s" : ""}` : ""}
+          </span>
+          <button onClick={() => setPadHole(null)} style={{ background: "none", border: "none", color: "#8A8774", fontSize: 12, padding: 0 }}>Close</button>
+        </div>
+        <div style={{ display: "flex", gap: 5 }}>
+          {padValuesFor(idx).map((v) => btn(String(v), v))}
+        </div>
+        <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
+          {btn("0 · picked up", 0, { muted: true })}
+          <button
+            onClick={() => { setTypingHole(idx); setPadHole(null); setTimeout(() => { const el = inputRefs.current[idx]; if (el) { el.focus(); el.select?.(); } }, 0); }}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 9, fontSize: 12.5, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F" }}
+          >
+            Keyboard (other score)
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Three rows of six — bigger boxes than nine across on a phone.
+  const six = (holes) => (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 10 }}>
       {holes.map((h) => {
         const idx = h - 1;
         const val = Array.isArray(player.scores) ? player.scores[idx] : "";
@@ -8620,41 +8705,47 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         // Shot holes are marked the way they are on a card: a red * above
         // the box for one shot, ** for two, and a red ring round the box.
         const shots = strokesOnHole(course, ph, idx);
+        const typing = typingHole === idx;
+        const open = padHole === idx;
         return (
           <div key={h} style={{ textAlign: "center" }}>
-            <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
-              {h}{shots > 0 && <span style={{ color: "#C00000", fontSize: 14, marginLeft: 1 }}>{"*".repeat(shots)}</span>}
+            <div className="mono" style={{ fontSize: 14, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
+              {h}{shots > 0 && <span style={{ color: "#C00000", fontSize: 15, marginLeft: 1 }}>{"*".repeat(shots)}</span>}
             </div>
-            <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[idx].par}</div>
+            <div className="mono" style={{ fontSize: 11, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[idx].par}</div>
             <input
               ref={(el) => (inputRefs.current[idx] = el)}
               className="mono scoreInput"
               type="number"
-              inputMode="numeric"
+              inputMode={typing ? "numeric" : "none"}
               value={val}
-              readOnly={isLocked(idx) || reviewing}
+              readOnly={isLocked(idx) || reviewing || !typing}
               onFocus={() => { lastActivityAt.current = Date.now(); }}
-              onClick={() => { if (isLocked(idx)) setLockHint(true); }}
+              onClick={() => tapHole(idx)}
               onChange={(e) => handleChange(idx, e.target.value)}
               onKeyDown={(e) => handleKeyDown(idx, e)}
+              onBlur={() => { if (typing) setTypingHole(null); }}
               style={{
-                width: "100%", textAlign: "center", padding: "6px 0", marginTop: 2,
-                borderRadius: 6, fontSize: 14, fontWeight: 700,
+                width: "100%", textAlign: "center", padding: "12px 0", marginTop: 3,
+                borderRadius: 8, fontSize: 20, fontWeight: 800, caretColor: typing ? "auto" : "transparent",
                 // locked: solid tint, no outline. live with a score: white with a strong outline.
-                // shot hole: red ring (thicker once a live score is in it).
-                border: shots > 0 && !isLocked(idx)
+                // shot hole: red ring (thicker once a live score is in it). open: accent ring.
+                border: open
+                  ? `3px solid ${headerColor}`
+                  : shots > 0 && !isLocked(idx)
                   ? `${val !== "" ? 2 : 1.5}px solid #C00000`
                   : val !== "" && !isLocked(idx) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
                 background: isLocked(idx) ? `${headerColor}22` : shots > 0 ? "#FFF3F3" : "#FFF",
                 color: isLocked(idx) ? headerColor : "#1B1B1B",
               }}
             />
-            <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: headerColor, marginTop: 2, minHeight: 14 }}>
+            <div className="mono" style={{ fontSize: 11, fontWeight: 700, color: headerColor, marginTop: 2, minHeight: 14 }}>
               {isPickedUp(val) ? "NR" : isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (p !== null ? `${p}pt` : "")}
             </div>
           </div>
         );
       })}
+      {padHole !== null && holes.includes(padHole + 1) && !reviewing && scorePad(padHole)}
     </div>
   );
 
@@ -8850,11 +8941,16 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </div>
         </div>
       )}
-      {!reviewing && (
+      {!reviewing && padHole === null && typingHole === null && (
+        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>Tap a hole to enter its score.</div>
+      )}
+      {six([1, 2, 3, 4, 5, 6])}
+      {six([7, 8, 9, 10, 11, 12])}
+      {six([13, 14, 15, 16, 17, 18])}
+      {!reviewing && (anyLocked || editing) && (
         <div
           style={{
-            display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9, minHeight: 36,
-            visibility: anyLocked || editing ? "visible" : "hidden",
+            display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9,
             background: editing ? "#FFF6E0" : "#FFFFFF", border: `1px solid ${editing ? "#D9A400" : "#E4E0D0"}`,
           }}
         >
@@ -8877,10 +8973,6 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </button>
         </div>
       )}
-      <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Out</div>
-      {nine(OUT)}
-      <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>In</div>
-      {nine(IN)}
 
       {reviewing && ownMatchesThisCard && (() => {
         const diffs = [];
@@ -8933,8 +9025,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                   {ownPh === null ? "No handicap found for that name — shot holes can't be marked." : `Playing ${ownPh} — shots on the holes marked *`}
                 </div>
               )}
-              {[OUT, IN].map((holes, hi) => (
-                <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 6 }}>
+              {[[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12], [13, 14, 15, 16, 17, 18]].map((holes, hi) => (
+                <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 6 }}>
                   {holes.map((h) => (
                     <div key={h} style={{ textAlign: "center" }}>
                       <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
@@ -8951,7 +9043,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                         onChange={(e) => setOwnScore(h - 1, e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); ownFocusNext(h - 1); } }}
                         style={{
-                          width: "100%", textAlign: "center", padding: "6px 0", borderRadius: 6, fontSize: 13, fontWeight: 700,
+                          width: "100%", textAlign: "center", padding: "10px 0", borderRadius: 8, fontSize: 17, fontWeight: 800,
                           border: ownShots(h - 1) > 0 && !ownLocked(h - 1)
                             ? `${ownCard.scores[h - 1] !== "" ? 2 : 1.5}px solid #C00000`
                             : ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
