@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 55";
+const APP_VERSION = "21 Sep 2026 · build 56";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -3956,12 +3956,15 @@ const resultsStyles = (headerColor) => ({
   frame: { background: "#FBFBFB", border: `1px solid ${headerColor}`, padding: "16px 14px 14px", fontFamily: RESULTS_FONT },
   table: { width: "100%", borderCollapse: "collapse", fontFamily: RESULTS_FONT },
   headRow: { background: headerColor },
-  th: { textAlign: "left", padding: "11px 10px", fontSize: 14, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none" },
-  thRight: { textAlign: "right", padding: "11px 10px", fontSize: 14, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none" },
+  // The name column takes whatever width is left (and wraps if it has to);
+  // the position and score columns hug their contents, so on a phone the
+  // scores sit close in beside the names instead of pushing off the edge.
+  th: { textAlign: "left", padding: "11px 8px", fontSize: 14, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none" },
+  thRight: { textAlign: "right", padding: "11px 6px", fontSize: 13.5, fontWeight: 400, color: "#FFFFFF", whiteSpace: "nowrap", userSelect: "none", width: "1%" },
   row: (i) => ({ borderBottom: "1px solid #DDDDDD", background: i % 2 === 0 ? "#F7F7F7" : "#FBFBFB" }),
-  pos: { padding: "12px 10px", fontSize: 15, color: "#2B2B2B", whiteSpace: "nowrap", width: 48 },
-  name: { padding: "12px 10px", fontSize: 15.5, color: headerColor, whiteSpace: "nowrap" },
-  num: { padding: "12px 10px", fontSize: 15.5, color: headerColor, textAlign: "right", whiteSpace: "nowrap" },
+  pos: { padding: "12px 4px 12px 8px", fontSize: 14.5, color: "#2B2B2B", whiteSpace: "nowrap", width: "1%" },
+  name: { padding: "12px 6px", fontSize: 15, color: headerColor, lineHeight: 1.25 },
+  num: { padding: "12px 6px", fontSize: 15, color: headerColor, textAlign: "right", whiteSpace: "nowrap", width: "1%" },
 });
 
 // A single day's own leaderboard — as opposed to OverallBoard's running
