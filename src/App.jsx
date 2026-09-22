@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 67";
+const APP_VERSION = "21 Sep 2026 · build 68";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -3325,6 +3325,7 @@ function AppInner() {
             requireSignature={activeRound.requireSignature !== false}
             deviceId={deviceId}
             ownCardStore={{ code: eventCode, roundId: activeRoundId }}
+            rosterPlayers={players}
             groupNames={(() => {
               // Who else is in this tee time, for the "I am…" picker on the
               // private card. Singles: the other players. Foursomes: the
@@ -8461,7 +8462,7 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [] }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [] }) {
   // The marker's own private card (see readOwnCard) — only in players' mode.
   const [ownCard, setOwnCard] = useState(() => (ownCardStore ? readOwnCard(ownCardStore.code, ownCardStore.roundId) : { name: "", scores: Array(18).fill("") }));
   const [showOwnCard, setShowOwnCard] = useState(() => !!(ownCardStore && readOwnCard(ownCardStore.code, ownCardStore.roundId).scores.some((v) => v !== "")));
@@ -8498,6 +8499,16 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (!(raw.length === 1 && Number(raw) === 1)) { ownFocusNext(idx); return; }
     ownTimers.current[idx] = setTimeout(() => ownFocusNext(idx), 700);
   };
+  // The marker's own playing handicap for the day, so their private card
+  // can show where THEY get a shot — from their own name, or a pair "A & B".
+  const ownPh = (() => {
+    if (!ownCard.name) return null;
+    const parts = ownCard.name.split(" & ").map((n) => n.trim()).filter(Boolean);
+    if (parts.length === 2) return pairPH(course, rosterPlayers, handicapAllowance, parts[0], parts[1]);
+    const me = findIndividualByName(rosterPlayers, ownCard.name);
+    return me && me.index !== "" && me.index != null ? individualPH(course, me, handicapAllowance) : null;
+  })();
+  const ownShots = (idx) => (ownPh === null ? 0 : strokesOnHole(course, ownPh, idx));
   // When reviewing a card that's mine, compare it with my private notes.
   const ownMatchesThisCard = !!(ownCardStore && ownCard.name && (() => {
     const own = normalizeName(ownCard.name);
@@ -8917,11 +8928,19 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 <option value="">I am…</option>
                 {[...new Set([ownCard.name, ...groupNames].filter(Boolean))].map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
+              {ownCard.name && (
+                <div className="mono" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+                  {ownPh === null ? "No handicap found for that name — shot holes can't be marked." : `Playing ${ownPh} — shots on the holes marked *`}
+                </div>
+              )}
               {[OUT, IN].map((holes, hi) => (
                 <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 4, marginBottom: 6 }}>
                   {holes.map((h) => (
                     <div key={h} style={{ textAlign: "center" }}>
-                      <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#8A8774" }}>{h}</div>
+                      <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
+                        {h}{ownShots(h - 1) > 0 && <span style={{ color: "#C00000", fontSize: 12, marginLeft: 1 }}>{"*".repeat(ownShots(h - 1))}</span>}
+                      </div>
+                      <div className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[h - 1].par}</div>
                       <input
                         ref={(el) => (ownRefs.current[h - 1] = el)}
                         className="mono scoreInput"
@@ -8933,8 +8952,10 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); ownFocusNext(h - 1); } }}
                         style={{
                           width: "100%", textAlign: "center", padding: "6px 0", borderRadius: 6, fontSize: 13, fontWeight: 700,
-                          border: ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
-                          background: ownLocked(h - 1) ? `${headerColor}22` : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
+                          border: ownShots(h - 1) > 0 && !ownLocked(h - 1)
+                            ? `${ownCard.scores[h - 1] !== "" ? 2 : 1.5}px solid #C00000`
+                            : ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
+                          background: ownLocked(h - 1) ? `${headerColor}22` : ownShots(h - 1) > 0 ? "#FFF3F3" : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
                         }}
                       />
                     </div>
