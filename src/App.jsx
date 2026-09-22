@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 64";
+const APP_VERSION = "21 Sep 2026 · build 67";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -3326,8 +3326,15 @@ function AppInner() {
             deviceId={deviceId}
             ownCardStore={{ code: eventCode, roundId: activeRoundId }}
             groupNames={(() => {
+              // Who else is in this tee time, for the "I am…" picker on the
+              // private card. Singles: the other players. Foursomes: the
+              // other PAIR, as one entry ("A & B"), since a pair keeps one card.
               const target = normalizeName(active.name);
               const entry = draw.find((e) => (e.players || []).some((n) => normalizeName(n) === target));
+              if (isFoursomes) {
+                const pairs = entry ? foursomesPairs(entry.players || []) : players.map((p) => [p.name, p.partnerName].filter(Boolean));
+                return pairs.filter((pr) => !pr.some((n) => normalizeName(n) === target)).map((pr) => pr.join(" & ")).filter(Boolean);
+              }
               const names = entry ? entry.players.filter((n) => normalizeName(n) !== target) : [];
               return names.length > 0 ? names : players.map((p) => p.name).filter((n) => n && normalizeName(n) !== target);
             })()}
@@ -8463,13 +8470,42 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (ownCardStore) writeOwnCard(ownCardStore.code, ownCardStore.roundId, next);
     return next;
   });
+  // The private card behaves like the real one: a box moves on to the
+  // next hole by itself, and locks 5 seconds after it was last typed.
+  const ownRefs = useRef({});
+  const ownTimers = useRef({});
+  const ownTouchedAt = useRef({});
+  const [ownEditUntil, setOwnEditUntil] = useState(0);
+  const ownLocked = (idx) => {
+    const v = ownCard.scores[idx];
+    if (v === "" || v == null) return false;
+    const now = Date.now();
+    return now > ownEditUntil && now - (ownTouchedAt.current[idx] || 0) > 5000;
+  };
+  const ownFocusNext = (idx) => {
+    const next = ownRefs.current[idx + 1];
+    if (next && !ownLocked(idx + 1)) { next.focus(); next.select?.(); }
+  };
   const setOwnScore = (idx, raw) => {
+    if (ownLocked(idx)) return;
     const num = Number(raw);
     const clean = raw === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
+    ownTouchedAt.current[idx] = Date.now();
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 5000);
     updateOwnCard({ scores: ownCard.scores.map((v, i) => (i === idx ? clean : v)) });
+    if (ownTimers.current[idx]) clearTimeout(ownTimers.current[idx]);
+    if (raw === "") return;
+    if (!(raw.length === 1 && Number(raw) === 1)) { ownFocusNext(idx); return; }
+    ownTimers.current[idx] = setTimeout(() => ownFocusNext(idx), 700);
   };
   // When reviewing a card that's mine, compare it with my private notes.
-  const ownMatchesThisCard = !!(ownCardStore && ownCard.name && normalizeName(ownCard.name) === normalizeName(player.name));
+  const ownMatchesThisCard = !!(ownCardStore && ownCard.name && (() => {
+    const own = normalizeName(ownCard.name);
+    if (own === normalizeName(player.name)) return true;
+    if (!player.partnerName) return false;
+    // a Foursomes pair's card, kept under "A & B" (or either partner's own name)
+    return own === normalizeName(player.partnerName) || own === normalizeName(`${player.name} & ${player.partnerName}`) || own === normalizeName(`${player.partnerName} & ${player.name}`);
+  })());
   // Review mode: a card a marker has submitted, now being checked and
   // signed by the player on their own phone. Scores can't be changed here —
   // either sign it, or send it back to the marker to correct.
@@ -8545,9 +8581,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     onScore(idx, rawVal);
     if (timers.current[idx]) clearTimeout(timers.current[idx]);
     if (rawVal === "") return;
+    // iPhones only let the app move the keyboard to another box while the
+    // finger is still "on" the key — a moment later and the request is
+    // ignored. So a score that can't grow (2–9) moves on straight away,
+    // in the same keystroke; only a leading "1" (which might become 10 or
+    // more) waits, and then Enter/Return or a tap moves on.
     const isAmbiguousOne = rawVal.length === 1 && Number(rawVal) === 1;
-    const delay = isAmbiguousOne ? 700 : 150;
-    timers.current[idx] = setTimeout(() => focusNext(idx), delay);
+    if (!isAmbiguousOne) { focusNext(idx); return; }
+    timers.current[idx] = setTimeout(() => focusNext(idx), 700);
   };
 
   const handleKeyDown = (idx, e) => {
@@ -8882,21 +8923,36 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                     <div key={h} style={{ textAlign: "center" }}>
                       <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#8A8774" }}>{h}</div>
                       <input
+                        ref={(el) => (ownRefs.current[h - 1] = el)}
                         className="mono scoreInput"
                         type="number"
                         inputMode="numeric"
                         value={ownCard.scores[h - 1]}
+                        readOnly={ownLocked(h - 1)}
                         onChange={(e) => setOwnScore(h - 1, e.target.value)}
-                        style={{ width: "100%", textAlign: "center", padding: "6px 0", borderRadius: 6, fontSize: 13, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FBFAF6" }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); ownFocusNext(h - 1); } }}
+                        style={{
+                          width: "100%", textAlign: "center", padding: "6px 0", borderRadius: 6, fontSize: 13, fontWeight: 700,
+                          border: ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
+                          background: ownLocked(h - 1) ? `${headerColor}22` : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
+                        }}
                       />
                     </div>
                   ))}
                 </div>
               ))}
               {ownCard.scores.some((v) => v !== "") && (
-                <button onClick={() => updateOwnCard({ scores: Array(18).fill("") })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
-                  Clear my own card
-                </button>
+                <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+                  <button
+                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 5000); if (editing) ownTouchedAt.current = {}; }}
+                    style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
+                  >
+                    {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
+                  </button>
+                  <button onClick={() => updateOwnCard({ scores: Array(18).fill("") })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+                    Clear my own card
+                  </button>
+                </div>
               )}
             </div>
           )}
