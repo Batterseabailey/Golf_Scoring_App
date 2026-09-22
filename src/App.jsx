@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 46";
+const APP_VERSION = "21 Sep 2026 · build 51";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -58,6 +58,7 @@ const BRANDS = {
   lucifer: {
     orgName: "Lucifer Golfing Society",
     defaultEventCode: "LGS2026",
+    helperSuffix: "LGS",
     headerColor: "#1F2A37",
     accentColor: "#3B6D8C",
     printColor: "#14275A",
@@ -65,6 +66,7 @@ const BRANDS = {
   orgs: {
     orgName: "Old Radleian Golfing Society",
     defaultEventCode: "ORGS2026",
+    helperSuffix: "ORGS",
     headerColor: "#9B1B26",
     accentColor: "#1F2A37",
     printColor: "#9B1B26",
@@ -185,37 +187,57 @@ function withTimeout(promise, ms) {
 }
 
 // ---- Organiser access ----
-// Typing the event code with this suffix on the end (LGS2026WESB) opens
-// the very same event as the plain code (LGS2026), but marks THIS phone or
-// laptop as an organiser's device, which is what makes the Admin tab
-// appear. Everyone using the plain code never sees an Admin tab at all.
-// The device stays an organiser's device until "Hide the Admin tab on
-// this device" is tapped in Admin. The Admin PIN is still asked for —
-// the suffix only decides whether the tab is shown; the PIN remains the
-// actual lock. Change the letters here to change the suffix.
-const ADMIN_SUFFIX = "WESB";
+// Typing the event code with a suffix on the end opens the very same event
+// as the plain code, but marks THIS phone or laptop as an organiser's
+// device, which is what makes the Admin tab appear. Everyone using the
+// plain code never sees an Admin tab at all. There are two levels:
+//   • ORGS2026WESB  (OWNER_SUFFIX)  — full control, including the PINs,
+//     Backup & restore and switching event.
+//   • ORGS2026ORGS / LGS2026LGS (the society's own initials, set per site
+//     in BRANDS) — a HELPER: everything needed to run the day (draw,
+//     scores, rules, printing) but no access to PINs, backups or
+//     switching event, so only the owner can change the locks.
+// Either way the Admin PIN is still asked for — the suffix only decides
+// whether the tab is shown and what's in it; the PIN remains the lock.
+// The device keeps its level until "Hide the Admin tab on this device" is
+// tapped in Admin.
+const OWNER_SUFFIX = "WESB";
+const ADMIN_SUFFIX = OWNER_SUFFIX; // kept for anything still using the old name
 
+function helperSuffix() {
+  return (BRAND.helperSuffix || "").toUpperCase();
+}
+
+// Returns { code, level } where level is "owner", "helper" or "" (plain code).
 function splitAdminCode(raw) {
   const full = sanitizeCode(raw);
-  if (ADMIN_SUFFIX && full.length > ADMIN_SUFFIX.length && full.endsWith(ADMIN_SUFFIX)) {
-    return { code: full.slice(0, -ADMIN_SUFFIX.length), admin: true };
-  }
-  return { code: full, admin: false };
+  const strip = (suffix) => (suffix && full.length > suffix.length && full.endsWith(suffix) ? full.slice(0, -suffix.length) : null);
+  const asOwner = strip(OWNER_SUFFIX);
+  if (asOwner) return { code: asOwner, level: "owner", admin: true };
+  const asHelper = strip(helperSuffix());
+  if (asHelper) return { code: asHelper, level: "helper", admin: true };
+  return { code: full, level: "", admin: false };
 }
 
+// The level this device holds for an event: "owner", "helper" or "".
+// (A device marked before levels existed holds "1" — treated as owner,
+// since only the owner had the suffix then.)
 function isAdminDevice(code) {
-  if (!code) return false;
+  if (!code) return "";
   try {
-    return window.localStorage.getItem(`golf-admin-device-${code}`) === "1";
+    const v = window.localStorage.getItem(`golf-admin-device-${code}`);
+    if (v === "1" || v === "owner") return "owner";
+    if (v === "helper") return "helper";
+    return "";
   } catch {
-    return false;
+    return "";
   }
 }
 
-function setAdminDevice(code, on) {
+function setAdminDevice(code, level) {
   if (!code) return;
   try {
-    if (on) window.localStorage.setItem(`golf-admin-device-${code}`, "1");
+    if (level) window.localStorage.setItem(`golf-admin-device-${code}`, level);
     else window.localStorage.removeItem(`golf-admin-device-${code}`);
   } catch {
     // ignore — without storage the suffix simply has to be typed each time
@@ -246,11 +268,11 @@ function rememberAdminPin(code, pin) {
 
 function codeFromUrl() {
   try {
-    const { code, admin } = splitAdminCode(new URLSearchParams(window.location.search).get("code"));
-    if (admin) {
+    const { code, level } = splitAdminCode(new URLSearchParams(window.location.search).get("code"));
+    if (level) {
       // Remember this device, then take the suffix straight back out of
       // the address bar so a copied or shared link never gives it away.
-      setAdminDevice(code, true);
+      setAdminDevice(code, level);
       const url = new URL(window.location.href);
       url.searchParams.set("code", code);
       window.history.replaceState(null, "", url);
@@ -945,6 +967,22 @@ function sanitizeState(parsed) {
   };
 }
 
+// ---- Who is actually playing a day ----
+// Once a day has a draw, only the people IN it are playing: anyone still
+// sitting unplaced in the Build tab's pool (a reserve, a late withdrawal,
+// a name that arrived on a paste but was never given a tee time) is kept
+// on the day's list but stays off the score sheet and every leaderboard.
+// With no draw yet, everyone on the list counts, as before.
+function isPlayingOnDay(round, p) {
+  if (!round.draw || round.draw.length === 0) return true;
+  const inDraw = new Set(round.draw.flatMap((entry) => entry.players || []).filter(Boolean).map(normalizeName));
+  return inDraw.has(normalizeName(p.name)) || (!!p.partnerName && inDraw.has(normalizeName(p.partnerName)));
+}
+function playersOnDay(round) {
+  const list = round.format === "foursomes" && round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
+  return list.filter((p) => isPlayingOnDay(round, p));
+}
+
 // ---- Combined standings across every round, matched by player name ----
 function combinedStandings(rounds, competitionFilter) {
   const byName = new Map();
@@ -959,11 +997,7 @@ function combinedStandings(rounds, competitionFilter) {
     // been "visited" and resynced — computing it fresh here means the
     // leaderboard is always correct straight from the draw for every
     // round, not just whichever one happens to be currently selected.
-    const effectivePlayers =
-      round.format === "foursomes" && round.draw.length > 0
-        ? mergedPairsFromDraw(round.players, round.draw, round.course)
-        : round.players;
-    effectivePlayers.forEach((p) => {
+    playersOnDay(round).forEach((p) => {
       const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, round.format === "foursomes");
       if (!competitionFilter || p.competition === competitionFilter) credit(p.name, round.id, t);
       // On a Foursomes day, both partners earned this result together — the
@@ -997,9 +1031,7 @@ function combinedStandings(rounds, competitionFilter) {
 function combinedPairStandings(rounds) {
   const byPairKey = new Map();
   rounds.forEach((round) => {
-    const effectivePlayers =
-      round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
-    effectivePlayers.forEach((p) => {
+    playersOnDay({ ...round, format: "foursomes" }).forEach((p) => {
       const nameA = (p.name || "").trim();
       const nameB = (p.partnerName || "").trim();
       if (!nameA) return;
@@ -1438,8 +1470,12 @@ function AppInner() {
   // nobody else can see or reach it. It seeds from a ?code= URL param so a
   // link can be pre-filled, but players can also just type it in.
   const [eventCode, setEventCode] = useState(codeFromUrl);
-  // Whether this device shows the Admin tab — see ADMIN_SUFFIX above.
-  const [adminVisible, setAdminVisible] = useState(() => isAdminDevice(codeFromUrl()));
+  // "owner", "helper" or "" — what this device is allowed to see in Admin
+  // (see OWNER_SUFFIX above). adminVisible is simply "any level at all".
+  const [adminLevel, setAdminLevel] = useState(() => isAdminDevice(codeFromUrl()));
+  const adminVisible = !!adminLevel;
+  const isOwner = adminLevel === "owner";
+  const setAdminVisible = (v) => setAdminLevel(v ? adminLevel || "owner" : "");
   const eventCodeRef = useRef(eventCode);
   useEffect(() => { eventCodeRef.current = eventCode; }, [eventCode]);
 
@@ -1828,10 +1864,10 @@ function AppInner() {
   }, [eventCode]);
 
   const enterEventCode = (raw) => {
-    const { code, admin } = splitAdminCode(raw);
+    const { code, level } = splitAdminCode(raw);
     if (!code) return;
-    if (admin) setAdminDevice(code, true);
-    setAdminVisible(admin || isAdminDevice(code));
+    if (level) setAdminDevice(code, level);
+    setAdminLevel(level || isAdminDevice(code));
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("code", code);
@@ -2976,7 +3012,9 @@ function AppInner() {
     }
   };
 
-  const ranked = [...players]
+  const unplaced = players.filter((p) => !isPlayingOnDay(activeRound, p));
+  const ranked = players
+    .filter((p) => isPlayingOnDay(activeRound, p))
     .map((p) => ({
       ...p,
       displayName: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
@@ -3061,7 +3099,7 @@ function AppInner() {
         )}
         <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span>{headerFormatLabel} · Par {coursePar(course)} · {playingCount} {playingCount === 1 ? "player" : "players"}</span>
-          {scorerUnlocked && (
+          {scorerUnlocked && isOwner && (
             <button
               onClick={switchEvent}
               style={{ background: "none", border: "none", color: "#F1EFE3", opacity: 0.7, fontSize: 11, textDecoration: "underline", padding: 0 }}
@@ -3377,7 +3415,7 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
-      ) : showBackup ? (
+      ) : showBackup && isOwner ? (
         <BackupRestore
           eventCode={eventCode}
           state={state}
@@ -3446,6 +3484,7 @@ function AppInner() {
         <EnterScores
           course={course}
           ranked={ranked}
+          unplaced={unplaced}
           onSelect={(id) => claimCard(id, { force: true })}
           deviceId={deviceId}
           onAdd={addPlayer}
@@ -3491,6 +3530,7 @@ function AppInner() {
           onUpdatePin={updatePin}
           handicapPin={handicapPin}
           onUpdateHandicapPin={updateHandicapPin}
+          canEditPins={isOwner}
           course={course}
           onUpdate={updateCourse}
           onRenameTee={renameTee}
@@ -3523,13 +3563,14 @@ function AppInner() {
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
           onOpenBackup={() => setShowBackup(true)}
+          isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
           onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
           publicScoreEntry={activeRound.publicScoreEntry}
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
           roundLabel={activeRound.label}
-          onHideAdmin={() => { setAdminDevice(eventCode, false); rememberAdminPin(eventCode, ""); setAdminVisible(false); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -3937,8 +3978,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
 
   const isFoursomes = round.format === "foursomes";
   const totalHoles = round.course.holes.length;
-  const effectivePlayers =
-    isFoursomes && round.draw.length > 0 ? mergedPairsFromDraw(round.players, round.draw, round.course) : round.players;
+  const effectivePlayers = playersOnDay(round);
 
   // Which competition tags actually appear on this day's roster — only
   // offer filter pills for ones that are actually in use here, in case
@@ -4944,8 +4984,20 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
   );
 }
 
+// Accepts the ways a tee time gets typed — 9:05, 09:05, 9.05, 0905 — and
+// returns HH:MM, or "" if it isn't a time at all.
+function parseTeeTime(timeStr) {
+  const v = (timeStr || "").trim().replace(/\s*(am|pm)$/i, "");
+  let m = /^(\d{1,2})\s*[:.h]\s*(\d{2})$/.exec(v);
+  if (!m) m = /^(\d{1,2})(\d{2})$/.exec(v);
+  if (!m) return "";
+  const h = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+  if (h > 23 || mm > 59) return "";
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
 function addMinutes(timeStr, minutesToAdd) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec((timeStr || "").trim());
+  const m = /^(\d{1,2}):(\d{2})$/.exec(parseTeeTime(timeStr));
   if (!m) return timeStr || "";
   const total = (parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + minutesToAdd + 1440 * 10) % 1440;
   const hh = String(Math.floor(total / 60)).padStart(2, "0");
@@ -5145,11 +5197,20 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
   const setTime = (rowId, time) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, time } : r)));
   const setStartTee = (rowId, startTee) => setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, startTee } : r)));
 
+  // A new tee time follows on from the LAST one in the draw, one interval
+  // later — so after 09:00, 09:08, 09:16 the next is 09:24 whatever the
+  // start-time setting says. Only when no row has a time yet does it fall
+  // back to the start time.
   const addRow = () =>
-    setRows((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), time: addMinutes(startTime, intervalMinutes * prev.length), startTee: "", slots: [null, null, null, null] },
-    ]);
+    setRows((prev) => {
+      const lastTimed = [...prev].reverse().find((r) => parseTeeTime(r.time));
+      const time = lastTimed ? addMinutes(lastTimed.time, Number(intervalMinutes) || 0) : startTime;
+      // ...and starts from the same tee as the last row (a 10th-tee start
+      // carries on down the sheet until it's changed on a later row).
+      const lastRow = prev[prev.length - 1];
+      const startTee = lastRow ? lastRow.startTee || "" : "";
+      return [...prev, { id: crypto.randomUUID(), time, startTee, slots: [null, null, null, null] }];
+    });
 
   const fillAllTimes = () =>
     setRows((prev) => prev.map((r, i) => ({ ...r, time: addMinutes(startTime, intervalMinutes * i) })));
@@ -5261,7 +5322,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
           </button>
         </div>
         <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 6 }}>
-          New rows auto-fill from these. "Fill times" renumbers every row's time in order.
+          "Add tee time" adds one interval to the last time in the draw. "Fill times" renumbers every row from the start time.
         </div>
       </div>
 
@@ -6455,10 +6516,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
   const compName = (abbr) => { const c = competitions.find((x) => x.abbreviation === abbr); return (c && c.fullName) || abbr; };
 
   // ---- This day ----
-  const dayPlayers = (isFoursomes && activeRound.draw.length > 0
-    ? mergedPairsFromDraw(activeRound.players, activeRound.draw, activeRound.course)
-    : activeRound.players
-  ).filter((p) => p.name);
+  const dayPlayers = playersOnDay(activeRound).filter((p) => p.name);
   const compsInUse = [...new Set(dayPlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean))];
   const totalHoles = activeRound.course.holes.length;
   // filter: "" = everyone, an abbreviation = that competition only,
@@ -7498,7 +7556,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
           >
             <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
             <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
-              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.competition ? ` · ${p.competition}` : ""} · {p.rounds.length} day{p.rounds.length === 1 ? "" : "s"}
+              {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.competition ? ` · ${p.competition}` : ""}
             </span>
           </button>
         ))
@@ -7618,7 +7676,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -7798,6 +7856,7 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
+      {isOwner && (
       <button
         onClick={onOpenBackup}
         style={{
@@ -7810,6 +7869,12 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
         <span style={{ flex: 1, textAlign: "left" }}>Backup &amp; restore</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
+      )}
+      {!isOwner && (
+        <div style={{ fontSize: 11.5, color: "#8A8774", textAlign: "center", marginTop: 4 }}>
+          Helper access — PINs, backups and switching event are the organiser's only.
+        </div>
+      )}
 
       <div style={{ textAlign: "center", marginTop: 16 }}>
         <button
@@ -7834,7 +7899,7 @@ function ScorerList({ course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup,
 // then refused to scroll any further) — a genuine separate screen, which
 // every other Admin destination already is, sidesteps that class of bug
 // entirely rather than patching around it.
-function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onRemoveNotInDraw, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
+function EnterScores({ deviceId, course, ranked, unplaced = [], onSelect, onAdd, onRemove, onLoadExample, onImport, onClearAll, onRemoveNotInDraw, onBack, headerColor, accentColor, rounds, activeRoundId, onCopyPlayers, isFoursomes, onBulkSetTee }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -8033,7 +8098,7 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
           )}
         </div>
       )}
-      {ranked.length === 0 && !isFoursomes && (
+      {ranked.length === 0 && unplaced.length === 0 && !isFoursomes && (
         <button
           onClick={onLoadExample}
           style={{
@@ -8092,7 +8157,25 @@ function EnterScores({ deviceId, course, ranked, onSelect, onAdd, onRemove, onLo
           </button>
         </div>
       ))}
-      {ranked.length === 0 && rounds && rounds.some((r) => r.id !== activeRoundId && r.players.length > 0) && (
+      {unplaced.length > 0 && (
+        <div style={{ background: "#F5F3E9", borderRadius: 10, padding: 12, border: "1px dashed #C2BEA9", marginTop: 6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>
+            Not in the draw — {unplaced.length}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+            On this day's list but not given a tee time, so they have no card and don't appear on any leaderboard.
+            Place them in the draw (Admin → Draw / tee times) to score them, or remove them here.
+          </div>
+          {[...unplaced].sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #E4E0D0" }}>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#6B6B5F" }}>{p.name || "(no name)"}{p.partnerName ? ` & ${p.partnerName}` : ""}</span>
+              <span className="mono" style={{ fontSize: 11, color: "#9B9885" }}>{p.index !== "" && p.index != null ? `HCP ${p.index}` : ""}</span>
+              <button onClick={() => onRemove(p.id)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11, padding: "4px 6px" }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {ranked.length === 0 && unplaced.length === 0 && rounds && rounds.some((r) => r.id !== activeRoundId && r.players.length > 0) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
           {rounds.filter((r) => r.id !== activeRoundId && r.players.length > 0).map((r) => (
             <button
@@ -8756,7 +8839,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, onImportLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, onImportLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -8943,6 +9026,13 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             </span>
           </label>
         </div>
+        {!canEditPins && (
+          <div style={{ marginTop: 14, fontSize: 11.5, color: "#8A8774" }}>
+            The Admin PIN and handicap code can only be changed by the organiser.
+          </div>
+        )}
+        {canEditPins && (
+        <>
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
             Admin PIN <span style={{ textTransform: "none", letterSpacing: 0 }}>(required to enter Admin)</span>
@@ -8967,6 +9057,8 @@ function CourseSetup({ orgName, onUpdateOrgName, accentColor, onUpdateAccentColo
             style={{ width: 120, fontSize: 15, fontWeight: 700, border: "1px solid #D8D4C0", borderRadius: 7, padding: "7px 9px", letterSpacing: "0.15em" }}
           />
         </div>
+        </>
+        )}
       </div>
 
 
