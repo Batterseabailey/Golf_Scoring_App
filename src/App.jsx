@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 57";
+const APP_VERSION = "21 Sep 2026 · build 58";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8462,9 +8462,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         const val = Array.isArray(player.scores) ? player.scores[idx] : "";
         const p = holePoints(course, val, idx, ph);
         const netVsPar = val !== "" && !isPickedUp(val) ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
+        // Shot holes are marked the way they are on a card: a red * above
+        // the box for one shot, ** for two, and a red ring round the box.
+        const shots = strokesOnHole(course, ph, idx);
         return (
           <div key={h} style={{ textAlign: "center" }}>
-            <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>{h}</div>
+            <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
+              {h}{shots > 0 && <span style={{ color: "#C00000", fontSize: 14, marginLeft: 1 }}>{"*".repeat(shots)}</span>}
+            </div>
             <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[idx].par}</div>
             <input
               ref={(el) => (inputRefs.current[idx] = el)}
@@ -8481,8 +8486,11 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 width: "100%", textAlign: "center", padding: "6px 0", marginTop: 2,
                 borderRadius: 6, fontSize: 14, fontWeight: 700,
                 // locked: solid tint, no outline. live with a score: white with a strong outline.
-                border: val !== "" && !isLocked(idx) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
-                background: isLocked(idx) ? `${headerColor}22` : "#FFF",
+                // shot hole: red ring (thicker once a live score is in it).
+                border: shots > 0 && !isLocked(idx)
+                  ? `${val !== "" ? 2 : 1.5}px solid #C00000`
+                  : val !== "" && !isLocked(idx) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
+                background: isLocked(idx) ? `${headerColor}22` : shots > 0 ? "#FFF3F3" : "#FFF",
                 color: isLocked(idx) ? headerColor : "#1B1B1B",
               }}
             />
