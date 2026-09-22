@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 72";
+const APP_VERSION = "21 Sep 2026 · build 73";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8506,7 +8506,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (ownLocked(idx)) return;
     const clean = Math.max(0, Math.round(Number(v)));
     ownTouchedAt.current[idx] = Date.now();
-    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 3000);
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 6000);
     updateOwnCard({ scores: ownCard.scores.map((s0, i) => (i === idx ? clean : s0)) });
     setOwnPadHole(ownNextOpen(idx));
   };
@@ -8553,7 +8553,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     const num = Number(raw);
     const clean = raw === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
     ownTouchedAt.current[idx] = Date.now();
-    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 3000);
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 6000);
     updateOwnCard({ scores: ownCard.scores.map((v, i) => (i === idx ? clean : v)) });
     if (ownTimers.current[idx]) clearTimeout(ownTimers.current[idx]);
     if (raw === "") return;
@@ -8612,7 +8612,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   // again, and they re-lock 3 seconds after the last change. Empty holes
   // are always live, so the next hole can simply be typed in. After 10
   // quiet seconds (5) the keyboard is also put away, so nothing is left armed.
-  const LOCK_AFTER_MS = 3000;
+  const LOCK_AFTER_MS = 3000;   // a freshly entered score locks after 3 quiet seconds
+  const EDIT_WINDOW_MS = 6000;  // ...but "Edit scores" keeps the card open for 6 seconds after every change
   const touchedAt = useRef({});           // hole index -> when it was last typed
   const lastActivityAt = useRef(Date.now());
   const [editUntil, setEditUntil] = useState(0);
@@ -8659,7 +8660,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (isLocked(idx) || reviewing) return;
     touchedAt.current[idx] = Date.now();
     lastActivityAt.current = Date.now();
-    if (Date.now() <= editUntil) setEditUntil(Date.now() + LOCK_AFTER_MS);
+    if (Date.now() <= editUntil) setEditUntil(Date.now() + EDIT_WINDOW_MS);
     onScore(idx, rawVal);
   };
 
@@ -8667,7 +8668,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (isLocked(idx) || reviewing) return; // belt and braces — a locked box is read-only anyway
     touchedAt.current[idx] = Date.now();
     lastActivityAt.current = Date.now();
-    if (Date.now() <= editUntil) setEditUntil(Date.now() + LOCK_AFTER_MS); // still correcting: keep the card open a little longer
+    if (Date.now() <= editUntil) setEditUntil(Date.now() + EDIT_WINDOW_MS); // still correcting: keep the card open a little longer
     onScore(idx, rawVal);
     if (timers.current[idx]) clearTimeout(timers.current[idx]);
     if (rawVal === "") return;
@@ -9019,13 +9020,13 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <Lock size={15} color={editing ? "#8A5A00" : "#8A8774"} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, fontSize: 11.5, color: editing ? "#6B4E00" : "#6B6B5F", fontWeight: lockHint ? 700 : 400 }}>
             {editing
-              ? "Editing — scored holes are live. They lock again 3 seconds after your last change."
+              ? "Editing — scored holes are live. They lock again 6 seconds after your last change."
               : lockHint
               ? "That hole is locked. Tap Edit scores to change it."
               : "Entered scores are locked so they can't be changed by accident."}
           </div>
           <button
-            onClick={() => { lastActivityAt.current = Date.now(); setLockHint(false); setEditUntil(editing ? 0 : Date.now() + LOCK_AFTER_MS); if (editing) touchedAt.current = {}; }}
+            onClick={() => { lastActivityAt.current = Date.now(); setLockHint(false); setEditUntil(editing ? 0 : Date.now() + EDIT_WINDOW_MS); if (editing) touchedAt.current = {}; }}
             style={{
               flexShrink: 0, padding: "8px 12px", borderRadius: 8, fontWeight: 700, fontSize: 12.5,
               border: `1px solid ${headerColor}`, background: editing ? "#FFFFFF" : headerColor, color: editing ? headerColor : "#FFFFFF",
@@ -9124,7 +9125,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               {ownCard.scores.some((v) => v !== "") && (
                 <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
                   <button
-                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 3000); if (editing) ownTouchedAt.current = {}; }}
+                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 6000); if (editing) ownTouchedAt.current = {}; }}
                     style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
                   >
                     {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
