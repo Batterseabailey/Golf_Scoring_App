@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 54";
+const APP_VERSION = "21 Sep 2026 · build 55";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -4012,6 +4012,12 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
       return {
         name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
         ph: t.ph,
+        // "19.9/26" — handicap index, then what they play off today. For
+        // a pair: both indexes, then the pair's combined figure.
+        whs: (() => {
+          const show = (v) => (v !== "" && v != null ? v : "–");
+          return isFoursomes && p.partnerName ? `${show(p.index)} & ${show(p.partnerIndex)}` : show(p.index);
+        })(),
         adjusted: !!(Number(p.handicapAdjustment) || (isFoursomes && Number(p.partnerHandicapAdjustment))),
         gross: complete ? t.grossTotal : null,
         net: complete ? t.netTotal : null,
@@ -4136,7 +4142,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
           {standings.map((row, i) => (
             <tr key={row.name} style={rs.row(i)}>
               <td style={rs.pos}>{sortBy === "name" ? "" : row.thru > 0 ? ordinal(row.rank) : "–"}</td>
-              <td style={rs.name}>{row.name}({row.ph}{row.adjusted ? "*" : ""})</td>
+              <td style={rs.name}>{row.name} ({row.whs}/{row.ph}{row.adjusted ? "*" : ""})</td>
               {round.publicShowGross !== false && <td style={rs.num}>{row.grossDisplay}</td>}
               {round.publicShowNet !== false && <td style={rs.num}>{row.netDisplay}</td>}
               {round.publicShowPoints !== false && <td style={rs.num}>{row.points ?? "–"}</td>}
