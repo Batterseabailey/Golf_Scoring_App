@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 59";
+const APP_VERSION = "21 Sep 2026 · build 61";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -701,6 +701,7 @@ function emptyRound(label, course) {
     publicShowNet: true,
     publicShowPoints: true,
     publicScoreEntry: false, // Admin switch — lets players open "Enter scores" for this day and help put cards in
+    requireSignature: true, // ...and whether a card a player enters must then be signed by the player from their own phone
     publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
   };
 }
@@ -748,6 +749,7 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicShowNet: r.publicShowNet === false ? false : true,
     publicShowPoints: r.publicShowPoints === false ? false : true,
     publicScoreEntry: r.publicScoreEntry === true,
+    requireSignature: r.requireSignature === false ? false : true,
     publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
   };
 }
@@ -3294,6 +3296,7 @@ function AppInner() {
         active ? (
           <ScoreEntry
             publicMode
+            requireSignature={activeRound.requireSignature !== false}
             deviceId={deviceId}
             course={course}
             player={active}
@@ -3591,6 +3594,8 @@ function AppInner() {
           onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
           publicScoreEntry={activeRound.publicScoreEntry}
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
+          requireSignature={activeRound.requireSignature !== false}
+          onToggleRequireSignature={() => updateRound((prevRound) => ({ requireSignature: prevRound.requireSignature === false }))}
           roundLabel={activeRound.label}
           onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
@@ -7681,7 +7686,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, roundLabel }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -7715,6 +7720,27 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
               {publicScoreEntry ? "ON" : "OFF"}
             </button>
           </div>
+          {publicScoreEntry && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>Player must sign their card</div>
+                <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 2 }}>
+                  {requireSignature
+                    ? "ON — a card entered by a marker waits for the player to check and sign it on their own phone."
+                    : "Off — a card entered by a player goes straight onto the leaderboard when COMPLETE is pressed."}
+                </div>
+              </div>
+              <button
+                onClick={onToggleRequireSignature}
+                style={{
+                  minWidth: 64, padding: "9px 0", borderRadius: 20, border: "none", fontWeight: 800, fontSize: 12.5,
+                  background: requireSignature ? accentColor : "#D8D4C0", color: "#FFFFFF",
+                }}
+              >
+                {requireSignature ? "ON" : "OFF"}
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -8395,7 +8421,7 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "" }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true }) {
   // Review mode: a card a marker has submitted, now being checked and
   // signed by the player on their own phone. Scores can't be changed here —
   // either sign it, or send it back to the marker to correct.
@@ -8864,7 +8890,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <div style={{ marginTop: 14 }}>
             <button
               onClick={() => {
-                if (publicMode) onUpdate({ submitted: true, submittedBy: deviceId, submittedAt: Date.now(), scoresComplete: false });
+                if (publicMode && requireSignature) onUpdate({ submitted: true, submittedBy: deviceId, submittedAt: Date.now(), scoresComplete: false });
                 else onUpdate({ scoresComplete: true });
                 onBack();
               }}
@@ -8875,14 +8901,16 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 fontWeight: 800, fontSize: 16, letterSpacing: "0.08em",
               }}
             >
-              COMPLETE
+              {!publicMode && awaitingSignature(player) ? "APPROVE — SIGNED CARD SEEN" : "COMPLETE"}
             </button>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", textAlign: "center", marginTop: 6 }}>
-              {entered === 0
-                ? `Enter the scores, then press COMPLETE${publicMode ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
+              {!publicMode && awaitingSignature(player)
+                ? "This card was entered by a marker on their phone and is waiting for the player to sign it. If you've seen the signed paper card, approve it here and it goes on the leaderboard."
+                : entered === 0
+                ? `Enter the scores, then press COMPLETE${publicMode && requireSignature ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
                 : entered < 18
-                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until ${publicMode ? "it's completed and signed" : "you press COMPLETE"} (an unfinished card will show as NR).`
-                : publicMode
+                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until ${publicMode && requireSignature ? "it's completed and signed" : "you press COMPLETE"} (an unfinished card will show as NR).`
+                : publicMode && requireSignature
                 ? "All 18 holes entered. Press COMPLETE, then the player checks and signs it on their own phone before it goes on the leaderboard."
                 : "All 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE."}
             </div>
