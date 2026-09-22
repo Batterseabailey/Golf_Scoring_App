@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 56";
+const APP_VERSION = "21 Sep 2026 · build 57";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -334,8 +334,15 @@ function strokesOnHole(course, ph, holeIdx) {
   return s;
 }
 
+// A gross of 0 means the hole was picked up / not completed (a "wipe" in
+// Stableford): 0 points, and the card has no gross or net score.
+function isPickedUp(gross) {
+  return gross !== "" && gross != null && Number(gross) === 0;
+}
+
 function holePoints(course, gross, holeIdx, ph) {
   if (gross == null || gross === "") return null;
+  if (isPickedUp(gross)) return 0;
   const net = Number(gross) - strokesOnHole(course, ph, holeIdx);
   return Math.max(0, 2 - (net - course.holes[holeIdx].par));
 }
@@ -348,11 +355,12 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
   const ph = isFoursomes
     ? combinedHandicap(course, player, allowancePct)
     : allowedHandicap(playingHandicap(course, Number(player.index) || 0, player.tee), allowancePct) + (Number(player.handicapAdjustment) || 0);
-  let pts = 0, thru = 0, netTotal = 0, parSoFar = 0, grossTotal = 0;
+  let pts = 0, thru = 0, netTotal = 0, parSoFar = 0, grossTotal = 0, pickedUp = 0;
   const scores = Array.isArray(player.scores) ? player.scores : Array(18).fill("");
   scores.forEach((g, i) => {
     if (g == null || g === "") return;
     thru += 1;
+    if (isPickedUp(g)) { pickedUp += 1; return; } // 0 points, no gross/net for the card
     const strokes = strokesOnHole(course, ph, i);
     netTotal += Number(g) - strokes;
     grossTotal += Number(g);
@@ -360,7 +368,8 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
     const p = holePoints(course, g, i, ph);
     if (p !== null) pts += p;
   });
-  return { ph, pts, thru, netTotal, grossTotal, relToPar: netTotal - parSoFar };
+  // nr: a hole was picked up, so there is no gross or net score to return
+  return { ph, pts, thru, netTotal, grossTotal, relToPar: netTotal - parSoFar, pickedUp, nr: pickedUp > 0 };
 }
 
 // A card only counts towards any leaderboard once Admin has pressed
@@ -4004,7 +4013,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
     .filter((p) => p.name)
     .map((p) => {
       const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, isFoursomes);
-      const complete = t.thru === totalHoles;
+      const complete = t.thru === totalHoles && !t.nr;
       // Gross/Net are only ever shown as an actual number once every hole
       // is in — a partial total isn't a real score to compare, so it's
       // null for sorting purposes either way (not started or incomplete),
@@ -6513,7 +6522,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
     .filter((p) => inFilter(p, filter))
     .map((p) => {
       const t = totals(activeRound.course, forLeaderboard(p), activeRound.handicapAllowance, isFoursomes);
-      const complete = t.thru === totalHoles;
+      const complete = t.thru === totalHoles && !t.nr;
       return {
         name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
         ph: t.ph,
@@ -8452,7 +8461,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         const idx = h - 1;
         const val = Array.isArray(player.scores) ? player.scores[idx] : "";
         const p = holePoints(course, val, idx, ph);
-        const netVsPar = val !== "" ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
+        const netVsPar = val !== "" && !isPickedUp(val) ? (Number(val) - strokesOnHole(course, ph, idx)) - course.holes[idx].par : null;
         return (
           <div key={h} style={{ textAlign: "center" }}>
             <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>{h}</div>
@@ -8478,7 +8487,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               }}
             />
             <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: headerColor, marginTop: 2, minHeight: 14 }}>
-              {isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (p !== null ? `${p}pt` : "")}
+              {isPickedUp(val) ? "NR" : isMedal ? (netVsPar !== null ? formatRelToPar(netVsPar) : "") : (p !== null ? `${p}pt` : "")}
             </div>
           </div>
         );
@@ -8501,7 +8510,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             {handicapSummary({ ...player, ph }, isFoursomes).text}{player.tee ? ` · ${player.tee} tee` : ""}
           </div>
           <div style={{ fontSize: 11.5, color: "#8A5A00", marginTop: 8 }}>
-            Check this is the right card before you start. Enter the GROSS score for each hole, then press COMPLETE.
+            Check this is the right card before you start. Enter the GROSS score for each hole — put 0 for a hole that
+            was picked up (0 points) — then press COMPLETE.
           </div>
         </div>
       )}
@@ -8615,6 +8625,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 8 }}>
           Playing HCP {ph} · {isMedal ? `net ${netTotal} (${formatRelToPar(relToPar)})` : `${pts} pts`} so far
         </div>
+        <div style={{ fontSize: 11, color: "#8A8774", marginTop: 4 }}>
+          Put 0 for a hole that was picked up: 0 points, and the card shows NR for gross and net.
+        </div>
 
         {/* Adjustments are made in one place only — Admin → Draw / tee times
             → Adjust handicap — never from the scoring screen, where a slip
@@ -8699,21 +8712,22 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         // one at a glance before pressing COMPLETE. Only counts holes
         // that actually have a score in them.
         const sumFor = (holes) => {
-          let gross = 0, net = 0, points = 0, played = 0;
+          let gross = 0, net = 0, points = 0, played = 0, nr = false;
           holes.forEach((h) => {
             const idx = h - 1;
             const v = Array.isArray(player.scores) ? player.scores[idx] : "";
             if (v === "" || v == null) return;
             played += 1;
+            if (isPickedUp(v)) { nr = true; return; }
             gross += Number(v);
             net += Number(v) - strokesOnHole(course, ph, idx);
             points += holePoints(course, v, idx, ph) || 0;
           });
-          return { gross, net, points, played };
+          return { gross, net, points, played, nr };
         };
         const out = sumFor(OUT), inn = sumFor(IN);
-        const all = { gross: out.gross + inn.gross, net: out.net + inn.net, points: out.points + inn.points, played: out.played + inn.played };
-        const show = (part, field) => (part.played > 0 ? part[field] : "–");
+        const all = { gross: out.gross + inn.gross, net: out.net + inn.net, points: out.points + inn.points, played: out.played + inn.played, nr: out.nr || inn.nr };
+        const show = (part, field) => (part.played === 0 ? "–" : field !== "points" && part.nr ? "NR" : part[field]);
         const cell = { textAlign: "right", padding: "7px 10px", fontSize: 14 };
         const head = { textAlign: "right", padding: "6px 10px", fontSize: 10.5, color: "#8A8774", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
         const rowLabel = { textAlign: "left", padding: "7px 10px", fontSize: 13, fontWeight: 700 };
