@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 84";
+const APP_VERSION = "21 Sep 2026 · build 85";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -6173,6 +6173,10 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
       ph,
       adjusted: !!(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)),
       shots: course.holes.map((h, i) => strokesOnHole(course, ph, i)),
+      // Scores already entered today (a signed card, or one just posted)
+      // are printed in, with the points per hole and the totals filled.
+      scores: Array.isArray(p.scores) ? p.scores : Array(18).fill(""),
+      hasScores: Array.isArray(p.scores) && p.scores.some((v) => v !== "" && v != null),
       time: info ? info.time : "",
       startTee: info ? info.startTee : "",
       tee: [...new Set([p.tee, p.partnerTee].filter(Boolean))].join(" / "),
@@ -6220,7 +6224,8 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
                 {c.yards && <td className="mono" style={td}>{c.yards[i] ?? ""}</td>}
                 <td className="mono" style={td}>{course.holes[i].par}</td>
                 <td className="mono" style={td}>{course.holes[i].si}</td>
-                <td style={{ ...td, position: "relative", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+                <td className="mono" style={{ ...td, position: "relative", fontWeight: 800, fontSize: 12, borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+                  {c.scores[i] !== "" && c.scores[i] != null ? (isPickedUp(c.scores[i]) ? "–" : c.scores[i]) : ""}
                   {c.shots[i] > 0 && (
                     <span style={{ position: "absolute", top: 1, right: 3, fontSize: 11, fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
                       {"*".repeat(c.shots[i])}
@@ -6228,7 +6233,13 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
                   )}
                 </td>
                 <td className="mono" style={{ ...td, fontWeight: 800, color: c.shots[i] > 0 ? "#C00000" : "#000", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{c.shots[i] > 0 ? c.shots[i] : ""}</td>
-                <td style={td} />
+                <td className="mono" style={{ ...td, fontWeight: 700 }}>
+                  {c.scores[i] !== "" && c.scores[i] != null
+                    ? (scoring === "medal"
+                        ? (isPickedUp(c.scores[i]) ? "NR" : Number(c.scores[i]) - c.shots[i])
+                        : holePoints(course, c.scores[i], i, c.ph))
+                    : ""}
+                </td>
               </tr>
             );
           })}
@@ -6237,9 +6248,17 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
             {c.yards && <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.yards[i]) || ""}</td>}
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => course.holes[i].par)}</td>
             <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
-            <td style={{ ...td, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }} />
+            <td className="mono" style={{ ...td, fontWeight: 800, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+              {c.hasScores && !holes.some((h) => isPickedUp(c.scores[h - 1])) && holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? sum((i) => c.scores[i]) : c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : ""}
+            </td>
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.shots[i]) || ""}</td>
-            <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
+            <td className="mono" style={{ ...td, fontWeight: 800, borderBottom: "1.5px solid #000" }}>
+              {c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null)
+                ? (scoring === "medal"
+                    ? (holes.some((h) => isPickedUp(c.scores[h - 1])) || !holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : sum((i) => Number(c.scores[i]) - c.shots[i]))
+                    : sum((i) => holePoints(course, c.scores[i], i, c.ph) || 0))
+                : ""}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -6285,9 +6304,19 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         </div>
         <table style={{ borderCollapse: "collapse", marginLeft: 8 }}>
           <tbody>
-            {[["Gross", ""], [scoring === "medal" ? "Nett" : "Points", ""]].map(([k]) => (
-              <tr key={k}><td style={{ fontSize: 9, padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td><td style={{ border: "0.8px solid #000", width: "16mm", height: "7mm" }} /></tr>
-            ))}
+            {(() => {
+              const t = c.hasScores ? totals(course, { index: "0", scores: c.scores, tee: "" }, 100, false) : null; // only pts/thru/nr used below; gross/net from the card itself
+              const full = c.hasScores && c.scores.every((v) => v !== "" && v != null) && !c.scores.some((v) => isPickedUp(v));
+              const gross = full ? c.scores.reduce((n, v) => n + Number(v), 0) : c.hasScores ? "NR" : "";
+              const nett = full ? c.scores.reduce((n, v) => n + Number(v), 0) - c.shots.reduce((n, v) => n + v, 0) : c.hasScores ? "NR" : "";
+              const pts = c.hasScores ? c.scores.reduce((n, v, i) => n + (holePoints(course, v, i, c.ph) || 0), 0) : "";
+              return [["Gross", gross], ["Nett", nett], ["Points", pts]].map(([k, v]) => (
+                <tr key={k}>
+                  <td style={{ fontSize: 9, padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td>
+                  <td className="mono" style={{ border: "0.8px solid #000", width: "16mm", height: "6.5mm", textAlign: "center", fontSize: 13, fontWeight: 800 }}>{v}</td>
+                </tr>
+              ));
+            })()}
           </tbody>
         </table>
       </div>
