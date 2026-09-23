@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 76";
+const APP_VERSION = "21 Sep 2026 · build 77";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1633,6 +1633,9 @@ function AppInner() {
   useEffect(() => { modeRef.current = mode; }, [mode]);
   const activeIdRef = useRef(null);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  // Cards this phone has already opened for signing by itself — so backing
+  // out without signing doesn't have it pop straight back up.
+  const autoOpenedRef = useRef(new Set());
 
   const load = useCallback(async () => {
     const code = eventCodeRef.current;
@@ -2101,7 +2104,18 @@ function AppInner() {
       setMode("menu");
       return;
     }
-    if (!activeId) return;
+    if (!activeId) {
+      // My own card has just been submitted by my marker: open it for
+      // signing straight away rather than waiting to be found in the list.
+      const own = readOwnCard(eventCode, activeRoundId);
+      const mine = normalizeName(own.name);
+      if (mine) {
+        const waiting = players.find((p) => awaitingSignature(p) && p.submittedBy !== deviceId && !autoOpenedRef.current.has(p.id) &&
+          (normalizeName(p.name) === mine || normalizeName(p.partnerName) === mine || normalizeName(`${p.name} & ${p.partnerName}`) === mine || normalizeName(`${p.partnerName} & ${p.name}`) === mine));
+        if (waiting) { autoOpenedRef.current.add(waiting.id); setEntryNotice(""); setActiveId(waiting.id); }
+      }
+      return;
+    }
     const card = players.find((p) => p.id === activeId);
     if (!card) { setActiveId(null); return; }
     if (!awaitingSignature(card) && lockHeldByOther(card, deviceId)) {
@@ -3370,6 +3384,7 @@ function AppInner() {
               claimCard(id);
             }}
             onReview={async (id) => { await load(); setEntryNotice(""); setActiveId(id); }}
+            reminderKey={`golf-entry-reminder-${eventCode}-${activeRoundId}`}
             headerColor={headerColor}
             accentColor={accentColor}
           />
@@ -8356,13 +8371,19 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor }) {
-  // A reminder that flashes up for 6 seconds whenever the list is opened:
-  // you score your OPPONENT'S card, not your own.
-  const [flash, setFlash] = useState(true);
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor, reminderKey }) {
+  // A reminder that flashes up for 6 seconds the FIRST time this phone
+  // opens Enter scores for the day: you score your OPPONENT'S card, not
+  // your own. Not again when coming back to sign at the end.
+  const [flash, setFlash] = useState(() => {
+    try { return !window.localStorage.getItem(reminderKey); } catch { return true; }
+  });
   useEffect(() => {
+    if (!flash) return;
+    try { window.localStorage.setItem(reminderKey, "1"); } catch { /* ignore */ }
     const t = setTimeout(() => setFlash(false), 6000);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const waiting = ranked.filter((p) => p.name && awaitingSignature(p));
   const waitingForMe = waiting.filter((p) => p.submittedBy !== deviceId);
@@ -8494,7 +8515,12 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
 function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [] }) {
   // The marker's own private card (see readOwnCard) — only in players' mode.
   const [ownCard, setOwnCard] = useState(() => (ownCardStore ? readOwnCard(ownCardStore.code, ownCardStore.roundId) : { name: "", scores: Array(18).fill("") }));
-  const [showOwnCard, setShowOwnCard] = useState(() => !!(ownCardStore && readOwnCard(ownCardStore.code, ownCardStore.roundId).scores.some((v) => v !== "")));
+  const [showOwnCard, setShowOwnCard] = useState(true);
+  // In a two-ball there's only one person the marker can be — pick them.
+  useEffect(() => {
+    if (ownCardStore && !ownCard.name && groupNames.length === 1) updateOwnCard({ name: groupNames[0] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownCardStore && ownCardStore.roundId, groupNames.join("|")]);
   const updateOwnCard = (patch) => setOwnCard((prev) => {
     const next = { ...prev, ...patch };
     if (ownCardStore) writeOwnCard(ownCardStore.code, ownCardStore.roundId, next);
@@ -9046,7 +9072,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         return (
           <div style={{ background: diffs.length ? "#FFF6E0" : "#EEF6EF", border: `1px solid ${diffs.length ? "#D9A400" : "#7FB88F"}`, borderRadius: 10, padding: 12, marginTop: 4, marginBottom: 10 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: diffs.length ? "#6B4E00" : "#2F6B3F" }}>
-              {diffs.length === 0 ? `Matches your own card on all ${noted} holes you noted` : `Differs from your own card on ${diffs.length} hole${diffs.length === 1 ? "" : "s"}`}
+              {diffs.length === 0
+                ? `✓ Matches your own card on all ${noted} holes you noted`
+                : `⚠ Check hole${diffs.length === 1 ? "" : "s"} ${diffs.map((d) => d.hole).join(diffs.length === 2 ? " & " : ", ")} — ${diffs.length === 1 ? "it doesn't" : "they don't"} agree with your own card`}
             </div>
             {diffs.length > 0 && (
               <div className="mono" style={{ fontSize: 12, color: "#6B4E00", marginTop: 4 }}>
@@ -9064,14 +9092,14 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             onClick={() => setShowOwnCard((v) => !v)}
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}
           >
-            <span style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>My own card{ownCard.name ? ` — ${ownCard.name}` : ""} (private, this phone only)</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: headerColor }}>{ownCard.name ? `${ownCard.name} — Marker` : "Marker's own card — choose your name"}</span>
             <ChevronRight size={15} color="#9B9885" style={{ transform: showOwnCard ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
           </button>
           {showOwnCard && (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-                Keep your own scores here while you mark {player.name || "this"} card. Nothing here is sent anywhere or shown to anyone —
-                it's just so you can check your marker's card against it when it comes to you to sign.
+                Your own scores, kept privately on this phone while you mark {player.name ? `${player.name}'s` : "this"} card. Nobody else
+                sees them — they're there so the card your marker enters for you can be checked against them when it comes to you to sign.
               </div>
               <select
                 value={ownCard.name}
