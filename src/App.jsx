@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 83";
+const APP_VERSION = "21 Sep 2026 · build 84";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -6207,7 +6207,8 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
             <th style={{ ...th, width: "12%" }}>Par</th>
             <th style={{ ...th, width: "12%" }}>S.I.</th>
             <th style={{ ...th }}>Score</th>
-            <th style={{ ...th, width: "16%" }}>Pts</th>
+            <th style={{ ...th, width: "13%" }}>Shots</th>
+            <th style={{ ...th, width: "15%" }}>{scoring === "medal" ? "Nett" : "Pts"}</th>
           </tr>
         </thead>
         <tbody>
@@ -6226,6 +6227,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
                     </span>
                   )}
                 </td>
+                <td className="mono" style={{ ...td, fontWeight: 800, color: c.shots[i] > 0 ? "#C00000" : "#000", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{c.shots[i] > 0 ? c.shots[i] : ""}</td>
                 <td style={td} />
               </tr>
             );
@@ -6236,6 +6238,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => course.holes[i].par)}</td>
             <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
             <td style={{ ...td, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }} />
+            <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.shots[i]) || ""}</td>
             <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
           </tr>
         </tbody>
