@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 73";
+const APP_VERSION = "21 Sep 2026 · build 75";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8357,6 +8357,13 @@ function handicapSummary(p, isFoursomes) {
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
 function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor }) {
+  // A reminder that flashes up for 3 seconds whenever the list is opened:
+  // you score your OPPONENT'S card, not your own.
+  const [flash, setFlash] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setFlash(false), 3000);
+    return () => clearTimeout(t);
+  }, []);
   const waiting = ranked.filter((p) => p.name && awaitingSignature(p));
   const waitingForMe = waiting.filter((p) => p.submittedBy !== deviceId);
   const [search, setSearch] = useState("");
@@ -8370,6 +8377,21 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
+      {flash && (
+        <div
+          onClick={() => setFlash(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 70, background: "rgba(27,27,27,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+          }}
+        >
+          <div style={{ background: headerColor, color: "#FFFFFF", borderRadius: 14, padding: "26px 22px", maxWidth: 340, textAlign: "center", boxShadow: "0 8px 30px rgba(0,0,0,0.35)" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>
+              Select the card you will be scoring — your opponent/playing partner's!
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>Enter scores — {roundLabel}</div>
       <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
         Tap a card, type in the gross score for each hole, then press COMPLETE. {doneCount} of {totalCount} cards done.
@@ -8966,30 +8988,6 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             </div>
           );
         })()}
-      </div>
-
-      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
-        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>
-          Shots received — {ph}
-        </div>
-        {strokeHoles.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#9B9885" }}>No strokes at this handicap.</div>
-        ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {strokeHoles.map((h) => (
-              <div
-                key={h.hole}
-                className="mono"
-                style={{
-                  minWidth: 30, textAlign: "center", padding: "5px 6px", borderRadius: 6,
-                  background: `${headerColor}12`, color: headerColor, fontSize: 12, fontWeight: 700,
-                }}
-              >
-                {h.hole}{h.strokes > 1 ? `×${h.strokes}` : ""}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {reviewing && (
