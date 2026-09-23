@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 75";
+const APP_VERSION = "21 Sep 2026 · build 76";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8357,11 +8357,11 @@ function handicapSummary(p, isFoursomes) {
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
 function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor }) {
-  // A reminder that flashes up for 3 seconds whenever the list is opened:
+  // A reminder that flashes up for 6 seconds whenever the list is opened:
   // you score your OPPONENT'S card, not your own.
   const [flash, setFlash] = useState(true);
   useEffect(() => {
-    const t = setTimeout(() => setFlash(false), 3000);
+    const t = setTimeout(() => setFlash(false), 6000);
     return () => clearTimeout(t);
   }, []);
   const waiting = ranked.filter((p) => p.name && awaitingSignature(p));
