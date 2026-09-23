@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 77";
+const APP_VERSION = "21 Sep 2026 · build 78";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8543,6 +8543,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (next && !ownLocked(idx + 1)) { next.focus(); next.select?.(); }
   };
   const [ownPadHole, setOwnPadHole] = useState(null);
+  const [confirmClearOwn, setConfirmClearOwn] = useState(false);
   const [ownTypingHole, setOwnTypingHole] = useState(null);
   const ownNextOpen = (idx) => { for (let i = idx + 1; i < 18; i++) if (!ownLocked(i)) return i; return null; };
   const ownTap = (idx) => {
@@ -8669,6 +8670,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const [, setTick] = useState(0);
   const scoreAt = (idx) => (Array.isArray(player.scores) ? player.scores[idx] : "");
   const isLocked = (idx) => {
+    if (!publicMode) return false; // Admin is working from a paper card — no pocket-proofing needed
     const v = scoreAt(idx);
     if (v === "" || v == null) return false;
     const now = Date.now();
@@ -9156,9 +9158,17 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                   >
                     {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
                   </button>
-                  <button onClick={() => updateOwnCard({ scores: Array(18).fill("") })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
-                    Clear my own card
-                  </button>
+                  {confirmClearOwn ? (
+                    <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E" }}>Clear all your own scores?</span>
+                      <button onClick={() => { updateOwnCard({ scores: Array(18).fill("") }); setConfirmClearOwn(false); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#B5442E", color: "#FFFFFF", fontSize: 11.5, fontWeight: 700 }}>Yes, clear</button>
+                      <button onClick={() => setConfirmClearOwn(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #D8D4C0", background: "#FFF", color: "#6B6B5F", fontSize: 11.5, fontWeight: 600 }}>Cancel</button>
+                    </span>
+                  ) : (
+                    <button onClick={() => setConfirmClearOwn(true)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+                      Clear my own card
+                    </button>
+                  )}
                 </div>
               )}
             </div>
