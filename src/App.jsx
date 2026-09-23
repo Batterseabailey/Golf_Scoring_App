@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 81";
+const APP_VERSION = "21 Sep 2026 · build 83";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1612,6 +1612,7 @@ function AppInner() {
   const [showDocumentsSetup, setShowDocumentsSetup] = useState(false);
   const [showCompetitionsSetup, setShowCompetitionsSetup] = useState(false);
   const [showPrintLabels, setShowPrintLabels] = useState(false);
+  const [showPrintCards, setShowPrintCards] = useState(false);
   const [showPrintDraw, setShowPrintDraw] = useState(false);
   const [showPrintBoard, setShowPrintBoard] = useState(false);
   const [showBackup, setShowBackup] = useState(false);
@@ -3551,6 +3552,23 @@ function AppInner() {
           onBack={() => setShowPrintDraw(false)}
           headerColor={headerColor}
         />
+      ) : showPrintCards ? (
+        <PrintScorecards
+          orgName={state.orgName}
+          course={course}
+          players={players}
+          draw={draw}
+          roundDateDisplay={formatDisplayDateLong(activeRound.date)}
+          eventName={course.eventName}
+          drawNote={activeRound.drawNote}
+          competitions={competitions}
+          handicapAllowance={handicapAllowance}
+          isFoursomes={isFoursomes}
+          scoring={scoring}
+          roundLabel={activeRound.label}
+          onBack={() => setShowPrintCards(false)}
+          headerColor={headerColor}
+        />
       ) : showPrintLabels ? (
         <PrintLabels
           societyRoster={societyRoster}
@@ -3648,19 +3666,20 @@ function AppInner() {
           onOpenCompetitionsSetup={() => setShowCompetitionsSetup(true)}
           onOpenSocietyRoster={() => setShowSocietyRoster(true)}
           onOpenPrintLabels={() => setShowPrintLabels(true)}
+          onOpenPrintCards={() => setShowPrintCards(true)}
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
           onOpenBackup={() => setShowBackup(true)}
           isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
           publicScoreEntry={activeRound.publicScoreEntry}
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
           requireSignature={activeRound.requireSignature !== false}
           onToggleRequireSignature={() => updateRound((prevRound) => ({ requireSignature: prevRound.requireSignature === false }))}
           roundLabel={activeRound.label}
-          onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -6119,6 +6138,234 @@ function writeLabelCal(cal) {
   try { window.localStorage.setItem(LABEL_CAL_KEY, JSON.stringify(cal)); } catch { /* ignore */ }
 }
 
+// Printed scorecards — one A5 card per player, two per A4 sheet (cut
+// across the middle). Front nine on the left, back nine on the right;
+// Hole, Yards (for the player's tee, when the course has yardages), Par,
+// S.I. and the Score column, with the player's shot holes marked with a
+// small * in the corner of the box (** for two shots).
+function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eventName, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor }) {
+  const namesInDraw = new Set(draw.flatMap((e) => e.players || []).filter(Boolean).map(normalizeName));
+  const inDraw = (p) => namesInDraw.size === 0 || namesInDraw.has(normalizeName(p.name)) || (p.partnerName && namesInDraw.has(normalizeName(p.partnerName)));
+  const drawInfoFor = (name) => {
+    const target = normalizeName(name);
+    for (const entry of draw) {
+      const names = entry.players || [];
+      if (names.some((n) => normalizeName(n) === target)) return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => normalizeName(n) !== target) };
+    }
+    return null;
+  };
+  const compName = (abbr) => { if (!abbr) return ""; const c = competitions.find((x) => x.abbreviation.toUpperCase() === abbr.toUpperCase()); return c ? c.fullName || c.abbreviation : ""; };
+  const teeYards = (teeLabel) => {
+    const t = getTee(course, teeLabel);
+    if (!t) return null;
+    const ys = course.holes.map((h) => (h.yards && h.yards[t.id] !== "" && h.yards[t.id] != null ? Number(h.yards[t.id]) : null));
+    return ys.some((y) => y !== null) ? ys : null;
+  };
+
+  const cards = players.filter((p) => p.name && inDraw(p)).map((p) => {
+    const ph = isFoursomes ? combinedHandicap(course, p, handicapAllowance) : allowedHandicap(playingHandicap(course, Number(p.index) || 0, p.tee), handicapAllowance) + (Number(p.handicapAdjustment) || 0);
+    const info = drawInfoFor(p.name);
+    const others = info ? info.others.filter((n) => !p.partnerName || normalizeName(n) !== normalizeName(p.partnerName)) : [];
+    return {
+      id: p.id,
+      title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+      hcp: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
+      ph,
+      adjusted: !!(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)),
+      shots: course.holes.map((h, i) => strokesOnHole(course, ph, i)),
+      time: info ? info.time : "",
+      startTee: info ? info.startTee : "",
+      tee: [...new Set([p.tee, p.partnerTee].filter(Boolean))].join(" / "),
+      yards: teeYards(p.tee),
+      others,
+      competition: compName(p.competition),
+    };
+  });
+  // Print everyone, or just the cards ticked below (a late entry, a
+  // reprint for someone who's lost theirs).
+  const [pickMode, setPickMode] = useState(false);
+  const [picked, setPicked] = useState(new Set());
+  const [pickSearch, setPickSearch] = useState("");
+  const togglePick = (id) => setPicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allSorted = [...cards].sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.title.localeCompare(b.title));
+  const sortedCards = pickMode ? allSorted.filter((c) => picked.has(c.id)) : allSorted;
+  const pairs = [];
+  for (let i = 0; i < sortedCards.length; i += 2) pairs.push(sortedCards.slice(i, i + 2));
+  const formatLine = `${scoring === "medal" ? "Medal" : "Stableford"}${isFoursomes ? " Foursomes" : ""} · ${handicapAllowance}% allowance`;
+
+  const nineTable = (c, holes) => {
+    const th = { padding: "3px 4px", fontSize: 8.5, fontWeight: 700, borderBottom: "1.5px solid #000", textAlign: "center", whiteSpace: "nowrap" };
+    const td = { padding: "0 4px", fontSize: 10.5, borderBottom: "0.6px solid #777", textAlign: "center", height: "7.1mm", lineHeight: 1 };
+    const label = holes[0] === 1 ? "Out" : "In";
+    const sum = (f) => holes.reduce((n, h) => n + (Number(f(h - 1)) || 0), 0);
+    return (
+      <table style={{ borderCollapse: "collapse", width: "100%", tableLayout: "fixed" }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, width: "12%" }}>Hole</th>
+            {c.yards && <th style={{ ...th, width: "18%" }}>Yards</th>}
+            <th style={{ ...th, width: "12%" }}>Par</th>
+            <th style={{ ...th, width: "12%" }}>S.I.</th>
+            <th style={{ ...th }}>Score</th>
+            <th style={{ ...th, width: "16%" }}>Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {holes.map((h) => {
+            const i = h - 1;
+            return (
+              <tr key={h}>
+                <td className="mono" style={{ ...td, fontWeight: 800 }}>{h}</td>
+                {c.yards && <td className="mono" style={td}>{c.yards[i] ?? ""}</td>}
+                <td className="mono" style={td}>{course.holes[i].par}</td>
+                <td className="mono" style={td}>{course.holes[i].si}</td>
+                <td style={{ ...td, position: "relative", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+                  {c.shots[i] > 0 && (
+                    <span style={{ position: "absolute", top: 1, right: 3, fontSize: 11, fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+                      {"*".repeat(c.shots[i])}
+                    </span>
+                  )}
+                </td>
+                <td style={td} />
+              </tr>
+            );
+          })}
+          <tr>
+            <td style={{ ...td, fontWeight: 800, borderBottom: "1.5px solid #000" }}>{label}</td>
+            {c.yards && <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.yards[i]) || ""}</td>}
+            <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => course.holes[i].par)}</td>
+            <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
+            <td style={{ ...td, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }} />
+            <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
+          </tr>
+        </tbody>
+      </table>
+    );
+  };
+
+  const card = (c) => (
+    <div className="scorecard" key={c.id}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+        <SocietyLogo orgName={orgName} height={34} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{orgName}</div>
+          <div style={{ fontSize: 10.5 }}>{[eventName, roundLabel].filter(Boolean).join(" — ")}</div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 9.5, lineHeight: 1.3 }}>
+          <div>{course.name}</div>
+          <div>{roundDateDisplay}{c.time ? ` · ${c.time}` : ""}{c.startTee ? ` · ${c.startTee}` : ""}</div>
+        </div>
+      </div>
+      <div style={{ borderTop: `1.5px solid ${BRAND.printColor}`, borderBottom: "0.6px solid #777", padding: "3px 0", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>{c.title}</div>
+          {c.others.length > 0 && <div style={{ fontSize: 9.5, color: "#333" }}>Playing with {c.others.join(", ")}</div>}
+        </div>
+        <div style={{ textAlign: "right", fontSize: 10, lineHeight: 1.35 }}>
+          <div style={{ fontWeight: 800 }}>{c.hcp} — Playing {c.ph}{c.adjusted ? "*" : ""}</div>
+          <div>{formatLine}{c.tee ? ` · ${c.tee} tee` : ""}</div>
+          {c.competition && <div style={{ fontWeight: 700 }}>{c.competition}</div>}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1 }}>{nineTable(c, OUT)}</div>
+        <div style={{ flex: 1 }}>{nineTable(c, IN)}</div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 5, fontSize: 9 }}>
+        <div style={{ flex: 1 }}>
+          {drawNote && drawNote.trim() && <div style={{ fontStyle: "italic", marginBottom: 3 }}>{drawNote}</div>}
+          <div style={{ color: "#333" }}>* = stroke received on this hole{c.adjusted ? " · playing handicap adjusted for this competition" : ""}</div>
+          <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
+            <div style={{ flex: 1 }}>Marker's signature <span style={{ display: "inline-block", width: "55%", borderBottom: "0.6px solid #000", verticalAlign: "bottom" }} /></div>
+            <div style={{ flex: 1 }}>Player's signature <span style={{ display: "inline-block", width: "55%", borderBottom: "0.6px solid #000", verticalAlign: "bottom" }} /></div>
+          </div>
+        </div>
+        <table style={{ borderCollapse: "collapse", marginLeft: 8 }}>
+          <tbody>
+            {[["Gross", ""], [scoring === "medal" ? "Nett" : "Points", ""]].map(([k]) => (
+              <tr key={k}><td style={{ fontSize: 9, padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td><td style={{ border: "0.8px solid #000", width: "16mm", height: "7mm" }} /></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "12px 14px 40px" }}>
+      <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>← Back</button>
+        <button onClick={() => window.print()} disabled={sortedCards.length === 0} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5, opacity: sortedCards.length === 0 ? 0.5 : 1 }}>
+          <Printer size={15} /> Print
+        </button>
+      </div>
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {[["all", `Everyone (${cards.length})`], ["pick", `Chosen players${pickMode && picked.size ? ` (${picked.size})` : ""}`]].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setPickMode(k === "pick")}
+            style={{ flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, border: `1px solid ${headerColor}`, background: (k === "pick") === pickMode ? headerColor : "#FFFFFF", color: (k === "pick") === pickMode ? "#FFFFFF" : headerColor }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {pickMode && (
+        <div className="no-print" style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 10, marginBottom: 10 }}>
+          <input
+            value={pickSearch}
+            onChange={(e) => setPickSearch(e.target.value)}
+            placeholder="Search player…"
+            style={{ width: "100%", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 6, boxSizing: "border-box", fontFamily: "inherit" }}
+          />
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {[...cards].sort((a, b) => a.title.localeCompare(b.title))
+              .filter((c) => !pickSearch.trim() || c.title.toLowerCase().includes(pickSearch.trim().toLowerCase()))
+              .map((c) => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}>
+                  <input type="checkbox" checked={picked.has(c.id)} onChange={() => togglePick(c.id)} />
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{c.title}</span>
+                  <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{c.time}</span>
+                </label>
+              ))}
+          </div>
+          {picked.size > 0 && (
+            <button onClick={() => setPicked(new Set())} style={{ marginTop: 6, background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>Clear selection</button>
+          )}
+        </div>
+      )}
+      <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
+        {sortedCards.length} card{sortedCards.length === 1 ? "" : "s"} for {roundLabel}, in tee-time order — {pairs.length} sheet{pairs.length === 1 ? "" : "s"} of A4, two A5 cards to a sheet
+        (cut across the middle). Set Scale to 100% and Margins to "Default". Yardages come from Course setup; a card shows the yards for its player's tee.
+      </div>
+      {cards.length === 0 ? (
+        <div style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>No players in the draw for this day yet.</div>
+      ) : sortedCards.length === 0 ? (
+        <div className="no-print" style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>Tick the players whose cards you want to print.</div>
+      ) : (
+        pairs.map((pr, i) => (
+          <div className="scorecard-sheet" key={i}>
+            {pr.map(card)}
+          </div>
+        ))
+      )}
+      <style>{`
+        .scorecard-sheet { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+        .scorecard { background: #FFFFFF; border: 1px dashed #B5AF9A; padding: 6mm 7mm; font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif; color: #000; box-sizing: border-box; }
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4 portrait; margin: 0; }
+          html, body { margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
+          .scorecard-sheet { display: block; width: 210mm; height: 297mm; margin: 0 !important; overflow: hidden; break-after: page; page-break-after: always; }
+          .scorecard-sheet:last-of-type { break-after: auto; page-break-after: auto; }
+          .scorecard { border: none; width: 210mm; height: 148.5mm; padding: 9mm 10mm 8mm; overflow: hidden; }
+          .scorecard + .scorecard { border-top: 0.4px dashed #999; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function PrintLabels({ societyRoster = [], course, players, draw, roundDateDisplay, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, accentColor }) {
   const strokeHolesFor = (ph) =>
     course.holes
@@ -7749,7 +7996,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -7934,6 +8181,19 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
       >
         <Printer size={14} />
         <span style={{ flex: 1, textAlign: "left" }}>Print scorecard labels</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+
+      <button
+        onClick={onOpenPrintCards}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <Printer size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Print scorecards (one per player, shots marked)</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
 
@@ -9708,6 +9968,55 @@ function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor
         </div>
         {holeGrid(OUT, "Out")}
         {holeGrid(IN, "In")}
+      </div>
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 4 }}>
+          Yardages (optional)
+        </div>
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 10 }}>
+          Only used on printed scorecards — a card shows the yards for the tee its player is on. Leave blank and the card
+          simply has no yardage column. Saved with the course in the library.
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: "4px 6px", color: "#8A8774", fontWeight: 700 }}>Hole</th>
+                {course.tees.map((t) => <th key={t.id} style={{ textAlign: "center", padding: "4px 6px", color: "#8A8774", fontWeight: 700, whiteSpace: "nowrap" }}>{t.label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {course.holes.map((h, idx) => (
+                <tr key={idx} style={{ borderTop: "1px solid #EFEDE0" }}>
+                  <td className="mono" style={{ padding: "3px 6px", fontWeight: 700, color: headerColor }}>{idx + 1}</td>
+                  {course.tees.map((t) => (
+                    <td key={t.id} style={{ padding: "3px 4px" }}>
+                      <input
+                        className="mono scoreInput" type="number" inputMode="numeric"
+                        value={(h.yards && h.yards[t.id]) ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value === "" ? "" : Math.max(0, Math.round(Number(e.target.value)));
+                          const holes = course.holes.map((hh, i) => (i === idx ? { ...hh, yards: { ...(hh.yards || {}), [t.id]: v } } : hh));
+                          onUpdate({ holes });
+                        }}
+                        style={{ width: 62, textAlign: "center", padding: "4px 0", borderRadius: 5, border: "1px solid #D8D4C0", fontSize: 12 }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              <tr style={{ borderTop: "2px solid #D8D4C0" }}>
+                <td style={{ padding: "4px 6px", fontWeight: 700, color: "#8A8774" }}>Total</td>
+                {course.tees.map((t) => (
+                  <td key={t.id} className="mono" style={{ textAlign: "center", padding: "4px 6px", fontWeight: 700 }}>
+                    {course.holes.reduce((n, hh) => n + (Number(hh.yards && hh.yards[t.id]) || 0), 0) || ""}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
