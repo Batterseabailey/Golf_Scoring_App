@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 78";
+const APP_VERSION = "21 Sep 2026 · build 81";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -8555,7 +8555,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     if (ownLocked(idx)) return;
     const clean = Math.max(0, Math.round(Number(v)));
     ownTouchedAt.current[idx] = Date.now();
-    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 6000);
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 10000);
     updateOwnCard({ scores: ownCard.scores.map((s0, i) => (i === idx ? clean : s0)) });
     setOwnPadHole(ownNextOpen(idx));
   };
@@ -8602,7 +8602,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     const num = Number(raw);
     const clean = raw === "" || isNaN(num) ? "" : Math.max(0, Math.round(num));
     ownTouchedAt.current[idx] = Date.now();
-    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 6000);
+    if (Date.now() <= ownEditUntil) setOwnEditUntil(Date.now() + 10000);
     updateOwnCard({ scores: ownCard.scores.map((v, i) => (i === idx ? clean : v)) });
     if (ownTimers.current[idx]) clearTimeout(ownTimers.current[idx]);
     if (raw === "") return;
@@ -8662,7 +8662,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   // are always live, so the next hole can simply be typed in. After 10
   // quiet seconds (5) the keyboard is also put away, so nothing is left armed.
   const LOCK_AFTER_MS = 3000;   // a freshly entered score locks after 3 quiet seconds
-  const EDIT_WINDOW_MS = 6000;  // ...but "Edit scores" keeps the card open for 6 seconds after every change
+  const EDIT_WINDOW_MS = 10000; // ...but "Edit a score" keeps the card open for 10 seconds after every tap
   const touchedAt = useRef({});           // hole index -> when it was last typed
   const lastActivityAt = useRef(Date.now());
   const [editUntil, setEditUntil] = useState(0);
@@ -8756,14 +8756,17 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const chooseFromPad = (idx, v) => {
     if (isLocked(idx)) return;
     handleChangeNoFocus(idx, String(v));
-    setPadHole(nextOpenHole(idx));
+    // While editing, stay on the card rather than marching on: the pad
+    // moves to the next hole only when filling in a fresh card.
+    setPadHole(Date.now() <= editUntil ? null : nextOpenHole(idx));
   };
   const tapHole = (idx) => {
     if (reviewing) return;
     if (isLocked(idx)) { setLockHint(true); return; }
     lastActivityAt.current = Date.now();
+    if (Date.now() <= editUntil) setEditUntil(Date.now() + EDIT_WINDOW_MS); // every tap while editing keeps the card open
     setTypingHole(null);
-    setPadHole(padHole === idx ? null : idx);
+    setPadHole(idx);
   };
 
   const scorePad = (idx) => {
@@ -8845,6 +8848,8 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 // shot hole: red ring (thicker once a live score is in it). open: accent ring.
                 border: open
                   ? `3px solid ${headerColor}`
+                  : editing
+                  ? `2px dashed ${headerColor}`
                   : shots > 0 && !isLocked(idx)
                   ? `${val !== "" ? 2 : 1.5}px solid #C00000`
                   : val !== "" && !isLocked(idx) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
@@ -9030,13 +9035,43 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </div>
         </div>
       )}
-      {!reviewing && padHole === null && typingHole === null && (
-        <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>Tap a hole to enter its score.</div>
+      {!reviewing && publicMode && (() => {
+        const firstEmpty = (Array.isArray(player.scores) ? player.scores : []).findIndex((v) => v === "" || v == null);
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, minHeight: 44 }}>
+            <button
+              onClick={() => { if (firstEmpty >= 0) { setTypingHole(null); setPadHole(firstEmpty); } }}
+              disabled={firstEmpty < 0}
+              style={{
+                flex: 1, padding: "11px 8px", borderRadius: 9, border: "none", fontWeight: 800, fontSize: 14,
+                background: firstEmpty >= 0 ? headerColor : "#D8D4C0", color: "#FFFFFF",
+              }}
+            >
+              {firstEmpty >= 0 ? `▶ Continue from hole ${firstEmpty + 1}` : "All 18 holes entered"}
+            </button>
+            <button
+              onClick={() => { lastActivityAt.current = Date.now(); setLockHint(false); setEditUntil(editing ? 0 : Date.now() + EDIT_WINDOW_MS); if (editing) touchedAt.current = {}; }}
+              style={{
+                padding: "11px 12px", borderRadius: 9, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap",
+                border: `1px solid ${headerColor}`, background: editing ? "#FFFFFF" : `${headerColor}14`, color: headerColor,
+              }}
+            >
+              {editing ? "Lock now" : "Edit a score"}
+            </button>
+          </div>
+        );
+      })()}
+      {!reviewing && publicMode && (editing || lockHint) && (
+        <div style={{ fontSize: 12, fontWeight: 700, color: editing ? "#6B4E00" : "#B5442E", background: editing ? "#FFF6E0" : "#FDF2EF", borderRadius: 8, padding: "7px 10px", marginBottom: 8 }}>
+          {editing
+            ? "Editing — every hole is open. Tap one, pick the score. They lock again 10 seconds after your last tap, or tap Lock now."
+            : "That hole is locked. Tap \"Edit a score\" above, then the hole."}
+        </div>
       )}
       {six([1, 2, 3, 4, 5, 6])}
       {six([7, 8, 9, 10, 11, 12])}
       {six([13, 14, 15, 16, 17, 18])}
-      {!reviewing && (anyLocked || editing) && (
+      {!reviewing && !publicMode && (anyLocked || editing) && (
         <div
           style={{
             display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 10px", borderRadius: 9,
@@ -9046,7 +9081,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <Lock size={15} color={editing ? "#8A5A00" : "#8A8774"} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, fontSize: 11.5, color: editing ? "#6B4E00" : "#6B6B5F", fontWeight: lockHint ? 700 : 400 }}>
             {editing
-              ? "Editing — scored holes are live. They lock again 6 seconds after your last change."
+              ? "Editing — scored holes are live. They lock again 10 seconds after your last change."
               : lockHint
               ? "That hole is locked. Tap Edit scores to change it."
               : "Entered scores are locked so they can't be changed by accident."}
@@ -9153,7 +9188,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               {ownCard.scores.some((v) => v !== "") && (
                 <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
                   <button
-                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 6000); if (editing) ownTouchedAt.current = {}; }}
+                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 10000); if (editing) ownTouchedAt.current = {}; }}
                     style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
                   >
                     {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
