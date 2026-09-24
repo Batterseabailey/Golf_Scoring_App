@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 96";
+const APP_VERSION = "21 Sep 2026 · build 97";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2568,6 +2568,22 @@ function AppInner() {
   // changed" and "format just switched to Foursomes" triggers, so pairs
   // stay correct automatically in either case, with no manual step.
   const syncPairsFromDraw = (currentPlayers, currentDraw) => mergedPairsFromDraw(currentPlayers, currentDraw, course);
+
+  // Self-check on a Foursomes day: the stored pairs must match the draw's
+  // slots exactly (A alone / C & D, never A & C / D). If they've drifted —
+  // a draw saved before slot positions were kept, say — an organiser's
+  // device quietly rebuilds them from the draw. Scores stay with pairs
+  // that are unchanged. Only organiser devices do this, so a room full of
+  // players' phones can't all try to fix it at once.
+  useEffect(() => {
+    if (!adminVisible || !isFoursomes || draw.length === 0 || loading) return;
+    const key = (p) => [normalizeName(p.name), normalizeName(p.partnerName)].join("|");
+    const merged = mergedPairsFromDraw(players, draw, course);
+    const a = players.filter((p) => p.name).map(key).sort().join(";");
+    const b = merged.filter((p) => p.name).map(key).sort().join(";");
+    if (a !== b) updateRound({ players: merged });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRoundId, draw, isFoursomes, adminVisible, loading]);
 
   const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
