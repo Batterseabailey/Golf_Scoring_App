@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 91";
+const APP_VERSION = "21 Sep 2026 · build 94";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2478,10 +2478,17 @@ function AppInner() {
   // cleared, leaving the primary in place.
   const withdrawPlayer = (name) => {
     const target = normalizeName(name);
-    const newDraw = draw.map((entry) => ({
-      ...entry,
-      players: (entry.players || []).filter((n) => normalizeName(n) !== target),
-    }));
+    // On a Foursomes day the withdrawn player's SLOT is left empty rather
+    // than closed up — so if B withdraws from A B | C D, A plays alone and
+    // C & D stay a pair (exactly as the Build tab shows it), instead of
+    // everyone sliding along into A C | D.
+    const newDraw = draw.map((entry) => {
+      const names = entry.players || [];
+      if (!isFoursomes) return { ...entry, players: names.filter((n) => normalizeName(n) !== target) };
+      const kept = names.map((n) => (normalizeName(n) === target ? "" : n));
+      while (kept.length > 0 && !kept[kept.length - 1]) kept.pop();
+      return { ...entry, players: kept };
+    });
     const newPlayers = players
       .map((p) => {
         if (normalizeName(p.name) === target) {
@@ -2630,8 +2637,31 @@ function AppInner() {
     save((prev) => ({ societyRoster: [...prev.societyRoster, { id: crypto.randomUUID(), name: "", index: "", tee: course.tees[0]?.label || "" }] }));
   };
 
+  // A handicap changed on the Society roster carries through to every day
+  // that player hasn't yet played (no scores entered for them there) — so
+  // upcoming competitions pick up the new figure automatically, while a
+  // day already played keeps the handicap it was played off.
   const updateSocietyMember = (id, patch) => {
-    save((prev) => ({ societyRoster: prev.societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+    save((prev) => {
+      const member = prev.societyRoster.find((m) => m.id === id);
+      const roster = prev.societyRoster.map((m) => (m.id === id ? { ...m, ...patch } : m));
+      if (!member || !("index" in patch) || !member.name) return { societyRoster: roster };
+      const target = normalizeName(member.name);
+      const newIndex = patch.index;
+      const played = (p) => (p.scores || []).some((v) => v !== "" && v != null);
+      return {
+        societyRoster: roster,
+        rounds: prev.rounds.map((r) => ({
+          ...r,
+          players: r.players.map((p) => {
+            if (played(p)) return p;
+            if (normalizeName(p.name) === target) return { ...p, index: newIndex };
+            if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex };
+            return p;
+          }),
+        })),
+      };
+    });
   };
 
   // Empties the Society roster in one go (it only ever removes the ids it
@@ -6065,7 +6095,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
           </div>
           {row.slots.some(Boolean) && (
             <div style={{ fontSize: 12.5, color: "#1B1B1B", marginTop: 8, lineHeight: 1.5 }}>
-              {formatGroupLines(row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts).map((line, i) => (
+              {formatGroupLines(isFoursomes ? row.slots.map((n) => n || "") : row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts).map((line, i) => (
                 <div key={i}>{withBoldFigures(line)}</div>
               ))}
             </div>
@@ -6281,7 +6311,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
     const target = normalizeName(name);
     for (const entry of draw) {
       const names = entry.players || [];
-      if (names.some((n) => normalizeName(n) === target)) return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => normalizeName(n) !== target) };
+      if (names.some((n) => normalizeName(n) === target)) return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => n && normalizeName(n) !== target) };
     }
     return null;
   };
@@ -6545,7 +6575,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
     for (const entry of draw) {
       const names = entry.players || [];
       if (names.some((n) => normalizeName(n) === target)) {
-        return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => normalizeName(n) !== target) };
+        return { time: entry.time, startTee: entry.startTee || "", others: names.filter((n) => n && normalizeName(n) !== target) };
       }
     }
     return null;
@@ -7531,8 +7561,8 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
           Every member of your society, entered once with their current handicap. When building a day's draw, pull
           people straight in from here instead of re-typing or re-pasting names each time — this list is completely
-          separate from any single day's own player list, and updating it here doesn't change anyone already added
-          to a day.
+          separate from any single day's own player list. A handicap changed here carries through to every day the
+          player hasn't yet played; a day already played keeps the handicap it was played off.
         </div>
 
         {!pasteOpen ? (
