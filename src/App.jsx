@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 89";
+const APP_VERSION = "21 Sep 2026 · build 91";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -458,6 +458,23 @@ function readOwnCard(code, roundId) {
 }
 function writeOwnCard(code, roundId, card) {
   try { window.localStorage.setItem(ownCardKey(code, roundId), JSON.stringify(card)); } catch { /* ignore */ }
+}
+
+// ---- Remembering the card being marked on this phone ----
+// So that closing the app mid-round, or wandering off to the leaderboard,
+// never loses the way back: a "Continue scoring" button brings the card
+// straight back up until it's completed.
+function markingKey(code, roundId) {
+  return `golf-marking-${code}-${roundId}`;
+}
+function readMarking(code, roundId) {
+  try { return window.localStorage.getItem(markingKey(code, roundId)) || ""; } catch { return ""; }
+}
+function writeMarking(code, roundId, playerId) {
+  try {
+    if (playerId) window.localStorage.setItem(markingKey(code, roundId), playerId);
+    else window.localStorage.removeItem(markingKey(code, roundId));
+  } catch { /* ignore */ }
 }
 
 // What the leaderboards are allowed to see of a player: their real card
@@ -2305,6 +2322,7 @@ function AppInner() {
     // (a test that was wiped, say) would spring back to life with the
     // first new score. Opening an empty card for entry starts it afresh.
     const stale = !!card.submitted && !awaitingSignature(card);
+    if (modeRef.current === "entry") writeMarking(eventCodeRef.current, activeRoundId, id);
     updateRound((prevRound) => ({
       players: prevRound.players.map((p) => (p.id === id ? { ...p, entryLock: { by: deviceId, claimedAt: now, at: now }, ...(stale ? { submitted: false, submittedBy: null, submittedAt: null } : {}) } : p)),
     }), { immediate: true });
@@ -3148,6 +3166,22 @@ function AppInner() {
     });
 
   const active = players.find((p) => p.id === activeId);
+  // The card this phone was marking, if it's still open for entry.
+  const resumeCard = (() => {
+    if (!eventCode || !activeRound.publicScoreEntry || isMatchPlay) return null;
+    const id = readMarking(eventCode, activeRoundId);
+    if (!id) return null;
+    const card = players.find((p) => p.id === id);
+    if (!card || isScoreComplete(card) || awaitingSignature(card)) { writeMarking(eventCode, activeRoundId, ""); return null; }
+    return card;
+  })();
+  const resumeScoring = () => {
+    if (!resumeCard) return;
+    setEntryNotice("");
+    setShowCourseSetup(false);
+    setMode("entry");
+    setTimeout(() => claimCard(resumeCard.id), 0);
+  };
 
   // The "N players" figure in the header counts PEOPLE actually playing:
   // everyone placed in the draw once there is one (so anyone still sitting
@@ -3236,6 +3270,20 @@ function AppInner() {
           <div style={{ fontSize: 11, color: "#F1EFE3", background: "rgba(181,68,46,0.85)", borderRadius: 6, padding: "4px 8px", marginTop: 8 }}>
             Last change didn't save — check your connection and try again.
           </div>
+        )}
+
+        {resumeCard && !(mode === "entry" && activeId === resumeCard.id) && (
+          <button
+            onClick={resumeScoring}
+            style={{
+              marginTop: 12, width: "100%", padding: "12px 12px", borderRadius: 9, border: "2px solid #F1EFE3",
+              background: "#F1EFE3", color: headerColor, fontWeight: 800, fontSize: 14, textAlign: "left",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+            }}
+          >
+            <span>▶ Continue scoring — {resumeCard.partnerName ? `${resumeCard.name} & ${resumeCard.partnerName}` : resumeCard.name}'s card</span>
+            <ChevronRight size={16} />
+          </button>
         )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
@@ -8938,8 +8986,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const ownPad = (idx) => {
     const par = Number(course.holes[idx].par) || 4;
     const val = ownCard.scores[idx];
-    const vals = [];
-    for (let v = Math.max(1, par - 2); v <= par + 4; v++) vals.push(v);
+    const vals = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     const btn = (label, v, muted) => (
       <button
         key={label}
@@ -8960,14 +9007,15 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           <span style={{ fontSize: 12, fontWeight: 700, color: headerColor }}>My hole {idx + 1} · Par {par}{ownShots(idx) > 0 ? ` · ${ownShots(idx)} shot${ownShots(idx) > 1 ? "s" : ""}` : ""}</span>
           <button onClick={() => setOwnPadHole(null)} style={{ background: "none", border: "none", color: "#8A8774", fontSize: 12, padding: 0 }}>Close</button>
         </div>
-        <div style={{ display: "flex", gap: 5 }}>{vals.map((v) => btn(String(v), v, false))}</div>
+        <div style={{ display: "flex", gap: 4 }}>{vals.map((v) => btn(String(v), v, false))}</div>
         <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
           {btn("0 · picked up", 0, true)}
+          {btn("10", 10, true)}
           <button
             onClick={() => { setOwnTypingHole(idx); setOwnPadHole(null); setTimeout(() => { const el = ownRefs.current[idx]; if (el) { el.focus(); el.select?.(); } }, 0); }}
             style={{ flex: 1, padding: "10px 0", borderRadius: 9, fontSize: 12.5, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F" }}
           >
-            Keyboard (other score)
+            Keyboard
           </button>
         </div>
       </div>
@@ -9026,7 +9074,21 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   // phone's keyboard. Tap one and the pad moves on to the next hole by
   // itself. "Keyboard" on the pad switches to typing for that hole (for a
   // score off the end of the pad).
-  const [padHole, setPadHole] = useState(null);        // hole index the pad is open for
+  const [padHole, setPadHole] = useState(() => {
+    // Opens straight onto the next hole to be scored, so there's nothing to
+    // hunt for when coming back to a card.
+    if (!publicMode || (publicMode && awaitingSignature(player))) return null;
+    const sc = Array.isArray(player.scores) ? player.scores : [];
+    const first = sc.findIndex((v) => v === "" || v == null);
+    return first >= 0 ? first : null;
+  });        // hole index the pad is open for
+  const padRef = useRef(null);
+  useEffect(() => {
+    // Keep the open pad (and its row of holes) in view as it moves on.
+    if (padHole === null || !padRef.current) return;
+    const t = setTimeout(() => { try { padRef.current.scrollIntoView({ block: "center", behavior: "smooth" }); } catch { /* ignore */ } }, 30);
+    return () => clearTimeout(t);
+  }, [padHole]);
   const [typingHole, setTypingHole] = useState(null);  // hole index using the keyboard instead
 
   // ---- Pocket-proofing ----
@@ -9119,12 +9181,9 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     }
   };
 
-  const padValuesFor = (idx) => {
-    const par = Number(course.holes[idx].par) || 4;
-    const vals = [];
-    for (let v = Math.max(1, par - 2); v <= par + 4; v++) vals.push(v);
-    return vals;
-  };
+  // The pad always shows 1 to 9 in the same places, so a thumb learns
+  // where "5" is; only the highlight moves to that hole's par.
+  const padValuesFor = () => [1, 2, 3, 4, 5, 6, 7, 8, 9];
   const nextOpenHole = (idx) => {
     for (let i = idx + 1; i < 18; i++) if (!isLocked(i)) return i;
     return null;
@@ -9153,7 +9212,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         key={label}
         onClick={() => chooseFromPad(idx, v)}
         style={{
-          flex: 1, minWidth: 0, padding: "13px 0", borderRadius: 9, fontSize: 18, fontWeight: 800,
+          flex: 1, minWidth: 0, padding: "13px 0", borderRadius: 8, fontSize: 18, fontWeight: 800,
           border: `2px solid ${v === par ? headerColor : opts.muted ? "#D8D4C0" : "#B5AF9A"}`,
           background: String(val) === String(v) && val !== "" ? headerColor : v === par ? `${headerColor}14` : "#FFFFFF",
           color: String(val) === String(v) && val !== "" ? "#FFFFFF" : opts.muted ? "#8A8774" : "#1B1B1B",
@@ -9163,23 +9222,24 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       </button>
     );
     return (
-      <div style={{ gridColumn: "1 / -1", background: "#FFFFFF", border: `1px solid ${headerColor}`, borderRadius: 10, padding: "8px 8px 6px", marginTop: 2 }}>
+      <div ref={padRef} style={{ gridColumn: "1 / -1", background: "#FFFFFF", border: `1px solid ${headerColor}`, borderRadius: 10, padding: "8px 8px 6px", marginTop: 2 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: headerColor }}>
             Hole {idx + 1} · Par {par}{strokesOnHole(course, ph, idx) > 0 ? ` · ${strokesOnHole(course, ph, idx)} shot${strokesOnHole(course, ph, idx) > 1 ? "s" : ""}` : ""}
           </span>
           <button onClick={() => setPadHole(null)} style={{ background: "none", border: "none", color: "#8A8774", fontSize: 12, padding: 0 }}>Close</button>
         </div>
-        <div style={{ display: "flex", gap: 5 }}>
+        <div style={{ display: "flex", gap: 4 }}>
           {padValuesFor(idx).map((v) => btn(String(v), v))}
         </div>
         <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
           {btn("0 · picked up", 0, { muted: true })}
+          {btn("10", 10, { muted: true })}
           <button
             onClick={() => { setTypingHole(idx); setPadHole(null); setTimeout(() => { const el = inputRefs.current[idx]; if (el) { el.focus(); el.select?.(); } }, 0); }}
             style={{ flex: 1, padding: "10px 0", borderRadius: 9, fontSize: 12.5, fontWeight: 700, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F" }}
           >
-            Keyboard (other score)
+            Keyboard
           </button>
         </div>
       </div>
@@ -9444,9 +9504,22 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
             : "That hole is locked. Tap \"Edit a score\" above, then the hole."}
         </div>
       )}
-      {six([1, 2, 3, 4, 5, 6])}
-      {six([7, 8, 9, 10, 11, 12])}
-      {six([13, 14, 15, 16, 17, 18])}
+      {publicMode ? (
+        <div style={{ background: "#FFFFFF", border: `2px solid ${headerColor}`, borderRadius: 12, padding: "0 10px 6px", marginBottom: 12 }}>
+          <div style={{ margin: "0 -10px 10px", padding: "8px 12px", background: headerColor, color: "#FFFFFF", borderRadius: "10px 10px 0 0", fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name} — the card you are marking
+          </div>
+          {six([1, 2, 3, 4, 5, 6])}
+          {six([7, 8, 9, 10, 11, 12])}
+          {six([13, 14, 15, 16, 17, 18])}
+        </div>
+      ) : (
+        <>
+          {six([1, 2, 3, 4, 5, 6])}
+          {six([7, 8, 9, 10, 11, 12])}
+          {six([13, 14, 15, 16, 17, 18])}
+        </>
+      )}
       {!reviewing && !publicMode && (anyLocked || editing) && (
         <div
           style={{
@@ -9500,12 +9573,12 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       })()}
 
       {publicMode && !reviewing && ownCardStore && (
-        <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px dashed #B5AF9A", padding: 12, marginTop: 4, marginBottom: 10 }}>
+        <div style={{ background: "#F5F3E9", borderRadius: 12, border: "2px dashed #B5AF9A", padding: 12, marginTop: 4, marginBottom: 10 }}>
           <button
             onClick={() => setShowOwnCard((v) => !v)}
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}
           >
-            <span style={{ fontSize: 14, fontWeight: 800, color: headerColor }}>{ownCard.name ? `${ownCard.name} — Marker` : "Marker's own card — choose your name"}</span>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#6B6B5F", letterSpacing: "0.04em", textTransform: "uppercase" }}>{ownCard.name ? `${ownCard.name} — your own card (marker)` : "Your own card (marker) — choose your name"}</span>
             <ChevronRight size={15} color="#9B9885" style={{ transform: showOwnCard ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
           </button>
           {showOwnCard && (
