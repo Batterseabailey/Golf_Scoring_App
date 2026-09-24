@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 85";
+const APP_VERSION = "21 Sep 2026 · build 86";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -6198,21 +6198,21 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
   const formatLine = `${scoring === "medal" ? "Medal" : "Stableford"}${isFoursomes ? " Foursomes" : ""} · ${handicapAllowance}% allowance`;
 
   const nineTable = (c, holes) => {
-    const th = { padding: "3px 4px", fontSize: 8.5, fontWeight: 700, borderBottom: "1.5px solid #000", textAlign: "center", whiteSpace: "nowrap" };
-    const td = { padding: "0 4px", fontSize: 10.5, borderBottom: "0.6px solid #777", textAlign: "center", height: "7.1mm", lineHeight: 1 };
+    const th = { padding: "3px 3px", fontSize: "10pt", fontWeight: 700, borderBottom: "1.5px solid #000", textAlign: "center", whiteSpace: "nowrap" };
+    const td = { padding: "0 3px", fontSize: "10pt", borderBottom: "0.6px solid #777", textAlign: "center", height: "7.6mm", lineHeight: 1 };
     const label = holes[0] === 1 ? "Out" : "In";
     const sum = (f) => holes.reduce((n, h) => n + (Number(f(h - 1)) || 0), 0);
     return (
       <table style={{ borderCollapse: "collapse", width: "100%", tableLayout: "fixed" }}>
         <thead>
           <tr>
-            <th style={{ ...th, width: "12%" }}>Hole</th>
-            {c.yards && <th style={{ ...th, width: "18%" }}>Yards</th>}
-            <th style={{ ...th, width: "12%" }}>Par</th>
-            <th style={{ ...th, width: "12%" }}>S.I.</th>
+            <th style={{ ...th, width: "11%" }}>Hole</th>
+            {c.yards && <th style={{ ...th, width: "15%" }}>Yards</th>}
+            <th style={{ ...th, width: "10%" }}>Par</th>
+            <th style={{ ...th, width: "10%" }}>S.I.</th>
             <th style={{ ...th }}>Score</th>
             <th style={{ ...th, width: "13%" }}>Shots</th>
-            <th style={{ ...th, width: "15%" }}>{scoring === "medal" ? "Nett" : "Pts"}</th>
+            <th style={{ ...th, width: "14%" }}>{scoring === "medal" ? "Nett" : "Pts"}</th>
           </tr>
         </thead>
         <tbody>
@@ -6224,10 +6224,10 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
                 {c.yards && <td className="mono" style={td}>{c.yards[i] ?? ""}</td>}
                 <td className="mono" style={td}>{course.holes[i].par}</td>
                 <td className="mono" style={td}>{course.holes[i].si}</td>
-                <td className="mono" style={{ ...td, position: "relative", fontWeight: 800, fontSize: 12, borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+                <td className="mono" style={{ ...td, position: "relative", fontWeight: 800, fontSize: "12pt", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
                   {c.scores[i] !== "" && c.scores[i] != null ? (isPickedUp(c.scores[i]) ? "–" : c.scores[i]) : ""}
                   {c.shots[i] > 0 && (
-                    <span style={{ position: "absolute", top: 1, right: 3, fontSize: 11, fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+                    <span style={{ position: "absolute", top: 1, right: 2, fontSize: "9pt", fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
                       {"*".repeat(c.shots[i])}
                     </span>
                   )}
@@ -6248,11 +6248,11 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
             {c.yards && <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.yards[i]) || ""}</td>}
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => course.holes[i].par)}</td>
             <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
-            <td className="mono" style={{ ...td, fontWeight: 800, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: "12pt", borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
               {c.hasScores && !holes.some((h) => isPickedUp(c.scores[h - 1])) && holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? sum((i) => c.scores[i]) : c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : ""}
             </td>
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.shots[i]) || ""}</td>
-            <td className="mono" style={{ ...td, fontWeight: 800, borderBottom: "1.5px solid #000" }}>
+            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: "12pt", borderBottom: "1.5px solid #000" }}>
               {c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null)
                 ? (scoring === "medal"
                     ? (holes.some((h) => isPickedUp(c.scores[h - 1])) || !holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : sum((i) => Number(c.scores[i]) - c.shots[i]))
@@ -6270,20 +6270,20 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
         <SocietyLogo orgName={orgName} height={34} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{orgName}</div>
-          <div style={{ fontSize: 10.5 }}>{[eventName, roundLabel].filter(Boolean).join(" — ")}</div>
+          <div style={{ fontSize: "13pt", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{orgName}</div>
+          <div style={{ fontSize: "10pt" }}>{[eventName, roundLabel].filter(Boolean).join(" — ")}</div>
         </div>
-        <div style={{ textAlign: "right", fontSize: 9.5, lineHeight: 1.3 }}>
+        <div style={{ textAlign: "right", fontSize: "10pt", lineHeight: 1.3 }}>
           <div>{course.name}</div>
           <div>{roundDateDisplay}{c.time ? ` · ${c.time}` : ""}{c.startTee ? ` · ${c.startTee}` : ""}</div>
         </div>
       </div>
       <div style={{ borderTop: `1.5px solid ${BRAND.printColor}`, borderBottom: "0.6px solid #777", padding: "3px 0", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800 }}>{c.title}</div>
-          {c.others.length > 0 && <div style={{ fontSize: 9.5, color: "#333" }}>Playing with {c.others.join(", ")}</div>}
+          <div style={{ fontSize: "15pt", fontWeight: 800 }}>{c.title}</div>
+          {c.others.length > 0 && <div style={{ fontSize: "10pt", color: "#333" }}>Playing with {c.others.join(", ")}</div>}
         </div>
-        <div style={{ textAlign: "right", fontSize: 10, lineHeight: 1.35 }}>
+        <div style={{ textAlign: "right", fontSize: "10pt", lineHeight: 1.35 }}>
           <div style={{ fontWeight: 800 }}>{c.hcp} — Playing {c.ph}{c.adjusted ? "*" : ""}</div>
           <div>{formatLine}{c.tee ? ` · ${c.tee} tee` : ""}</div>
           {c.competition && <div style={{ fontWeight: 700 }}>{c.competition}</div>}
@@ -6293,7 +6293,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         <div style={{ flex: 1 }}>{nineTable(c, OUT)}</div>
         <div style={{ flex: 1 }}>{nineTable(c, IN)}</div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 5, fontSize: 9 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 5, fontSize: "10pt" }}>
         <div style={{ flex: 1 }}>
           {drawNote && drawNote.trim() && <div style={{ fontStyle: "italic", marginBottom: 3 }}>{drawNote}</div>}
           <div style={{ color: "#333" }}>* = stroke received on this hole{c.adjusted ? " · playing handicap adjusted for this competition" : ""}</div>
@@ -6312,8 +6312,8 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
               const pts = c.hasScores ? c.scores.reduce((n, v, i) => n + (holePoints(course, v, i, c.ph) || 0), 0) : "";
               return [["Gross", gross], ["Nett", nett], ["Points", pts]].map(([k, v]) => (
                 <tr key={k}>
-                  <td style={{ fontSize: 9, padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td>
-                  <td className="mono" style={{ border: "0.8px solid #000", width: "16mm", height: "6.5mm", textAlign: "center", fontSize: 13, fontWeight: 800 }}>{v}</td>
+                  <td style={{ fontSize: "10pt", padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td>
+                  <td className="mono" style={{ border: "0.8px solid #000", width: "18mm", height: "7mm", textAlign: "center", fontSize: "13pt", fontWeight: 800 }}>{v}</td>
                 </tr>
               ));
             })()}
@@ -6390,7 +6390,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
           html, body { margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
           .scorecard-sheet { display: block; width: 210mm; height: 297mm; margin: 0 !important; overflow: hidden; break-after: page; page-break-after: always; }
           .scorecard-sheet:last-of-type { break-after: auto; page-break-after: auto; }
-          .scorecard { border: none; width: 210mm; height: 148.5mm; padding: 9mm 10mm 8mm; overflow: hidden; }
+          .scorecard { border: none; width: 210mm; height: 148.5mm; padding: 7mm 9mm 6mm; overflow: hidden; }
           .scorecard + .scorecard { border-top: 0.4px dashed #999; }
         }
       `}</style>
