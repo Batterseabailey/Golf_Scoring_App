@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 86";
+const APP_VERSION = "21 Sep 2026 · build 89";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -372,6 +372,49 @@ function totals(course, player, allowancePct = 100, isFoursomes = false) {
   return { ph, pts, thru, netTotal, grossTotal, relToPar: netTotal - parSoFar, pickedUp, nr: pickedUp > 0 };
 }
 
+// ---- Countback ----
+// Level scores are separated on the last 9 holes, then the last 6, the
+// last 3 and the last hole. Stableford: most points over those holes
+// wins. Medal: lowest net over them wins. Returns the four figures in
+// that order (null if the card doesn't cover them), and a comparator
+// that ranks a whole row — main score first, then countback — with
+// anyone not started at the bottom. Cards still level after all four
+// stages stay level and share the position.
+function countback(course, player, ph, isMedal) {
+  const scores = Array.isArray(player.scores) ? player.scores : [];
+  const segment = (from) => {
+    let v = 0;
+    for (let i = from; i < 18; i++) {
+      const g = scores[i];
+      if (g === "" || g == null) return null;
+      if (isMedal) {
+        if (isPickedUp(g)) return null;
+        v += Number(g) - strokesOnHole(course, ph, i);
+      } else {
+        v += holePoints(course, g, i, ph) || 0;
+      }
+    }
+    return v;
+  };
+  return [segment(9), segment(12), segment(15), segment(17)];
+}
+function compareWithCountback(a, b, isMedal) {
+  if (a.sortValue === null && b.sortValue === null) return a.name.localeCompare(b.name);
+  if (a.sortValue === null) return 1;
+  if (b.sortValue === null) return -1;
+  if (a.sortValue !== b.sortValue) return isMedal ? a.sortValue - b.sortValue : b.sortValue - a.sortValue;
+  for (let i = 0; i < 4; i++) {
+    const x = a.countback ? a.countback[i] : null, y = b.countback ? b.countback[i] : null;
+    if (x === null || y === null || x === y) continue;
+    return isMedal ? x - y : y - x;
+  }
+  return 0;
+}
+// True when two adjacent, already-sorted rows are still level after countback.
+function stillLevel(a, b, isMedal) {
+  return a.sortValue !== null && b.sortValue !== null && compareWithCountback(a, b, isMedal) === 0;
+}
+
 // A card only counts towards any leaderboard once Admin has pressed
 // COMPLETE on it — until then the scores are saved (nothing is lost if
 // you're interrupted halfway through a card) but stay private to Admin.
@@ -525,8 +568,9 @@ function pairPlayersFromDraw(players, draw, course) {
   draw.forEach((entry) => {
     const names = entry.players || [];
     for (let i = 0; i < names.length; i += 2) {
-      const nameA = names[i];
-      const nameB = names[i + 1];
+      // Slot-based: 1+2 are a pair, 3+4 a pair. An empty slot means the
+      // other name in that pair is playing alone.
+      const [nameA, nameB] = names.slice(i, i + 2).filter(Boolean);
       if (!nameA) continue;
       const pA = findIndividualByName(players, nameA);
       const pB = nameB ? findIndividualByName(players, nameB) : null;
@@ -622,7 +666,10 @@ function anyHandicapAdjusted(players) {
 // over while a draw is still being built).
 function foursomesPairs(names) {
   const pairs = [];
-  for (let i = 0; i < names.length; i += 2) pairs.push(names.slice(i, i + 2));
+  for (let i = 0; i < names.length; i += 2) {
+    const pair = names.slice(i, i + 2).filter(Boolean); // an empty slot = playing alone
+    if (pair.length > 0) pairs.push(pair);
+  }
   return pairs;
 }
 
@@ -655,7 +702,7 @@ function formatGroupNamesWithShots(names, course, rosterPlayers, allowancePct, i
   if (isFoursomes) {
     return foursomesPairs(names).map((pair) => pairText(pair, course, rosterPlayers, allowancePct, showIndex, showCH)).join(" v ");
   }
-  const each = names.map((n) => nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH));
+  const each = names.filter(Boolean).map((n) => nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH));
   if (each.length === 4) return `${each[0]} & ${each[1]} v ${each[2]} & ${each[3]}`;
   return each.join(" & ");
 }
@@ -690,7 +737,7 @@ function formatGroupLines(names, course, rosterPlayers, allowancePct, isFoursome
       return details ? `${main} – ${details}` : main;
     });
   }
-  return names.map((n) => {
+  return names.filter(Boolean).map((n) => {
     const main = nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, showCH);
     const details = detailsFor(n);
     return details ? `${main} – ${details}` : main;
@@ -3384,7 +3431,7 @@ function AppInner() {
               await load();
               claimCard(id);
             }}
-            onReview={async (id) => { await load(); setEntryNotice(""); setActiveId(id); }}
+            onReview={(id) => { setEntryNotice(""); setActiveId(id); load(); }}
             reminderKey={`golf-entry-reminder-${eventCode}-${activeRoundId}`}
             headerColor={headerColor}
             accentColor={accentColor}
@@ -3955,10 +4002,14 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
         // guards as This day's own filter: a record needs an actual name
         // (not a blank leftover) to count its competition tag, and
         // partnerCompetition only counts with a genuine partner name.
-        const combinedAbbrsInUse = new Set(
-          activeRounds.flatMap((r) => r.players.flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null])).filter(Boolean)
+        // Competitions belong to a day, so the buttons offered here are the
+        // ones set up on the day being viewed (and actually in use there) —
+        // not every competition from every day of the event.
+        const dayComps = (activeRound && activeRound.competitions) || [];
+        const dayAbbrsInUse = new Set(
+          playersOnDay(activeRound).flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null]).filter(Boolean).map((a) => a.toUpperCase())
         );
-        const combinedCompsInUse = competitions.filter((c) => combinedAbbrsInUse.has(c.abbreviation));
+        const combinedCompsInUse = dayComps.filter((c) => c.abbreviation && dayAbbrsInUse.has(c.abbreviation.toUpperCase()));
         if (combinedCompsInUse.length === 0) return null;
         return (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
@@ -4137,9 +4188,11 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
         netDisplay: complete ? t.netTotal : t.thru > 0 ? "NR" : "–",
         points: t.thru > 0 ? t.pts : null,
         thru: t.thru,
+        countback: countback(round.course, forLeaderboard(p), t.ph, round.scoring === "medal"),
       };
     });
 
+  const isMedalDay = round.scoring === "medal";
   const sortField = (row) => (sortBy === "name" ? row.name.toLowerCase() : row[sortBy]);
   const sorted = [...rows].sort((a, b) => {
     const av = sortField(a), bv = sortField(b);
@@ -4152,8 +4205,28 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
     }
     if (av < bv) return sortDir === "asc" ? -1 : 1;
     if (av > bv) return sortDir === "asc" ? 1 : -1;
+    // Level on the column being sorted: countback (last 9, 6, 3, 1) when
+    // that column is the day's deciding score — points on a Stableford
+    // day, net on a Medal day.
+    if ((sortBy === "points" && !isMedalDay) || (sortBy === "net" && isMedalDay)) {
+      return compareWithCountback({ ...a, sortValue: av }, { ...b, sortValue: bv }, isMedalDay);
+    }
     return 0;
-  }).map((row, i) => ({ ...row, rank: i + 1 }));
+  }).map((row, i, all) => {
+    // Shared position only when still level after countback (shown "3=").
+    const deciding = (sortBy === "points" && !isMedalDay) || (sortBy === "net" && isMedalDay);
+    let rank = i + 1;
+    if (deciding && i > 0) {
+      const prev = all[i - 1];
+      const pa = { ...prev, sortValue: sortField(prev) }, pb = { ...row, sortValue: sortField(row) };
+      if (stillLevel(pa, pb, isMedalDay)) rank = null; // filled in below from the previous row
+    }
+    return { ...row, rank };
+  }).map((row, i, all) => {
+    if (row.rank !== null) return row;
+    let j = i; while (j > 0 && all[j].rank === null) j--;
+    return { ...row, rank: all[j].rank, tied: true };
+  }).map((row, i, all) => ({ ...row, tied: row.tied || all.some((o, j) => j !== i && o.rank === row.rank && o.thru > 0 && row.thru > 0) }));
 
   const standings = search.trim()
     ? sorted.filter((row) => row.name.toLowerCase().includes(search.trim().toLowerCase()))
@@ -4253,7 +4326,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
         <tbody>
           {standings.map((row, i) => (
             <tr key={row.name} style={rs.row(i)}>
-              <td style={rs.pos}>{sortBy === "name" ? "" : row.thru > 0 ? ordinal(row.rank) : "–"}</td>
+              <td style={rs.pos}>{sortBy === "name" ? "" : row.thru > 0 ? `${ordinal(row.rank)}${row.tied ? "=" : ""}` : "–"}</td>
               <td style={rs.name}>{row.name} ({row.whs}/{row.ph}{row.adjusted ? "*" : ""})</td>
               {round.publicShowGross !== false && <td style={rs.num}>{row.grossDisplay}</td>}
               {round.publicShowNet !== false && <td style={rs.num}>{row.netDisplay}</td>}
@@ -4489,11 +4562,11 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   // from, and what the filter box searches against.
   const individualRows = draw
     .flatMap((entry) =>
-      (entry.players || []).map((name) => ({
+      (entry.players || []).filter(Boolean).map((name) => ({
         name,
         time: entry.time,
         tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
-        others: (entry.players || []).filter((n) => n !== name),
+        others: (entry.players || []).filter((n) => n && n !== name),
       }))
     )
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -5310,9 +5383,19 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
   const clearAllRows = () => setRows([{ id: crypto.randomUUID(), time: "", startTee: "", slots: [null, null, null, null] }]);
 
   const saveDraw = () => {
+    // On a Foursomes day the SLOT a name sits in matters: slots 1+2 are
+    // one pair and 3+4 the other. A gap is kept (as an empty name) so a
+    // player on his own stays where he was put, rather than being slid
+    // along to close the gap and paired with someone else.
+    const slotsFor = (r) => {
+      if (!isFoursomes) return r.slots.filter(Boolean);
+      const kept = r.slots.map((n) => n || "");
+      while (kept.length > 0 && !kept[kept.length - 1]) kept.pop();
+      return kept;
+    };
     const finalDraw = rows
       .filter((r) => r.time.trim() || r.slots.some(Boolean))
-      .map((r) => ({ id: r.id, time: r.time.trim(), startTee: (r.startTee || "").trim(), players: r.slots.filter(Boolean) }));
+      .map((r) => ({ id: r.id, time: r.time.trim(), startTee: (r.startTee || "").trim(), players: slotsFor(r) }));
     onUpdate(finalDraw);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
@@ -6893,22 +6976,21 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
         points: t.thru > 0 ? t.pts : null,
         // what the ranking is decided on: net for Medal, points otherwise
         sortValue: isMedal ? (complete ? t.netTotal : null) : (t.thru > 0 ? t.pts : null),
+        countback: countback(activeRound.course, forLeaderboard(p), t.ph, isMedal),
       };
     })
-    .sort((a, b) => {
-      if (a.sortValue === null && b.sortValue === null) return a.name.localeCompare(b.name);
-      if (a.sortValue === null) return 1;
-      if (b.sortValue === null) return -1;
-      return isMedal ? a.sortValue - b.sortValue : b.sortValue - a.sortValue;
-    });
-  // Level scores share a position ("3=") — the app doesn't do countback.
-  const withPositions = (rows, valueOf) => {
-    let lastValue = null, lastPos = 0;
+    .sort((a, b) => compareWithCountback(a, b, isMedal));
+  // Level scores are split by countback (last 9, 6, 3, 1); only cards
+  // still level after that share a position ("3=").
+  const withPositions = (rows, valueOf, useCountback) => {
+    let lastPos = 0;
     return rows.map((row, i) => {
       const v = valueOf(row);
       if (v === null) return { ...row, pos: "" };
-      const pos = v === lastValue ? lastPos : i + 1;
-      lastValue = v; lastPos = pos;
+      const prev = i > 0 ? rows[i - 1] : null;
+      const level = prev && valueOf(prev) !== null && (useCountback ? stillLevel(prev, row, isMedal) : valueOf(prev) === v);
+      const pos = level ? lastPos : i + 1;
+      lastPos = pos;
       return { ...row, pos };
     }).map((row, i, all) => {
       if (row.pos === "") return row;
@@ -6916,7 +6998,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
       return { ...row, pos: tied ? `${row.pos}=` : `${row.pos}` };
     });
   };
-  const dayRankedFor = (filter) => withPositions(dayRowsFor(filter), (r) => r.sortValue);
+  const dayRankedFor = (filter) => withPositions(dayRowsFor(filter), (r) => r.sortValue, true);
 
   // ---- Overall ----
   const overallRankedFor = (filter) => withPositions(
@@ -7000,7 +7082,9 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
       )}
       <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 14 }}>
         Preview below — prints on A4. Only cards marked COMPLETE are counted, the same as the live leaderboard.
-        Players level on {isMedal && view === "day" ? "net score" : "points"} share a position (shown as "3="); any countback is for you to apply.
+        {view === "day"
+          ? `Level ${isMedal ? "net scores" : "points"} are split by countback — last 9 holes, then last 6, last 3 and the last hole; only cards still level after that share a position (shown as "3=").`
+          : `Players level on total points share a position (shown as "3=").`}
       </div>
 
       {isMatchPlay ? (
@@ -8734,11 +8818,11 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
         const waitingSig = !done && awaitingSignature(p);
         const mine = waitingSig && p.submittedBy === deviceId;
         const busy = !done && !waitingSig && lockHeldByOther(p, deviceId);
-        const disabled = done || busy || mine;
+        const disabled = done || busy;
         const status = done
           ? "✓ Complete — signed"
           : mine
-          ? "✍ Submitted — waiting for the player to sign it on their own phone"
+          ? "✍ Submitted from this phone — the player signs it on their own phone (tap to look)"
           : waitingSig
           ? "✍ Waiting to be signed — tap to check and sign"
           : busy
