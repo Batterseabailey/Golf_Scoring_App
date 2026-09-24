@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 94";
+const APP_VERSION = "21 Sep 2026 · build 96";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -790,6 +790,7 @@ function emptyRound(label, course) {
     publicScoreEntry: false, // Admin switch — lets players open "Enter scores" for this day and help put cards in
     requireSignature: true, // ...and whether a card a player enters must then be signed by the player from their own phone
     publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
+    inOverall: true, // whether this day counts on the Overall (all days added together) leaderboard
   };
 }
 
@@ -838,6 +839,7 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicScoreEntry: r.publicScoreEntry === true,
     requireSignature: r.requireSignature === false ? false : true,
     publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
+    inOverall: r.inOverall === false ? false : true,
   };
 }
 
@@ -3568,6 +3570,7 @@ function AppInner() {
           publicShowNet={activeRound.publicShowNet}
           publicShowPoints={activeRound.publicShowPoints}
           publicShowDayBoard={activeRound.publicShowDayBoard}
+          inOverall={activeRound.inOverall !== false}
           onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4044,8 +4047,9 @@ function DaySwitcher({ rounds, activeRoundId, headerColor, accentColor, isAdmin,
 
 function Board({ rounds, tab, competitions, headerColor, accentColor, activeRound }) {
   const [subFilter, setSubFilter] = useState(""); // competition abbreviation, or "" for all
-  const singlesRounds = rounds.filter((r) => r.format !== "foursomes");
-  const foursomesRounds = rounds.filter((r) => r.format === "foursomes");
+  // Only days switched "in" (Draw setup → Overall leaderboard) are added together.
+  const singlesRounds = rounds.filter((r) => r.format !== "foursomes" && r.inOverall !== false);
+  const foursomesRounds = rounds.filter((r) => r.format === "foursomes" && r.inOverall !== false);
   const activeRounds = tab === "singles" ? singlesRounds : foursomesRounds;
 
   // "This day" is only offered when the currently-active round is a
@@ -4126,7 +4130,7 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
             No {tab === "singles" ? "singles" : "foursomes"} days set up yet.
           </div>
           <div style={{ fontSize: 12.5, marginTop: 4 }}>
-            Set a day's Format in Draw setup to {tab === "singles" ? "Individual" : "Foursomes"} and it'll appear here.
+            Set a day's Format in Draw setup to {tab === "singles" ? "Individual" : "Foursomes"}, with "Overall leaderboard" switched on, and it'll appear here.
           </div>
         </div>
       ) : (
@@ -4231,9 +4235,13 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   // either is a leftover with nobody really behind it, and would
   // phantom-show a filter pill for a competition nobody currently
   // visible on this day is actually in.
+  // Only competitions SET UP ON THIS DAY are offered — a tag left on a
+  // player's record from an earlier day (where that competition really
+  // was running) doesn't put that competition on this day's board.
+  const dayCompAbbrs = new Set((round.competitions || []).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
   const compsInUse = [...new Set(
     effectivePlayers.flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null]).filter(Boolean)
-  )];
+  )].filter((abbr) => dayCompAbbrs.has(abbr.toUpperCase()));
   const filteredPlayers = subFilter
     ? effectivePlayers.filter((p) => (p.name && p.competition === subFilter) || (p.partnerName && p.partnerCompetition === subFilter))
     : effectivePlayers;
@@ -4353,7 +4361,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
             All
           </button>
           {compsInUse.map((abbr) => {
-            const full = competitions.find((c) => c.abbreviation.toUpperCase() === abbr.toUpperCase());
+            const full = (round.competitions || []).find((c) => c.abbreviation.toUpperCase() === abbr.toUpperCase());
             return (
               <button
                 key={abbr}
@@ -4758,7 +4766,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, onRemovePlayers, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, onRemovePlayers, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, inOverall = true, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -5072,6 +5080,23 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
       </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 12, border: `1px solid ${accentColor}`, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
+          Overall leaderboard
+        </div>
+        <button
+          onClick={() => onUpdatePublicVis({ inOverall: !inOverall })}
+          style={{
+            width: "100%", padding: "9px 0", borderRadius: 7, border: `1px solid ${inOverall ? accentColor : "#D8D4C0"}`,
+            background: inOverall ? accentColor : "transparent", color: inOverall ? "#FFFFFF" : "#9B9885",
+            fontWeight: 700, fontSize: 12.5, marginBottom: 4,
+          }}
+        >
+          {inOverall ? "This day counts on the Overall leaderboard" : "This day is left OUT of the Overall leaderboard"}
+        </button>
+        <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
+          The Overall board adds up every {format === "foursomes" ? "Foursomes" : "Singles"} day that's switched on here — a stand-alone day (a ladies' round, a
+          one-off) is best switched off.
+        </div>
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: accentColor, marginBottom: 8 }}>
           This day's leaderboard
         </div>
@@ -7024,13 +7049,14 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
   const [compFilter, setCompFilter] = useState(initialFilter);
   const [cols, setCols] = useState({ gross: true, net: true, points: true });
 
-  const sameFormatRounds = rounds.filter((r) => r.format !== "matchplay" && (r.format === "foursomes") === isFoursomes);
+  const sameFormatRounds = rounds.filter((r) => r.format !== "matchplay" && (r.format === "foursomes") === isFoursomes && r.inOverall !== false);
 
   const compName = (abbr) => { const c = competitions.find((x) => x.abbreviation === abbr); return (c && c.fullName) || abbr; };
 
   // ---- This day ----
   const dayPlayers = playersOnDay(activeRound).filter((p) => p.name);
-  const compsInUse = [...new Set(dayPlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean))];
+  const dayCompAbbrs = new Set((activeRound.competitions || []).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
+  const compsInUse = [...new Set(dayPlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean))].filter((a) => dayCompAbbrs.has(a.toUpperCase()));
   const totalHoles = activeRound.course.holes.length;
   // filter: "" = everyone, an abbreviation = that competition only,
   // "__none__" = players not tagged into any competition.
