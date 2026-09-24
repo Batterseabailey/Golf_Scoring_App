@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 97";
+const APP_VERSION = "21 Sep 2026 · build 99";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -32,6 +32,33 @@ const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 // leaderboard — whenever that name matches; any other name gets the flag.
 const LUCIFER_LOGO = "data:image/png;base64,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";
 const RADLEY_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJYAAADICAMAAAA9W+hXAAAA/1BMVEWea1paIh2ZJSBrWlMcEhH29vWooJKUh3iMUDnQgVvIbV3GGxZTRTvl5OT+/v709fTIq6HSyLc8Q0J4g3s7Qju0tLR7h4F2dna9wMEfJ0C9vsDOQjnBvsBAP0N5fIC3P0K5wL3+/v4AAADFLCa2KyfIMyvKeVVsGBW0Mi7GLB3+/v53dnJPFxNraGbn5+dqOC80FhK3trZRNzBWVlPOg2aXlpKpqKeJh4UuCwlLSEdzRTXW1tbIyMiqaU83NjQuKCYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACk4VBHAAAAQHRSTlP+/v/+/lj////////+IqDe//////8G/gP////////////+AP////////8D/v7+/v7+/v7+//7+/v7+//7+//7+13J7hgAAJeVJREFUeNrNfYli4rqyrWS5DSF0Jz3sfc4d3kCDsdOeZTxj+///6q2SDBgwQ5/b776nvUMnQOxFVWnVqpLssJ8Yv379eguTp8b/xtd/Ju/vSfLvyW+Pf/5zfzYajLOfV59//iJAP5mC9fPTqjDL6RHHsX4cxunb8pkxvC8eH+Iwehodxreq+vatM4PVp0tYzHHdzQb/b46P7vDNYbgb9RaD+8bwrXrU7x2Nzfhbg6s3u8Nxh6fVMAwDT7DjML0JWIZtr218rW36LfXNemq4Dgeu6deuhm2Ukm/W7mZtfGCsP/CM4xiuix/t9evrK065GAYzi2tYxeFMLvc55w5+pE80AcuPGfOHlzePUHGRSsM2tG0w8KFSIWHujw/jY8BlH2BNW0sdaONLr8i8ACeeOi85seRtSy/TTxcvDt98qIcP2/AzyywJzsYgYJuNw2eWZYnYWH8YZEDgWj+G5Rp+laZZkHpePETUtbVgTIXrCtY5RqDiWdb1krsHY20iKb5a1vtM+PoJDct+AGvjxz888d0SaZoKB0dTJ9Zfw4PrRDsGXIzifn3bjR8boLKAamZJQ6PauLyeedmyn717NXcJ1cfryVzMZNOwbKf3Civ7nmWVSAXXUC6ixeFs3racM2Czb5sLHuTcmnUd+YwbetYZdcHEVyD7Okt9AromWMpeGDet5fqVJzoztbLK84Q0gOkSleFjIpcal38PF/Bbs763LLOzmO+uKbgcv5ot37821ler8o0PY61hvT6AtTY4mC/NPBkHXiod+wqWW0pWClnCVvGccbxjM+1B15GEChG/XErLQ0Aoe3EJSMx6Syo+MIY21/omLMcmcnC4EHjAdAw6f6C9UwS5fh2bkrFI4cKX4963VWYurcAUM9NxdXT51vv7zvqadT7BOprrLizbMDiP8MuuYcKb/pjiFTc49YJFLPKZtletcCliGcGzbWUr1nfWDAGxXBamGdTKXoDVC8bi3gRtgLjsDw1L4ZqkU00QCEtlnE0feD/OYBHzI7Ba/CdMn3HziMsY+ZFms+FslAcJlWlVZpUwocKecJXmYRhrxQ8HWGv7JsufEBjcS5UTzxKj4c+37aIFGoHEy5jEd1Hp+xv3xCSgBVkKy+thL1P0S2/Wp5iMM6RGYggOQP/2bwoWxuvrCdcNWI6aVgcAPWIrRvKLcVZjhLbetnG0bcuYRabCFfFlbIxTuiOK3mMx5p/pIa68ZBZ/16gMoJoxAWRd8K0/hwVgt2CNtAKXsJa57EBfadWXzoAMSaAmaoCpIlYrXBy+NMYxaMSZ6M3KEqaXmbOZyRKv9xQqA0Gww3/M2r95yOAjWOvnYDkdYHWZ+J+pJwqRdiU/vEQTUKrAorhvOZM998fWQvbKqp4lnZn1ZppUZpYsS0KFeBcK1ey9+fr1nXOdf4bQer3lxNGxjbLyoMuq/huyUFoFQRrzw8t+XZs1DMZrUAXnoofljqAhr0RedTCXZXV9kZlB3nUeV5ka4kHJqgUDo77Bt86QKAczs/g+LNeIe4DpTLP6O8uszKuEl54CyAectqyZyUEVGGDYiBsnVGlfIiqllcUi8cyCJITK1a5CtYO5YK3ZMhWxIrPjWVl/H5YRVz0M1Jk953HfiSwT37JleXjd9aPWlxTywicy4iVntZ4XRuxZaYx057qOSCjm0y44ThlfwWpb9vVNLMVyWZXI15tnYQFV1XlV0JU+N+is3d+ZSIP+5Cm/pA8ec2eYH/Sj4qWSAZU+EAKpMmdWLkvjSC8UWC3F1mwpPJEu4YLN0VwPYIGIi9T8nnq9oUS3S0/8XXk/+MnLPmeLhTidkHD5NNGsUxAaHKiswB+xywzqBf9bolsKMROkUtjmcBB2HxaPRdD/8LrUPKHAdK+8EX+p6OXHaHM1rniMSsGwhD/6nQguRMBH5hJHE7OZ6Lzl4EYYYMF67zYs1wcvmP/j+7duREfx9+8VrDdmEEhUd0RWPoRhXMGDo/cYkRhTB/Rju4AbpUwFJhEygaSZpLyoYd3hLSOmYEdkVSdYiF8osN4ZpW3i7EMuNFSFEwPXyFY09ZwR6SCKIpqFi52s0kCk8OGsKjzT3wzmugsLgfQ3wRJVOoZVWZXolbo6CqwjKlvJw9iEwAeLGCdBq4wwpDNUHZiJFFrvkaDAgoO7NJv9KA1i0429noL1eciJmMWp6CBQRVpop62HXETWmiwOVUVp+LPejJkuPOyxdlaqSn2H4HqniBcSimImLCG+Cgh7vtECYiq2NCxySOx53TdYK7VUxeKqapPLqgtMJX2Gs1xKaYiYONYFJEpUDecwNKr1h+uzd4p5Ppsxy5IpK76CvUxnQ7DW92DZ3BRgLTP1KmtJZOnLbgkdsaxSD7XdGSz78A+VODPMEPDZXOFSavgIyR4qx49X4NotdrsIlpqBur7OZtkyWJpasC0WnTctbOBiZ5mliK0u+JF5JbIQpcQ0hZZIkdnuCeSYShRHC3wF4uPow4+jOzXRM84s2YlEvGedEN7SBPVQrdj9fQuWyztMXsDKfgjobQ5UKDa+VWbnSf9Kt9tHVFJ3Jca41icfauvR/2BcBD2L5TIpmMVAqEKwrl9ybgDWDRlINQQ4BXnGFKIroMGrTso+gP26v6XjbkZxbqtgx7+ECrLfHvom/pxFjmurMHylOosgvh68aoMlFrsFkzMvsRiDsWj0OKkfWfdgBZ7wel7+KLrU+v4DpQCPTbIX+ELNfPrkNikS18ZZIdxVXG0Os8/lPoQ0PjxFvnqfbX+Mgs12BEj1naG8tg6oWGWaKG3YzdjCUatUILi5CYJAGfs9QFRB5aQd+ZBgoVwBxdfUdcFZuexR4sRDt4fMp3DFzIfFDOr9+GoOnKYmhT0MBjY1B1QYsWSuveiDO0700gzZrvzxHUT/d2Z9hxBA2Ju+LhZxBmgDFHvvlvR5vJylQhKqE1ehyCei8H3CBwSq6TQiiw0JidmMUuIyHWAtuQ3yim/Csn2YxqqgzyBngqrrfnSo6WAtcuFmKGHF+6zGJH/v+qySnqlsdaQN0ACJ/Yjxst3BnfNFq+z1eiSMjd++AxWqoTSVGlgag1Nf+W1YTg9rBT4K2LKvoOLBDgFivlI5V+UVQ+YwABhtZnXprKvkeWcQucIXKEOieL6bOwZib8scd+xGe+PUVKIRsBn4lHBJ5y6stVGmP75/p3Ro+HGHzxIgCL5XlXMo+G3A8V3i0AhRhVnkjxoVtmYJydu5X+9QqGMYxo4br4rHbE0WSAoSfGoR1yMLSXOZIlJfX/3bsNwSwYWwcZXqRJUZxyYmp0pEOv/6lhgSwuwd2Za4377sn8CFEdtGA5dtI2IyxRMqL9mG8P0lECGBSEqPNKGM29ZSXbU+qL5nPUkSyL8+RlgXg5pQZfOGW8LQ/hZWLiBlLrs61PSFvbYLGOmDfmprx9b8akP02R8bLhxE6GzWl5yXElpCkOx65eJGa4R6EDBXlxWUEADrmxlXFuiBTq5VjaustQHjQ/qxnCy3ORcUH6rru5hD6pPTNg741Vaxhc9kgNE2ET3ES5SP8HHZUYQpa6XTsDaqKwNV8y3Lqth3fLPvPeTItDSO/VvXYRZX/XFVy+D7C2spWNHOcPT7EVsLTMVXFVSO/84iw4kQnBu/LB2XZAUqkVkq78Baa3GFyZh6Wealyw61J6ZirNuo9LphG9JC2jPUz/BodanCVAuWzXXnC6UBqf6NmodQtCxSuZpKNoNsRrBlupyxlN924lp3sUporgpq+2/EIpQDCj/3SFobzVsCBtuQ4JgFZ7DsoRu/M0iP0nSdLxgRm/qBM8y7iMFiAgVKzV0FlkMczERv3An5oaCLO09ANiMRBV5n+kOfaD2UhfHs/V2FPcFi2iz2+SLBTmsol7eLLS8NLXNQc/rgWSBChDk8clydvSWEhNX5xpS1RrAQX6XZwXlIOn1v9r7hrtfHfqXLl3L2zoYUeuVE1eLyF3NDhSomZG1yTacb3RCOUJtQ1cr5oHZh/lTMmGn46aOOzYb7am0rLvu0R/LbuOtTg4JEj4WDImcLq78Qh8qqPmuRqpGsowUzI06Mi2lorBHt+D04E89FqNmdjW1AhHGBjCcdv7oJaz34Si88qJIavyNN3zlaUloi7S0rcrgPhem7EwsdKAmReCAwtuBVjginpPlhqAboeuOQzcS7gD8VLnw6UbGZPwWLnZxxvlrn9xUp5w7lKsUYTBEEfSytHLnjnfmbqdb8hrNdaxjzF5SOsWBK156UPaxD0zHCUHMUb5eos/kULO8sRsa4DL/vZFX9iDH71qqIh+kcHmRIGyRa3PX1WofBB1HDSeEY7sdQnHx8GISZgTY4ucNWWsw2HN8vufMA1kWHeUO/RY0sfihGafmSnnE2w7rY5iK6XC0BycKuoSX0sHSmJKvjMGQhyuxUI0I82HiffQPW9cABzxZT3eF5OrH+kb7Wxyc1H+tl2WE5U6/ZHZYTjaH/54CQL4c76cTSmRwwibKL44+eG73Op4bEVzQe4nwwIfQ68Og5KeMpWFU2jJxGkiTqQf+TD2NYoT+uxOvF+fF4G0aoxuq3Rj4BK8hW/6/H/v9bWF+unHiAFeYXAz5Mwj916vf8aiRPwWpMqqUU4RDn0L+l2fwpWNK/mlP94TPv5R1Yq5y759stXJ7/MUcl/JKETgffd/dgrYRhn6/XBX8wgBhStW53qWRkG2z1GFZDjw3XGXvYgLGp1cf8A370cIyQnzICFSARubDZ34eVmOJttbIctfdikH0O/Q4zk/8yqjCWOFTu2KdGoW2QC3PTewALpUl+5kZl5b1w/P1/HRYEVqYOPrQGPtTBw4DzQrnqNizYCcVtODRCyIXRapVBn/I/AcvdOIFyo63lhM2bVYIql1sPYVGx3iRDRx2arQkFxNrmT1grQoFiRG/ajaq8tlakBJ+BpRRWHhhr7cJsz5WU/yNOdJUUS8TQ9t2If6L8tT/uwAqKg7UABnKR6zqPB1x1+v4YrI/XjYMKT3cGfdU1vAfLO8Ja60UvJQsdqny1RG3+DCxqgDm6RNugJKIuxRFWf8ta+aEsg4YkPWccVsH+DKyNbjzbhoa1sdU+m4+B6R/COhak7maQ0MYfcaIu+j+GruWxE/eUtS6rPgXsD1mLkLyO110uYL3dDvmrqk83Z/5UbKnS7PV1DO0IK3z7+fMmrM36qjRb/ylrrcfLG6+0UWpsrbuwxgtNG3v9J0N+WGdRrWkEPnVyAOwAy7wF6xhbYFVFV9zQUW/4b38s5GmbGOEyUJXpmTnMxAlY3giWa6OQ0/1Yn2pp5cQ/A0ulHF5yW9Epr1XafhKWbQjVTaZglwnRvP3HrEUHz3xXt1KjhraN3bPWyYkwFXsTm8NiYdZE1Hn1wz8xExFVDiOFOqitgHYU2M/Aso0oGfVvXJIQxh+CRdk2J5U5rC/aTrLKT8LmDizXCUJMSPfUfBGrVeDchNUkWZYcMsA+K7ygyJub1jLEnjS5PbDE6waauRGGnz2AVUZkz4gatgeGIEWZ+fHUucKs6lLPC6quAOomrTyqKr0qyMNJWA4VK8FxxWz9qssX2rl1F1aS0vHYea8LEnKVd1ewwiSo0uH8e6/Lku5YPCVe6l1r/7AjXyX++sM4ph5yIz51ch+WPuj5blLlxtXFxw/ztEuz0ZNNegY8zIPUu8zu6u3SOJYYNAk3/HiQSVje8bcj96LCdM7L13APP1VFcwn0MuoKILtqExTc3QyXMagumOsEz8Hy+HlPzDH4OLCKNPCK/XXsNBOldwObpcH4hSb2+fEyDfzv+/Gxk6By4q8bsMJKjkdFo9OBsk+SJLsKsmwfeAgxVfkmwX61P3/DPu8Dy2LJISBHF6qo9tj+6Orbeuv+4LQ6VZ3FCgrlLmm6PlCw9lXW0ZH246hbpabPffFEI2kKlvdEu4U2AZ0aElnnrao9/U9+IlgZWDv0irCqgvAU74Hg9ub/KizeB3R8nDLLV1XjhamClWYaVmPiIcgTb5Um6aoZIlAwafyrsLwnYEUG7d6A56oKdeWe7KatlQ7WWiVmAFhZhtmarvLUq4i+hBf4/AlYyRSs292iJsm1RyJHeoDVAFRYZAn9BqyVNrDNAAuU2XgEa9UEqzxYpUSxgcfEM7GVX8H6vCpuwsq4lLzaN+Fecg2rzxptLQWoCo+w4DkvAaziAEtxfRCwgEt9xdg9jZt317Cym7A8KSMex5xWJaQX4H1FZzZFEXaw1R68irfsNaywS7sQsQXADZzorbxcwxI4AjU+uRDvN2FlE7Dy6ta7A1NwHJTTNh/uaWfTmvEKTBkOHbMDyzcwT9KEVRAQrGIEy/cdwzV4xGrr5ue/aoD/RT2v6cCC/WsYylFLIofYKgjW6kwnjJNPgnjrwqJQzAGCmGlYa9t15jN+y5FBer0JDxQ7bdlU8mXEaZmLYDGG2K2CNGyu8nB+6ZJuf7AWYKkPBnuzOL1lrepioxTGW9jfkp9MCooKpMYDrNVU4f92laphlUKFvDcLojKmjduxXN7OJpfbyvD9l1W/vxnyCA0zoD19B1jnUlBrCW2tqc8GWIwLWgZCAryjvfvs/GpOBavLb85bZGxFtoIL74zfkiCDswqVvRWsrIeOzNLkAlbBnqDT0EyuYH1SCeTG+/cD3Qi+PFlr7+33fd43oAGV5glW2O89b9/l3X7cL9fWepx7ILf+uoLlPZYQAk70ELFJ1TX7vgjBnmmSECxkSIKVIxEmHixY4OE4B560VmIeGzZHWODT9BlYHsGq8mxPqScJwi5MOi+FhM4JRUG+JsnlARbxyP43YBWn3DOClXTPwRJqJsNiOSyGlJd3WlwdYSFNJh44C4SqhemTsIITmx4I4hcYors5SQ7rqBoWmL0LEAmQVBUCMvMOulPprbCBtfICAEewsmdgpcEErC8kUKZ9DtW8DAZYM0YlW9jnEC4U9T1lviOspqOwolQ4wCrIjYA144IWiZPszsokqODzFazbU7GIlzLqkeaQGiU0CqwFcaBgpRRI4Yjli65qmp7k2ODEItOwohJsymNe19lNfmhWf03AuqW48l5APpScowbSsKoiKPZmmoTJVfIhumzAr4WZEehkcOIsAiikL85ZPXs8EU+wEPPTGiL0zEpdaL1xCRam3WpPRJXvL4vs8wwZ5GmRNidYtJeDrhFiN1aPipOsOeXEmzGfdD1fyhEscfWucAKWstwQFgdYWtj41eOIP8H6hfSTTM7CzFzq69KNg7XGqPM9winvCwUrLJQcbJqL5EOxZcYqtvogfJgRx9a6WSoitqKISyEEN6IzWGFYmXmOJ7q8CgnWHmktq1ZVl46BBQFZKyHNXBT7m6mnmYR1U6DuO+hAGSqCiLQTmywhDViB4hVBVPhBEQQKnwoZqSEC886sFT1grWzE8SdY9wi1yS3dSSNYNBPDvspXZkHFRbXKASXpB1h9t0eBnSZIjsi8K91/CDzrMayz0BrDAqHmj5KP0CxPZjX7MF2FgEU0DL2rnBgEnUdlGDAX5h7CztOwioew+hGZnsG6WyseYSlrVQ3CqiJPVaB1KEEA1bByk6rDfZKGHgSzzv7I20VUP6FqjqjGsD7fLDOuYPUmyvykq7S1kn2FNEt0CjQ5qR2qHDtIxE4JVy+wHsLyxqw1gqUV6mRREn5911pX0GWJBKtLYK1VapI795h2+ypRsN4SxV/UTi2ogOyoiFQzkT9w4ug6jEtYNyhiL0EOErkvhLUYEQSCaqWU1rjYGFU+kPdh0VDj5OBE6wGsBoH4+QasG5or6ZcoFGOU1r4BJxKs3svClFL2vSZliLpbzWCPCMIXjC7sYdYT9DCGdbP8aVBV035Fuk+I0HSae9dzNsynyvf0SKcl8oTv1/VyilCrM3q4gAVxc91OajyTyldkWg1L3Fj8UbAmSy5Fp75vuDZd/8qWE33XM4q/hDU5F7PUlFqW0PU9cOK565KswMj2BGvvBVBlAWDsz2FZLIKtXNvd+Kye2AzmXfhwDEvPxet03fRC6lTtIycWI1hNXgSIttls5gmWFxZEe6YuxPaA7FSSqdiCE32HcyTXCUHQn8/DS1iT9c++X4qaV6wokKqDY6puLJgGmDLLsrLMCyqzAB7Yi2DiSU8ERbKnKsALZoCVJXnuVZMS+IJLL2CpvDjRigiW1XJJERU4cGKV7/f7JC9wViuz8tzKGNAUIvblrICZAiEYOdayCuaR/YqKytd7BDFq1UzC+oWgLybLav3rgOV1dD00CuUC3soy8toMsFLTNxxZzIqCXAoc+IfhIaBLsariLp2GF6R1ba37CYg5gi0DCnGckNHZYRbCNWN0cwbXFxRaZCa8mmWMcDGRelVQ3IN1FfAXsB7JCOZEsmIemYPiaghwwCqEqTSxLBBs2owzRnYjm4FTlnedCGn7+QGse93KFeNx5REekSKGgplyoWUlidWbPlc3fNBYMrIYUQW9GZMVpdxtWLl5ZawLWLc44ghLbaDmo43Uesu08PVtDXg03EprXuu3HYZviGez9CSsX59JjN+aMXx6l7hD16RQDxJhf2vI28a6ZIdrWPfNlQRXQ+8p5+qmXcDE+8NzF+N29+wyHU7Dumuum4dWjVWHG37yu7+aTBlrAhYKxv53Dw4lprfv//428qnIupqJ9PrdyXhTx+3/833/L+w8o8j6/Ius8fMOnf78jPG26v7bNs+ruxr8Yzj5zVT95W0QpOF/D6qCFim+vL29ffl8S0GQDES9XFBnLPWePG7KIyklvhSJHa4FkU8GZ2jqzTUNTnlDnRKqpDNjHvdeSNnzqbHn6j4px5uh6L0Azxo76KiIo5X6ZTJd+fxFoW6a+g4EfVN0z8bsxPVBUfMsOTRNFUfzKGJidCeis0bS57eG7i5Ed5BiUZx8e+KKgpzeQ7dntNVl6MNFSJe7Oe7Eu9fEztw1HF7WLJ5uJIGuOItRn5Bs533xhCOCki4NEBv7eGUUfaN28zzR5Ue8J7HaLzbg2oMqfl01KTOTRYTK585mjjTy+MDMOGx8Ol3EpbYWhKJ8TH3vZi7J0nSZmeOXrL5eLiC5bNYtoSpjqgkXvjSzx7D+w+DZRXg5e7oYwHkMqw88ny69pEvyHKeMdvH1wh3UcryrAcvnEVVerht7ffMQlrqicwivARVtgXf/4zGsoLfMubpPg4D6cEq+a0uIZ+3G01q1yXay9Hlc062yOP9ffpE9mo2BupjPiHLuDnEFFza0Bd5+CCsxk0Ait/uuwRns5fPt7uRGNtgqN5fbrSwRelxdDewYUUUduvuNJYJFd6ZQkatvNFBxZbpHsELTC/va90uXrqWvS/hyu92ZhxKIUVx9QrjXi+0WER/TBcmwrAHZHlKL7hEsdT08L4fbkhql4yqoj2BVHSIw8sFHLl0/XNINGrZbVg7hxX4RNRTwIJ6dl3QjGtf1HVfD2t8PLwVLUdVmiC5jeOYRLA8VfxJL1NmlP/f5Lirj+mW7fWHDCiwjVIFGtWUx3zISvhuoOil1g+c+rBNhXWyQE/flDPXn4ETQEfi7bkGYjBDsmK4ZGaEqNartIoq2rKZbm0FtSsVbXvoAlv0vwGr0zskAMQU30j0RUbC9KAi7WqlV9olstdjq0caM1aiPUUpEpVYBXfAg5O0Tx69PSegerNAMDo2zJecw1bJGTA8QdhGm4z8YZmq7PYyXKK7rmi4DlOZwyVnYF49i6/Bw2M2uYusOrL46+lKSn9p5ZM5fDhh2PF19Yauq3h1hbemC53nL2jouThbPH1rrcJ3wAO4+rKobLZDEsAndyAXz7WCvRZysWNMPP+7mUd0i6gXmQyybcSMpeSK21iN4d52YmuHZlGQvu4jjnOUQXQivasVyfjBUyViEl33WlulF+ym5NxP1LU41TxBr3YcVXDQDM7r9IHtpo3Z+CKbWDFnGd4ewWjA+J1PF2VWvOblHp8Tzep+9S5c52fdgBVctysLkcBKf744hDpJguVSw5gsZ7+Y1qxeUmSYS2L3YMpBD7GH/f8GJ5m/Buka1SkoKLzNmx+AiWI2kb+r5ro5ZO8MEhG9l+BwugrWBhiiGW8gQrmQfbW7mxPQa1T5uX7bzGOE8jwY3khNXFUDiaagafJkRZixibgLXxHwkNLQxX1/vYusbSoW06982pmBV14p3TzOOzU3OzHrXzlU4zeWKrTJ4cVGzXRyB+fG1bCfttZ/gLwp5I2pCtS9/mIskTgtuG9cdmrDrJj5tCzMQt4u6bHcR0deOFyv2tuphuhZV3q4FZmnSbYR29fWiVNN7E7A4C7XRjvYyaNV/Qp02/bUB85i9IIJaTMSYcX9Xz1VohW8MApDmImshDjnjMKWoKWVeL7OEXXXlRLqIYuYMqAY1QRsKGimv7HKdxbK43cFl0PHgb6gbTqh2MVt9YiSXa5UB6Aa5QLWL6ogt4NDrYEovbCh4oi/gHuUduJGuSb5cASomKgPGYauIsx2vcdJS1lyRKa0ssl//eAt7vLylO1UD1Zbu1i8RX4x7EwtZZwtcub5O+lI9jK7gPhi6mqjSUw6FMK/LGvllxlpG/EW02aAuY1S37kEL28V8UccLRfdy1rbblwVPr0P0KsAC7l4OdnkxfWJeT+1GUrKZI55MVssYDBXBOC9tmWi9peoLrSuiesfYNgbIhSYK+c/rz30edIXpT9w94/wyF88sJoTgfKfCGy4kZiojnJkyo15JZ0PpqlLQfN7OIQOJdYnvyZHFRC08fi6xLFog0A+nmymMrx2pJmZPwEEMDERqmkjBMJOpwv148+FD5aNwLVpG+Ikv2FwRBZPVNVNU1W9cFJhNzMC9jHZUOcTtYl6SkEctSIx1uiXy6a4/XEnUBaccGSF5qsB/xmB3+0zdRJb3uJpitbp/PkJrEctW2+rYRz1V1Uz58QV8v6UvBL6gz0QGu3JCk3bPdGXCwLyezYmk2G7blm7XXS4ZJAK0FlHD5S3nhs0ZZK8X8t+crIbM3e50NcK96ylZpQ8bc4V57e29kMpUYCuKXwnZXNZsjjMz/3pv4IBrt0B8kcB4qQ91xw4zElOyCK85LG3u7+W59l/o8fnLC2NtRBEMOHR/81oL+VhM7N8a4h5YFgtMwbYcFD6hXIDzJ4CFXhc0d0Dl16AkwuOljfnLDs54aWGubT1nOq6mt/5oXLqOJcZdDKiilijsBcC6CWB9MOXKsOj7q1zz5umgmrfSbFE+o4qGUJ4vSGOBr27tGhk6JCqeWDwUtLsawoKrIAOw5fXFakWXXrpqH/TXa5L/HsiIjsIihFUcvSwkymiYS2fnY+/h1hL6XrHvjh2EdY15Mmc+LPZCFpPp1ZWHWdeNrnILs868mgxhVtGNrxbqfrU7VKwEifJvrRy4m8f5nZV9wvXWyHHdSPVQSw/zusV82O1YtPQukeVVX+kNxHnad9nVJYN097st6SouAQuukPR3BmpVaek6urm7hK5wIbOzQ8XWznex3C18CfYCIMqT6m7ZwcV1pPBlnxapaV56tAEmOWc7+qQR5h1DufoiY0mfs/YjJRl4tXq7vyis1ldA+ENkMYSDNHeUT9sW/ELiUYU/i6QIsrNtK/uiOrvibxXus6CSwPKyUzHR0v1PW+oXwfhxNItrJdyJ2r98frD6Si9/QsrQjlSRIDGZI+gOsPECVRNVJws60TySUtDmkOt9qE2SeZXkoAPYiSYfj7Y62b6oHkgMrqISXjVoaPni4TKnbg6SIyl1AwWnDE8hgc/J4lqU8zkkG0y22yGz17TiUwlBG2touV+IqlrSIlAN+C87Sr+1JJe1FOMv1FdDhEh1QJpZPmqZTz9/PVzmPDgyUxQBMm0ZR7kN+6t6jUkOzpjzOdNdMjIGkhTRdS1qDLzQUsRgIJEhYdSYg/hErerpYZC6inSp+oI6cMKBN2BpRzYVV2zVkqpdsIXkxDh0hpoDYs2XyAgtvl7IcISPvmjsXnTQzCGI5y8M0RVxqrMkdazmKHDqeki1soFsn0I1CYuMihmZ9dGCCBAlN2wAJHKnbMZ5FBOFQQGpjQfKQC1VocqC9FeIajAwx2SjmELtx1QHskUVup0Pb3t5mUOzvk058CaswZHQkMqT23mkWAZprI7nVNGB+hl5gy3pj2RIjmdrmKUmbNF8HgkTFtoRLgqul1YnY9Soij61qVAoTDvwDiy1Pvy22mtPwpWcL1pUdVzSn6iJORiIgzbmRI50WRJ8jURABDKPqHgqW656GyUqU7gsVv0XlDBcl/OtlAmR1S1UN2Ep42JK5ktJ9I7gB5qWDEZ5lck5ZCWiv6WOCoIEVIZyioJ9Tm9pYVHdZ8cPKJojVVLhN/X8iyiRf/rHDQfehaUj7AvEHOXYhUoSNSUzaLEY7KrCDfwdxSAjie/ieMjyJnwZL2VMQFT3EXqhnB9bo21ERd2XO6a6D0t7EsAyKVX6YMDFqHUBl7TUS6ciRGKWcQ56YyatzyCyOczI1SeAMObQkC0Rnsr9LxC//DGoB7CUlQkYXMkoHYK+tky3fKAIpAkbcPkCpkWULYBLnXtBTpYtZax5iwSBX52rLAue4RLFyZdPP+/47wlYJ2D7QCKQVEpq6zry60M6od4T0htYimxCmQYZBbS2A8vRc1GkNRIMVXPSYU+AegzrBKwpKvozIEAGYmfgDJQhjBrEgDUHjxEc8ACJ2UjVwMgGFIlkJ2R3pFBSssp9vx6e9DGsAdinN7rcCFE2qIstVbntFlm4RQkKSYHkqQxDBNtSRh/eR/IROUuQvHgS1HOw9KH+8ekLCT3oJ0T77igVF0zlROTvuQ7rrVK2WrEhIcGrUqo7R3z59NeToJ6FddgUpJDtCw1tSznwYJGX7cWg1Ii8JflSXVv99unzz6dBPQ/r57BpSCMLk0IsIV6UxDmM7fAtgWVa8wiW06adLwOmX0+f7HlYJ2TDBqEwsZiAuoKcOf19TcgGpcFk6mlh/fb7mH4X1unwMNqweSncJ7RrMqA/uUh/dRFyMEv2+rUvGtLvYsL4P7OAQf3/KTpSAAAAAElFTkSuQmCC";
+
+// ---- How names are shown ----
+// Names are STORED as typed ("Will Bailey") — that's what matches a player
+// across days, the roster and the draw. This only changes how they're
+// DISPLAYED: with "Surname first" on (Course setup) every name reads
+// "Bailey, Will". The surname is taken to be the last word; a roster
+// member can be given an explicit surname for the few names where that's
+// wrong ("Ned Greville Williams"). Set from the live state each render.
+const NAME_STYLE = { surnameFirst: false, surnames: new Map() };
+
+function dn(name) {
+  const raw = (name || "").trim();
+  if (!NAME_STYLE.surnameFirst || !raw) return raw;
+  // "A & B" — do each part
+  if (raw.includes(" & ")) return raw.split(" & ").map(dn).join(" & ");
+  const over = NAME_STYLE.surnames.get(raw.replace(/\s+/g, " ").toLowerCase());
+  if (over) {
+    const idx = raw.toLowerCase().lastIndexOf(over.toLowerCase());
+    if (idx > 0) return `${raw.slice(idx).trim()}, ${raw.slice(0, idx).trim()}`;
+  }
+  const parts = raw.split(/\s+/);
+  if (parts.length < 2) return raw;
+  return `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(" ")}`;
+}
+function cmpName(a, b) {
+  return dn(a).localeCompare(dn(b));
+}
 
 function logoForOrgName(orgName) {
   if (/lucifer/i.test(orgName || "")) return LUCIFER_LOGO;
@@ -666,10 +693,11 @@ function nameWithHandicaps(n, course, rosterPlayers, allowancePct, showIndex, sh
   // A * marks anyone whose handicap has been adjusted for this day only
   // (shots added or taken off in Draw setup / Enter scores).
   const star = p && Number(p.handicapAdjustment) ? "*" : "";
-  if (idxPart !== null && ph !== null) return `${n} (${idxPart}/${ph}${star})`;
-  if (idxPart !== null) return `${n} (${idxPart})${star}`;
-  if (ph !== null) return `${n} (${ph}${star})`;
-  return `${n}${star}`;
+  const shown = dn(n);
+  if (idxPart !== null && ph !== null) return `${shown} (${idxPart}/${ph}${star})`;
+  if (idxPart !== null) return `${shown} (${idxPart})${star}`;
+  if (ph !== null) return `${shown} (${ph}${star})`;
+  return `${shown}${star}`;
 }
 
 const ADJUSTED_FOOTNOTE = "* handicap adjusted for this competition";
@@ -1008,6 +1036,7 @@ const DEFAULT_STATE = {
   rounds: [emptyRound("Day 1")],
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
+  surnameFirst: false, // show names "Bailey, Will" everywhere (display only)
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
@@ -1070,6 +1099,7 @@ function sanitizeState(parsed) {
     rounds,
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
+    surnameFirst: parsed.surnameFirst === true,
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -1597,6 +1627,8 @@ function AppInner() {
   // clobbers a different field than intended.
   const [state, setState] = useState(DEFAULT_STATE);
   const { orgName, accentColor, headerColor, pin, handicapPin, rounds, activeRoundId: savedActiveRoundId, documents, societyRoster } = state;
+  NAME_STYLE.surnameFirst = state.surnameFirst === true;
+  NAME_STYLE.surnames = new Map(societyRoster.filter((m) => m.name && m.surname).map((m) => [normalizeName(m.name), m.surname.trim()]));
   // Which day THIS device is currently looking at — deliberately kept
   // separate from the shared/polled server state. If it lived inside
   // `state`, the 5-second Leaderboard refresh could fetch a slightly
@@ -2619,6 +2651,7 @@ function AppInner() {
   };
 
   const updateOrgName = (name) => save({ orgName: name });
+  const updateSurnameFirst = (on) => save({ surnameFirst: !!on });
 
   const updateAccentColor = (color) => save({ accentColor: color });
 
@@ -2903,7 +2936,7 @@ function AppInner() {
         addEntry(p.partnerName, p.partnerIndex, p.partnerTee, p.partnerCompetition);
       });
     });
-    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return [...byName.values()].sort((a, b) => cmpName(a.name, b.name));
   };
 
   // Guarantees every name appearing anywhere in the draw has a roster
@@ -3329,7 +3362,7 @@ function AppInner() {
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
             }}
           >
-            <span>▶ Continue scoring — {resumeCard.partnerName ? `${resumeCard.name} & ${resumeCard.partnerName}` : resumeCard.name}'s card</span>
+            <span>▶ Continue scoring — {dn(resumeCard.partnerName ? `${resumeCard.name} & ${resumeCard.partnerName}` : resumeCard.name)}'s card</span>
             <ChevronRight size={16} />
           </button>
         )}
@@ -3764,6 +3797,8 @@ function AppInner() {
           roundPlayers={players}
           roundLabel={activeRound.label}
           onAddToRound={(id) => addSocietyMembersToRound([id])}
+          surnameFirst={state.surnameFirst === true}
+          onUpdateSurnameFirst={updateSurnameFirst}
           onBack={() => setShowSocietyRoster(false)}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4275,7 +4310,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
       // show as a running total throughout, since that's the normal way
       // to follow a Stableford leaderboard live.
       return {
-        name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+        name: dn(isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name),
         ph: t.ph,
         // "19.9/26" — handicap index, then what they play off today. For
         // a pair: both indexes, then the pair's combined figure.
@@ -4453,7 +4488,7 @@ function OverallBoard({ rounds, headerColor, accentColor, computeStandings, rowL
   // Attach each row's real rank BEFORE any alphabetical resort, so the #
   // column and top-3 highlight always reflect true standing regardless of
   // which order the rows are currently displayed in.
-  const rankedStandings = (computeStandings || combinedStandings)(rounds).map((row, i) => ({ ...row, rank: i + 1 }));
+  const rankedStandings = (computeStandings || combinedStandings)(rounds).map((row, i) => ({ ...row, name: dn(row.name), rank: i + 1 }));
   // Rank order is the default (score-based, exactly as computed above).
   // Alphabetical just reorders the same rows for quickly finding someone —
   // the # column still shows their real rank either way. For a Foursomes
@@ -4578,9 +4613,9 @@ function MatchResultsView({ matches, players, course, drawNote, headerColor, acc
   const nameWithCH = (name) => {
     if (!name) return "";
     const p = findIndividualByName(players, name);
-    if (!p || p.index === "" || p.index == null) return name;
+    if (!p || p.index === "" || p.index == null) return dn(name);
     const ch = playingHandicap(course, Number(p.index) || 0, p.tee);
-    return `${name} (${ch})`;
+    return `${dn(name)} (${ch})`;
   };
   const sideLabel = (name, partner) => {
     if (!name && !partner) return "TBC";
@@ -4665,10 +4700,10 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   const individualRows = draw
     .flatMap((entry) =>
       (entry.players || []).filter(Boolean).map((name) => ({
-        name,
+        name: dn(name),
         time: entry.time,
         tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
-        others: (entry.players || []).filter((n) => n && n !== name),
+        others: (entry.players || []).filter((n) => n && n !== name).map(dn),
       }))
     )
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -5350,7 +5385,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
   const assignedNames = new Set(rows.flatMap((r) => r.slots.filter(Boolean)));
   const pool = players
     .filter((p) => p.name && !assignedNames.has(p.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => cmpName(a.name, b.name));
 
   // Flattened to one row per PERSON, not per record — on a Foursomes day
   // a single player record holds two people (primary + partner), and each
@@ -5735,7 +5770,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
                     cursor: "grab",
                   }}
                 >
-                  {p.name}
+                  {dn(p.name)}
                 </button>
                 <button
                   onClick={() => setConfirmDeleteName(p.name)}
@@ -6129,7 +6164,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
                     cursor: name ? "grab" : "default",
                   }}
                 >
-                  {name || "—"}
+                  {dn(name) || "—"}
                 </button>
               );
             })}
@@ -6370,7 +6405,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
     const others = info ? info.others.filter((n) => !p.partnerName || normalizeName(n) !== normalizeName(p.partnerName)) : [];
     return {
       id: p.id,
-      title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+      title: dn(p.partnerName ? `${p.name} & ${p.partnerName}` : p.name),
       hcp: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
       ph,
       adjusted: !!(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)),
@@ -6483,7 +6518,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
       <div style={{ borderTop: `1.5px solid ${BRAND.printColor}`, borderBottom: "0.6px solid #777", padding: "3px 0", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
         <div>
           <div style={{ fontSize: "15pt", fontWeight: 800 }}>{c.title}</div>
-          {c.others.length > 0 && <div style={{ fontSize: "10pt", color: "#333" }}>Playing with {c.others.join(", ")}</div>}
+          {c.others.length > 0 && <div style={{ fontSize: "10pt", color: "#333" }}>Playing with {c.others.map(dn).join(", ")}</div>}
         </div>
         <div style={{ textAlign: "right", fontSize: "10pt", lineHeight: 1.35 }}>
           <div style={{ fontWeight: 800 }}>{c.hcp} — Playing {c.ph}{c.adjusted ? "*" : ""}</div>
@@ -6650,7 +6685,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
         const others = info ? info.others.filter((n) => normalizeName(n) !== normalizeName(p.partnerName || "")) : [];
         return {
           id: p.id,
-          title: p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+          title: dn(p.partnerName ? `${p.name} & ${p.partnerName}` : p.name),
           hcpLine: p.partnerName ? `HCP ${p.index || "–"} / ${p.partnerIndex || "–"}` : `HCP ${p.index || "–"}`,
           ph,
           adjusted: !!(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)),
@@ -6667,7 +6702,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
       const info = drawInfoFor(p.name);
       return {
         id: p.id,
-        title: p.name,
+        title: dn(p.name),
         hcpLine: `HCP ${p.index || "–"}`,
         ph,
         adjusted: !!Number(p.handicapAdjustment),
@@ -6799,7 +6834,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
                 ))}
               </div>
               {c.partners.length > 0 && (
-                <div className="label-partners">({c.partners.join(", ")})</div>
+                <div className="label-partners">({c.partners.map(dn).join(", ")})</div>
               )}
               <div className="label-hcp">{c.hcpLine} – Playing {c.ph}{c.adjusted ? "*" : ""}</div>
               {drawNote && drawNote.trim() && (
@@ -7087,7 +7122,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
       const t = totals(activeRound.course, forLeaderboard(p), activeRound.handicapAllowance, isFoursomes);
       const complete = t.thru === totalHoles && !t.nr;
       return {
-        name: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name,
+        name: dn(isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name),
         ph: t.ph,
         adjusted: !!(Number(p.handicapAdjustment) || (isFoursomes && Number(p.partnerHandicapAdjustment))),
         thru: t.thru,
@@ -7123,7 +7158,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
   // ---- Overall ----
   const overallRankedFor = (filter) => withPositions(
     (isFoursomes ? combinedPairStandings(sameFormatRounds) : combinedStandings(sameFormatRounds, filter))
-      .map((r) => ({ ...r, sortValue: r.anyPlayed ? r.total : null })).sort((a, b) => {
+      .map((r) => ({ ...r, name: dn(r.name), sortValue: r.anyPlayed ? r.total : null })).sort((a, b) => {
         if (a.sortValue === null && b.sortValue === null) return a.name.localeCompare(b.name);
         if (a.sortValue === null) return 1;
         if (b.sortValue === null) return -1;
@@ -7315,11 +7350,11 @@ function PrintDraw({ draw, players, course, handicapAllowance, isFoursomes, visO
   const individualRows = draw
     .flatMap((entry) =>
       (entry.players || []).filter(Boolean).map((name) => ({
-        name,
+        name: dn(name),
         time: entry.time,
         startTee: entry.startTee || "",
         tee: (findIndividualByName(players, name) || {}).tee || course.tees[0]?.label || "",
-        others: (entry.players || []).filter((n) => n && n !== name),
+        others: (entry.players || []).filter((n) => n && n !== name).map(dn),
       }))
     )
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -7565,7 +7600,7 @@ function MatchesSetup({ matches, players, onAdd, onUpdate, onRemove, onBack, hea
   );
 }
 
-function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor }) {
+function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor, surnameFirst = false, onUpdateSurnameFirst }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -7575,7 +7610,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
 
   const alphaSorted = [...roster]
     .filter((m) => genderFilter === "all" || (genderFilter === "ladies" ? m.isLady : !m.isLady))
-    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    .sort((a, b) => cmpName(a.name || "", b.name || ""));
 
   const doImport = () => {
     const parsed = parsePastedPlayers(pasteText, course);
@@ -7605,6 +7640,22 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
           people straight in from here instead of re-typing or re-pasting names each time — this list is completely
           separate from any single day's own player list. A handicap changed here carries through to every day the
           player hasn't yet played; a day already played keeps the handicap it was played off.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #EFEDE0" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>Show surname first</div>
+            <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 2 }}>
+              {surnameFirst ? 'ON — names read "Bailey, Will" on every screen and printout.' : 'Off — names read "Will Bailey".'} Names are stored as typed either
+              way; for a double-barrelled surname without a hyphen, type the surname in the box that appears on that member's row.
+            </div>
+          </div>
+          <button
+            onClick={() => onUpdateSurnameFirst(!surnameFirst)}
+            style={{ minWidth: 64, padding: "9px 0", borderRadius: 20, border: "none", fontWeight: 800, fontSize: 12.5, background: surnameFirst ? accentColor : "#D8D4C0", color: "#FFFFFF" }}
+          >
+            {surnameFirst ? "ON" : "OFF"}
+          </button>
         </div>
 
         {!pasteOpen ? (
@@ -7730,6 +7781,15 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
               className="mono"
               style={{ width: 56, fontSize: 13, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0" }}
             />
+            {NAME_STYLE.surnameFirst && (
+              <input
+                value={m.surname || ""}
+                onChange={(e) => onUpdate(m.id, { surname: e.target.value })}
+                placeholder="Surname"
+                title="Only needed when the surname isn't the last word of the name"
+                style={{ width: 76, fontSize: 12, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0 }}
+              />
+            )}
             <select
               value={m.tee}
               onChange={(e) => onUpdate(m.id, { tee: e.target.value })}
@@ -8110,7 +8170,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
               textAlign: "left",
             }}
           >
-            <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{dn(p.name)}</span>
             <span className="mono" style={{ fontSize: 13, color: "#8A8774" }}>
               {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP set"}{p.competition ? ` · ${p.competition}` : ""}
             </span>
@@ -8513,9 +8573,7 @@ function EnterScores({ deviceId, course, ranked, unplaced = [], onSelect, onAdd,
 
   // The roster here is for finding/editing a player, not for ranking — sort
   // it alphabetically rather than reusing the score-based leaderboard order.
-  const alphaSorted = [...ranked].sort((a, b) =>
-    (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "")
-  );
+  const alphaSorted = [...ranked].sort((a, b) => cmpName(a.name || "", b.name || ""));
 
   // Flattened to one row per PERSON, not per record — on a Foursomes day a
   // single player record holds two people (primary + partner), and each
@@ -8726,8 +8784,8 @@ function EnterScores({ deviceId, course, ranked, unplaced = [], onSelect, onAdd,
               <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
                 <span>
                   {isFoursomes
-                    ? `${p.name || "New pair"}${p.partnerName ? ` & ${p.partnerName}` : " — add partner"}`
-                    : p.name || "New player"}
+                    ? `${dn(p.name) || "New pair"}${p.partnerName ? ` & ${dn(p.partnerName)}` : " — add partner"}`
+                    : dn(p.name) || "New player"}
                 </span>
                 {(Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)) ? (
                   <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: headerColor, borderRadius: 4, padding: "1px 5px" }}>
@@ -8886,7 +8944,7 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
   const [search, setSearch] = useState("");
   const cards = [...ranked]
     .filter((p) => p.name)
-    .map((p) => ({ ...p, label: isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name }))
+    .map((p) => ({ ...p, label: dn(isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name) }))
     .filter((p) => !search.trim() || p.label.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => a.label.localeCompare(b.label));
   const doneCount = ranked.filter((p) => p.name && p.thru > 0 && isScoreComplete(p)).length;
@@ -9384,7 +9442,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       {publicMode && (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: headerColor }}>
-            {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name}
+            {dn(isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name)}
           </div>
           <div className="mono" style={{ fontSize: 12, color: "#6B6B5F", marginTop: 4 }}>
             {handicapSummary({ ...player, ph }, isFoursomes).text}{player.tee ? ` · ${player.tee} tee` : ""}
@@ -9579,7 +9637,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
       {publicMode ? (
         <div style={{ background: "#FFFFFF", border: `2px solid ${headerColor}`, borderRadius: 12, padding: "0 10px 6px", marginBottom: 12 }}>
           <div style={{ margin: "0 -10px 10px", padding: "8px 12px", background: headerColor, color: "#FFFFFF", borderRadius: "10px 10px 0 0", fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-            {isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name} — the card you are marking
+            {dn(isFoursomes && player.partnerName ? `${player.name} & ${player.partnerName}` : player.name)} — the card you are marking
           </div>
           {six([1, 2, 3, 4, 5, 6])}
           {six([7, 8, 9, 10, 11, 12])}
