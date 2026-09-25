@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 99";
+const APP_VERSION = "21 Sep 2026 · build 104";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -454,7 +454,7 @@ function isScoreComplete(p) {
 }
 
 // ---- Attesting a card (players' score entry only) ----
-// When a marker presses COMPLETE on someone else's card from their own
+// When a marker presses SUBMIT CARD on someone else's card from their own
 // phone, the card isn't posted straight away: it's "submitted" and waits
 // for the player to check it and sign, from a DIFFERENT phone (the one
 // that submitted it can't sign it). Only then does scoresComplete go true
@@ -560,7 +560,7 @@ function isValidCourse(c) {
 
 const DEFAULT_PIN = "1234";
 
-const MAX_ROUNDS = 6;
+const MAX_ROUNDS = 12;
 
 function formatRelToPar(rel) {
   if (rel === 0) return "E";
@@ -5357,6 +5357,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
   const [adjustSavedMsg, setAdjustSavedMsg] = useState(false);
   const [showAdjustPanel, setShowAdjustPanel] = useState(false); // closed by default — rarely used
   const [showBulkTeePanel, setShowBulkTeePanel] = useState(false); // closed by default — rarely used
+  const [teeGenderFilter, setTeeGenderFilter] = useState("all"); // all | ladies | gents
   const [adjustGenderFilter, setAdjustGenderFilter] = useState("all"); // all | ladies | gents
   const [showRosterPicker, setShowRosterPicker] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
@@ -5955,8 +5956,8 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
           {showBulkTeePanel && (
             <>
           <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 6, marginBottom: 8 }}>
-            Handy right here after dragging people in from the Society Roster, since their tee never carries over
-            automatically. Pick a tee, tick everyone playing off it, apply.
+            Pick a tee, then either tick people one by one, or tap Ladies / Gents and "Select all", then Apply.
+            (Ladies are the ones marked L on the Society roster.)
           </div>
           <select
             value={bulkTeeTarget}
@@ -5968,10 +5969,45 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
               <option key={t.id} value={t.label}>{t.label}</option>
             ))}
           </select>
-          {bulkTeeTarget && (
+          {bulkTeeTarget && (() => {
+            const shown = teeableePeople.filter(
+              (person) => teeGenderFilter === "all" || (teeGenderFilter === "ladies" ? isLadyByName(person.name) : !isLadyByName(person.name))
+            );
+            const allShownSelected = shown.length > 0 && shown.every((person) => selectedTeeIds.has(person.key));
+            return (
             <>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {[
+                  { key: "all", label: "All" },
+                  { key: "ladies", label: "Ladies" },
+                  { key: "gents", label: "Gents" },
+                ].map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setTeeGenderFilter(opt.key)}
+                    style={{
+                      flex: 1, padding: "6px 0", borderRadius: 6, border: `1px solid ${headerColor}`,
+                      background: teeGenderFilter === opt.key ? headerColor : "transparent",
+                      color: teeGenderFilter === opt.key ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 11.5,
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setSelectedTeeIds((prev) => {
+                  const next = new Set(prev);
+                  if (allShownSelected) shown.forEach((person) => next.delete(person.key));
+                  else shown.forEach((person) => next.add(person.key));
+                  return next;
+                })}
+                style={{ width: "100%", padding: "7px 0", borderRadius: 6, border: `1px dashed ${headerColor}`, background: "transparent", color: headerColor, fontWeight: 600, fontSize: 11.5, marginBottom: 8 }}
+              >
+                {allShownSelected ? "Deselect all" : "Select all"} {teeGenderFilter === "all" ? "" : teeGenderFilter} ({shown.length})
+              </button>
               <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #EFEDE0", borderRadius: 7, marginBottom: 8 }}>
-                {teeableePeople.map((person) => (
+                {shown.map((person) => (
                   <label
                     key={person.key}
                     style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderTop: "1px solid #EFEDE0", cursor: "pointer" }}
@@ -5994,7 +6030,8 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
                 {teeSavedMsg ? "Saved" : `Apply to ${selectedTeeIds.size} player${selectedTeeIds.size === 1 ? "" : "s"}`}
               </button>
             </>
-          )}
+            );
+          })()}
             </>
           )}
         </div>
@@ -6965,6 +7002,52 @@ function describeState(st) {
   return `${rounds.length} day${rounds.length === 1 ? "" : "s"}, ${people.size} player${people.size === 1 ? "" : "s"}, ${cards} card${cards === 1 ? "" : "s"} with scores`;
 }
 
+// ---- Results export (CSV) ----
+// One row per player (or pair) per day — everything a society's master
+// spreadsheet wants: who, handicap, playing handicap, tee, competition,
+// the 18 gross scores, then gross, nett and points. Opens in Excel or
+// Numbers. A day with no scores still lists its draw (blank scores).
+function csvCell(v) {
+  const t = v === null || v === undefined ? "" : String(v);
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+function buildResultsCsv(state) {
+  const header = [
+    "Day", "Date", "Course", "Format", "Scoring", "Allowance %", "Tee time", "Start tee",
+    "Player", "Partner", "HCP index", "Partner HCP index", "Tee", "Competition", "Playing HCP", "Adjusted",
+    ...Array.from({ length: 18 }, (_, i) => `H${i + 1}`),
+    "Holes", "Gross", "Nett", "Points", "Status",
+  ];
+  const rows = [header];
+  (state.rounds || []).forEach((round) => {
+    const isF = round.format === "foursomes";
+    const isM = round.scoring === "medal";
+    const comps = round.competitions || [];
+    const compName = (a) => { const c = comps.find((x) => (x.abbreviation || "").toUpperCase() === (a || "").toUpperCase()); return c ? c.fullName || c.abbreviation : a || ""; };
+    const drawInfo = (name) => {
+      const target = normalizeName(name);
+      for (const e of round.draw || []) if ((e.players || []).some((n) => normalizeName(n) === target)) return { time: e.time || "", startTee: e.startTee || "" };
+      return { time: "", startTee: "" };
+    };
+    playersOnDay(round).filter((p) => p.name).forEach((p) => {
+      const t = totals(round.course, p, round.handicapAllowance, isF);
+      const sc = Array.isArray(p.scores) ? p.scores : Array(18).fill("");
+      const full = t.thru === 18 && !t.nr;
+      const info = drawInfo(p.name);
+      const status = isScoreComplete(p) && t.thru > 0 ? (full ? "Complete" : "NR") : awaitingSignature(p) ? "Awaiting signature" : t.thru > 0 ? "In progress" : "No scores";
+      rows.push([
+        round.label, round.date || "", round.course.name, isF ? "Foursomes" : round.format === "matchplay" ? "Match Play" : "Singles", isM ? "Medal" : "Stableford", round.handicapAllowance,
+        info.time, info.startTee,
+        p.name, p.partnerName || "", p.index ?? "", p.partnerIndex ?? "", [p.tee, p.partnerName ? p.partnerTee : null].filter(Boolean).join(" / "), compName(p.competition), t.ph,
+        (Number(p.handicapAdjustment) || Number(p.partnerHandicapAdjustment)) ? "yes" : "",
+        ...sc.map((v) => (v === "" || v == null ? "" : v)),
+        t.thru, full ? t.grossTotal : t.thru > 0 ? "NR" : "", full ? t.netTotal : t.thru > 0 ? "NR" : "", t.thru > 0 ? t.pts : "", status,
+      ]);
+    });
+  });
+  return "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+
 function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accentColor }) {
   const fileRef = useRef(null);
   const lastKey = `golf-last-backup-${eventCode}`;
@@ -7027,6 +7110,27 @@ function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accen
     setPending(null);
   };
 
+  const exportCsv = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    const name = `${eventCode}-results-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.csv`;
+    const text = buildResultsCsv(state);
+    const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    setMsg(`Saved "${name}" to this device's downloads — one row per player per day, opens in Excel.`);
+  };
+  const shareCsv = async () => {
+    try {
+      const d = new Date(); const p = (n) => String(n).padStart(2, "0");
+      const file = new File([buildResultsCsv(state)], `${eventCode}-results-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.csv`, { type: "text/csv" });
+      if (!navigator.canShare({ files: [file] })) { exportCsv(); return; }
+      await navigator.share({ files: [file], title: `${eventCode} results` });
+      setMsg("Results shared.");
+    } catch { /* cancelled */ }
+  };
+
   const card = { background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 };
   const bigBtn = (bg, fg, border) => ({ width: "100%", padding: "12px 0", borderRadius: 8, border: border || "none", background: bg, color: fg, fontWeight: 700, fontSize: 14 });
   const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? "unknown time" : d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
@@ -7052,6 +7156,20 @@ function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accen
         <div style={{ fontSize: 11.5, color: "#8A8774", marginTop: 8 }}>
           {lastBackup ? `Last backup taken on this device: ${lastBackup}.` : "No backup has been taken on this device yet."}
         </div>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: headerColor, marginBottom: 4 }}>Export results (CSV)</div>
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>
+          For the society's records: a spreadsheet file with one row per player (or pair) per day — handicaps, tee time,
+          competition, all 18 gross scores, gross, nett and points. Every day of <strong>{eventCode}</strong> in one file. Opens in Excel or Numbers.
+        </div>
+        <button onClick={exportCsv} style={bigBtn(headerColor, "#FFFFFF")}>Download results (CSV)</button>
+        {canShare && (
+          <button onClick={shareCsv} style={{ ...bigBtn("transparent", headerColor, `1px solid ${headerColor}`), marginTop: 8 }}>
+            Share / email results instead
+          </button>
+        )}
       </div>
 
       <div style={card}>
@@ -7236,7 +7354,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
         </div>
       )}
       <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 14 }}>
-        Preview below — prints on A4. Only cards marked COMPLETE are counted, the same as the live leaderboard.
+        Preview below — prints on A4. Only submitted cards are counted, the same as the live leaderboard.
         {view === "day"
           ? `Level ${isMedal ? "net scores" : "points"} are split by countback — last 9 holes, then last 6, last 3 and the last hole; only cards still level after that share a position (shown as "3=").`
           : `Players level on total points share a position (shown as "3=").`}
@@ -8333,7 +8451,7 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
                 <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 2 }}>
                   {requireSignature
                     ? "ON — a card entered by a marker waits for the player to check and sign it on their own phone."
-                    : "Off — a card entered by a player goes straight onto the leaderboard when COMPLETE is pressed."}
+                    : "Off — a card entered by a player goes straight onto the leaderboard when SUBMIT CARD is pressed."}
                 </div>
               </div>
               <button
@@ -8807,7 +8925,7 @@ function EnterScores({ deviceId, course, ranked, unplaced = [], onSelect, onAdd,
               )}
               {p.thru > 0 && (
                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: isScoreComplete(p) ? "#2F6B3F" : "#B5442E" }}>
-                  {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : awaitingSignature(p) ? "✍ Submitted by a marker — waiting for the player to sign (or press COMPLETE here to post it)" : "In progress — not on the leaderboard yet"}
+                  {isScoreComplete(p) ? "✓ Complete — on the leaderboard" : awaitingSignature(p) ? "✍ Submitted by a marker — waiting for the player to sign (or press SUBMIT CARD here to post it)" : "In progress — not on the leaderboard yet"}
                 </div>
               )}
             </div>
@@ -8969,7 +9087,7 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
       )}
       <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>Enter scores — {roundLabel}</div>
       <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
-        Tap a card, type in the gross score for each hole, then press COMPLETE. {doneCount} of {totalCount} cards done.
+        Tap a card, type in the gross score for each hole, then press SUBMIT CARD. {doneCount} of {totalCount} cards done.
       </div>
       {notice && (
         <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", color: "#6B4E00", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
@@ -9197,6 +9315,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   const inputRefs = useRef({});
   const timers = useRef({});
   const [confirmClearScores, setConfirmClearScores] = useState(false);
+  const [confirmComplete, setConfirmComplete] = useState(false); // "have you finished the whole round?"
 
   // ---- Score pad ----
   // Tapping a hole opens a row of big buttons beneath it — the scores
@@ -9449,7 +9568,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           </div>
           <div style={{ fontSize: 11.5, color: "#8A5A00", marginTop: 8 }}>
             Check this is the right card before you start. Enter the GROSS score for each hole — put 0 for a hole that
-            was picked up (0 points) — then press COMPLETE.
+            was picked up (0 points) — then press SUBMIT CARD.
           </div>
         </div>
       )}
@@ -9893,12 +10012,42 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         }
         return (
           <div style={{ marginTop: 14 }}>
+            {confirmComplete && (
+              <div
+                style={{ position: "fixed", inset: 0, background: "rgba(27,27,27,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+                onClick={() => setConfirmComplete(false)}
+              >
+                <div style={{ background: "#FFFFFF", borderRadius: 14, padding: 22, width: "100%", maxWidth: 340, textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: headerColor, lineHeight: 1.25 }}>Finished the whole round?</div>
+                  <div style={{ fontSize: 13.5, color: "#3F3F38", marginTop: 8, lineHeight: 1.45 }}>
+                    SUBMIT CARD is for the end of the round, not the end of a hole.
+                    {entered < 18
+                      ? ` Only ${entered} of 18 holes ${entered === 1 ? "has" : "have"} a score — if you're still playing, go back and carry on.`
+                      : " All 18 holes are in."}
+                    {publicMode && requireSignature ? " Once completed, the card goes to the player to check and sign." : ""}
+                  </div>
+                  <button
+                    onClick={() => setConfirmComplete(false)}
+                    style={{ width: "100%", marginTop: 16, padding: "14px 0", borderRadius: 10, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 800, fontSize: 15 }}
+                  >
+                    ← Still playing — back to scoring
+                  </button>
+                  <button
+                    onClick={() => {
+                      setConfirmComplete(false);
+                      if (publicMode && requireSignature) onUpdate({ submitted: true, submittedBy: deviceId, submittedAt: Date.now(), scoresComplete: false });
+                      else onUpdate({ scoresComplete: true });
+                      onBack();
+                    }}
+                    style={{ width: "100%", marginTop: 8, padding: "12px 0", borderRadius: 10, border: `2px solid ${entered < 18 ? "#B5442E" : headerColor}`, background: "transparent", color: entered < 18 ? "#B5442E" : headerColor, fontWeight: 700, fontSize: 14 }}
+                  >
+                    {entered < 18 ? `Yes, finished — submit the card with ${entered} holes` : "Yes, finished — submit the card"}
+                  </button>
+                </div>
+              </div>
+            )}
             <button
-              onClick={() => {
-                if (publicMode && requireSignature) onUpdate({ submitted: true, submittedBy: deviceId, submittedAt: Date.now(), scoresComplete: false });
-                else onUpdate({ scoresComplete: true });
-                onBack();
-              }}
+              onClick={() => setConfirmComplete(true)}
               disabled={entered === 0}
               style={{
                 width: "100%", padding: "15px 0", borderRadius: 10, border: "none",
@@ -9906,7 +10055,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                 fontWeight: 800, fontSize: 16, letterSpacing: "0.08em",
               }}
             >
-              {!publicMode && awaitingSignature(player) ? "APPROVE — SIGNED CARD SEEN" : "COMPLETE"}
+              {!publicMode && awaitingSignature(player) ? "APPROVE — SIGNED CARD SEEN" : "SUBMIT CARD"}
             </button>
             <div style={{ fontSize: 11.5, color: "#6B6B5F", textAlign: "center", marginTop: 6 }}>
               {!publicMode && awaitingSignature(player)
@@ -9915,12 +10064,12 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
                       Or cancel the submission
                     </button> — the scores stay, the card just goes back to "in progress".</>
                 : entered === 0
-                ? `Enter the scores, then press COMPLETE${publicMode && requireSignature ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
+                ? `Enter the scores, then press SUBMIT CARD${publicMode && requireSignature ? " to send the card to the player to sign" : " to post them to the leaderboard"}.`
                 : entered < 18
-                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until ${publicMode && requireSignature ? "it's completed and signed" : "you press COMPLETE"} (an unfinished card will show as NR).`
+                ? `${entered} of 18 holes entered. Saved, but NOT on the leaderboard until ${publicMode && requireSignature ? "it's submitted and signed" : "you press SUBMIT CARD"} (an unfinished card will show as NR).`
                 : publicMode && requireSignature
-                ? "All 18 holes entered. Press COMPLETE, then the player checks and signs it on their own phone before it goes on the leaderboard."
-                : "All 18 holes entered. Saved, but NOT on the leaderboard until you press COMPLETE."}
+                ? "All 18 holes entered. Press SUBMIT CARD, then the player checks and signs it on their own phone before it goes on the leaderboard."
+                : "All 18 holes entered. Saved, but NOT on the leaderboard until you press SUBMIT CARD."}
             </div>
           </div>
         );
