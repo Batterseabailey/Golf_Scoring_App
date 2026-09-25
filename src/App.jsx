@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 113";
+const APP_VERSION = "21 Sep 2026 · build 114";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2173,7 +2173,7 @@ function AppInner() {
     // like players' score entry or a changed draw, reaches a phone that's
     // simply sitting open, without the app having to be reopened. Admin
     // and the handicap screen are left alone so nothing moves mid-edit.
-    if (mode === "scorer" || mode === "handicap") return;
+    if (mode === "scorer") return;
     // Leaderboard every 10s, the players' score list every 5s (few people,
     // and they need to see each other's cards being taken), other screens
     // every 20s. Each refresh is now only a few bytes unless something has
@@ -8326,17 +8326,33 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
     ? players.filter((p) => p.name.toLowerCase().includes(query.trim().toLowerCase()))
     : players;
   const selectedPlayer = players.find((p) => p.name === selectedName);
+  const [dirty, setDirty] = useState(false); // typed into the box since it was opened / last saved
 
   const selectPlayer = (p) => {
     setSelectedName(p.name);
     setValue(p.index || "");
     setCompetition(p.competition || "");
     setSavedMsg(false);
+    setDirty(false);
   };
+
+  // If the figure changes elsewhere (another phone saved, or a refresh
+  // brought in a newer copy) while this card is open and nothing has been
+  // typed here, show the new figure rather than the one from when it was
+  // opened. Anything being typed is left alone.
+  const liveIndex = selectedPlayer ? selectedPlayer.index : null;
+  const liveCompetition = selectedPlayer ? selectedPlayer.competition : null;
+  useEffect(() => {
+    if (!selectedPlayer || dirty) return;
+    setValue(liveIndex || "");
+    setCompetition(liveCompetition || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveIndex, liveCompetition]);
 
   const save = () => {
     onUpdateIndexAndCompetition(selectedName, value, competition);
     setSavedMsg(true);
+    setDirty(false);
     setTimeout(() => setSavedMsg(false), 1500);
   };
 
@@ -8362,7 +8378,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
             type="number"
             inputMode="decimal"
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => { setValue(e.target.value); setDirty(true); }}
             className="mono"
             style={{ width: "100%", fontSize: 20, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14 }}
           />
@@ -8371,7 +8387,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
               <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
               <select
                 value={competition}
-                onChange={(e) => setCompetition(e.target.value)}
+                onChange={(e) => { setCompetition(e.target.value); setDirty(true); }}
                 style={{ width: "100%", fontSize: 16, fontWeight: 600, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
               >
                 <option value="">Main competition (no sub-trophy)</option>
