@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 104";
+const APP_VERSION = "21 Sep 2026 · build 107";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -2247,7 +2247,7 @@ function AppInner() {
   const addPlayerQuick = (name, index) => {
     const trimmed = (name || "").trim();
     if (!trimmed) return;
-    const newPlayer = { id: crypto.randomUUID(), name: trimmed, index, tee: course.tees[0]?.label || "", scores: Array(18).fill("") };
+    const newPlayer = { id: crypto.randomUUID(), name: trimmed, index: index || rosterIndexFor(trimmed, stateRef.current.societyRoster), tee: course.tees[0]?.label || "", scores: Array(18).fill("") };
     updateRound({ players: [...players, newPlayer] });
   };
 
@@ -2758,7 +2758,13 @@ function AppInner() {
     const newPlayers = toAdd
       .filter((m) => !existingNames.has(normalizeName(m.name)))
       .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: "", scores: Array(18).fill("") }));
-    if (newPlayers.length > 0) updateRound({ players: [...players, ...newPlayers] });
+    // Anyone already on the day but without a handicap gets the roster's.
+    const filled = players.map((p) => {
+      if (p.index !== "" && p.index != null) return p;
+      const m = toAdd.find((x) => normalizeName(x.name) === normalizeName(p.name));
+      return m && m.index ? { ...p, index: m.index } : p;
+    });
+    if (newPlayers.length > 0 || filled.some((p, i) => p !== players[i])) updateRound({ players: [...filled, ...newPlayers] });
     return newPlayers.length;
   };
 
@@ -2825,13 +2831,18 @@ function AppInner() {
   // index either way.
   // Index and competition are the same regardless of which course a
   // player is on, so these stay synced everywhere the name appears.
+  // From the Your Handicap screen: the roster and every day the player
+  // has NOT yet played take the new figure; a day with scores already
+  // entered keeps the handicap it was played off.
   const updateIndexAndCompetitionEverywhere = (name, newIndex, newCompetition) => {
     const target = normalizeName(name);
+    const played = (p) => (p.scores || []).some((v) => v !== "" && v != null);
     save((prev) => ({
       societyRoster: prev.societyRoster.map((m) => (normalizeName(m.name) === target ? { ...m, index: newIndex } : m)),
       rounds: prev.rounds.map((r) => ({
         ...r,
         players: r.players.map((p) => {
+          if (played(p)) return p;
           if (normalizeName(p.name) === target) return { ...p, index: newIndex, competition: newCompetition };
           if (normalizeName(p.partnerName) === target) return { ...p, partnerIndex: newIndex, partnerCompetition: newCompetition };
           return p;
@@ -2944,13 +2955,27 @@ function AppInner() {
   // from the paste (e.g. depending on column order). The draw itself is
   // always the source of truth for "who is actually playing"; a missing
   // handicap should never mean a missing player.
-  const ensureAllDrawPlayersExist = (currentPlayers, newDraw) => {
+  // A name arriving on a day with no handicap (a draw pasted with names
+  // only, "Add player" with the box left blank) takes its index from the
+  // Society roster when it's there — so a roster handicap always reaches
+  // the draw. The roster's tee is NOT copied (it may be another course's).
+  const rosterIndexFor = (name, roster) => {
+    const target = normalizeName(name);
+    const m = (roster || []).find((x) => normalizeName(x.name) === target);
+    return m && m.index !== "" && m.index != null ? m.index : "";
+  };
+
+  const ensureAllDrawPlayersExist = (currentPlayers, newDraw, roster) => {
     let next = [...currentPlayers];
     const allDrawNames = newDraw.flatMap((entry) => entry.players || []).filter(Boolean);
     allDrawNames.forEach((name) => {
       const target = normalizeName(name);
-      if (!next.some((p) => normalizeName(p.name) === target)) {
-        next.push({ id: crypto.randomUUID(), name: name.trim(), index: "", tee: course.tees[0]?.label || "", scores: Array(18).fill("") });
+      const i = next.findIndex((p) => normalizeName(p.name) === target);
+      if (i === -1) {
+        next.push({ id: crypto.randomUUID(), name: name.trim(), index: rosterIndexFor(name, roster), tee: course.tees[0]?.label || "", scores: Array(18).fill("") });
+      } else if (next[i].index === "" || next[i].index == null) {
+        const idx = rosterIndexFor(name, roster);
+        if (idx !== "") next[i] = { ...next[i], index: idx };
       }
     });
     return next;
@@ -2986,7 +3011,7 @@ function AppInner() {
     const withComps = Array.isArray(compPairs)
       ? mergeCompetitionsIntoPlayers(withTees, compPairs, namesInThisPaste)
       : withTees;
-    const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw);
+    const withAllDrawPlayers = ensureAllDrawPlayersExist(withComps, newDraw, prev.societyRoster);
     // On a Singles day, strip any partner fields that might be lingering
     // on a player's record — e.g. leftover from a day that was briefly,
     // incorrectly set to Foursomes at some point in the past. A stale
@@ -3033,11 +3058,11 @@ function AppInner() {
         const target = normalizeName(person.name);
         const i = nextPlayers.findIndex((p) => normalizeName(p.name) === target);
         if (i === -1) {
-          nextPlayers.push({ id: crypto.randomUUID(), name: person.name, index: person.index || "", tee: person.tee || firstTee, competition: person.competition || "", scores: Array(18).fill("") });
+          nextPlayers.push({ id: crypto.randomUUID(), name: person.name, index: person.index || rosterIndexFor(person.name, prev.societyRoster), tee: person.tee || firstTee, competition: person.competition || "", scores: Array(18).fill("") });
           added += 1;
         } else {
           const p = nextPlayers[i];
-          const patched = { ...p, index: person.index || p.index, tee: person.tee || p.tee, competition: person.competition || p.competition };
+          const patched = { ...p, index: person.index || p.index || rosterIndexFor(person.name, prev.societyRoster), tee: person.tee || p.tee, competition: person.competition || p.competition };
           if (patched.index !== p.index || patched.tee !== p.tee || patched.competition !== p.competition) updated += 1;
           nextPlayers[i] = patched;
         }
@@ -6461,19 +6486,26 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
   });
   // Print everyone, or just the cards ticked below (a late entry, a
   // reprint for someone who's lost theirs).
+  const [cardSize, setCardSize] = useState("a5"); // a5: two per A4 portrait; a6: four per A4 landscape
+  const a6 = cardSize === "a6";
+  // type sizes: A5 as before; A6 scaled down to fit a quarter sheet
+  const F = a6
+    ? { th: "7.5pt", td: "7.5pt", row: "5.6mm", score: "9.5pt", star: "7pt", org: "10pt", sub: "7.5pt", name: "11pt", meta: "7.5pt", foot: "7pt", box: "10pt", boxW: "12mm", boxH: "5mm", logo: 24 }
+    : { th: "10pt", td: "10pt", row: "7.6mm", score: "12pt", star: "9pt", org: "13pt", sub: "10pt", name: "15pt", meta: "10pt", foot: "10pt", box: "13pt", boxW: "18mm", boxH: "7mm", logo: 34 };
   const [pickMode, setPickMode] = useState(false);
   const [picked, setPicked] = useState(new Set());
   const [pickSearch, setPickSearch] = useState("");
   const togglePick = (id) => setPicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const allSorted = [...cards].sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.title.localeCompare(b.title));
   const sortedCards = pickMode ? allSorted.filter((c) => picked.has(c.id)) : allSorted;
+  const perSheet = a6 ? 4 : 2;
   const pairs = [];
-  for (let i = 0; i < sortedCards.length; i += 2) pairs.push(sortedCards.slice(i, i + 2));
+  for (let i = 0; i < sortedCards.length; i += perSheet) pairs.push(sortedCards.slice(i, i + perSheet));
   const formatLine = `${scoring === "medal" ? "Medal" : "Stableford"}${isFoursomes ? " Foursomes" : ""} · ${handicapAllowance}% allowance`;
 
   const nineTable = (c, holes) => {
-    const th = { padding: "3px 3px", fontSize: "10pt", fontWeight: 700, borderBottom: "1.5px solid #000", textAlign: "center", whiteSpace: "nowrap" };
-    const td = { padding: "0 3px", fontSize: "10pt", borderBottom: "0.6px solid #777", textAlign: "center", height: "7.6mm", lineHeight: 1 };
+    const th = { padding: a6 ? "2px 2px" : "3px 3px", fontSize: F.th, fontWeight: 700, borderBottom: "1.5px solid #000", textAlign: "center", whiteSpace: "nowrap" };
+    const td = { padding: a6 ? "0 2px" : "0 3px", fontSize: F.td, borderBottom: "0.6px solid #777", textAlign: "center", height: F.row, lineHeight: 1 };
     const label = holes[0] === 1 ? "Out" : "In";
     const sum = (f) => holes.reduce((n, h) => n + (Number(f(h - 1)) || 0), 0);
     return (
@@ -6498,10 +6530,10 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
                 {c.yards && <td className="mono" style={td}>{c.yards[i] ?? ""}</td>}
                 <td className="mono" style={td}>{course.holes[i].par}</td>
                 <td className="mono" style={td}>{course.holes[i].si}</td>
-                <td className="mono" style={{ ...td, position: "relative", fontWeight: 800, fontSize: "12pt", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+                <td className="mono" style={{ ...td, position: "relative", fontWeight: 800, fontSize: F.score, borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
                   {c.scores[i] !== "" && c.scores[i] != null ? (isPickedUp(c.scores[i]) ? "–" : c.scores[i]) : ""}
                   {c.shots[i] > 0 && (
-                    <span style={{ position: "absolute", top: 1, right: 2, fontSize: "9pt", fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+                    <span style={{ position: "absolute", top: 1, right: 2, fontSize: F.star, fontWeight: 800, color: "#C00000", lineHeight: 1, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
                       {"*".repeat(c.shots[i])}
                     </span>
                   )}
@@ -6522,11 +6554,11 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
             {c.yards && <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.yards[i]) || ""}</td>}
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => course.holes[i].par)}</td>
             <td style={{ ...td, borderBottom: "1.5px solid #000" }} />
-            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: "12pt", borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
+            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: F.score, borderBottom: "1.5px solid #000", borderLeft: "0.6px solid #777", borderRight: "0.6px solid #777" }}>
               {c.hasScores && !holes.some((h) => isPickedUp(c.scores[h - 1])) && holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? sum((i) => c.scores[i]) : c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : ""}
             </td>
             <td className="mono" style={{ ...td, fontWeight: 700, borderBottom: "1.5px solid #000" }}>{sum((i) => c.shots[i]) || ""}</td>
-            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: "12pt", borderBottom: "1.5px solid #000" }}>
+            <td className="mono" style={{ ...td, fontWeight: 800, fontSize: F.score, borderBottom: "1.5px solid #000" }}>
               {c.hasScores && holes.some((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null)
                 ? (scoring === "medal"
                     ? (holes.some((h) => isPickedUp(c.scores[h - 1])) || !holes.every((h) => c.scores[h - 1] !== "" && c.scores[h - 1] != null) ? "NR" : sum((i) => Number(c.scores[i]) - c.shots[i]))
@@ -6542,22 +6574,22 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
   const card = (c) => (
     <div className="scorecard" key={c.id}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-        <SocietyLogo orgName={orgName} height={34} />
+        <SocietyLogo orgName={orgName} height={F.logo} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: "13pt", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{orgName}</div>
-          <div style={{ fontSize: "10pt" }}>{[eventName, roundLabel].filter(Boolean).join(" — ")}</div>
+          <div style={{ fontSize: F.org, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{orgName}</div>
+          <div style={{ fontSize: F.sub }}>{[eventName, roundLabel].filter(Boolean).join(" — ")}</div>
         </div>
-        <div style={{ textAlign: "right", fontSize: "10pt", lineHeight: 1.3 }}>
+        <div style={{ textAlign: "right", fontSize: F.sub, lineHeight: 1.3 }}>
           <div>{course.name}</div>
           <div>{roundDateDisplay}{c.time ? ` · ${c.time}` : ""}{c.startTee ? ` · ${c.startTee}` : ""}</div>
         </div>
       </div>
       <div style={{ borderTop: `1.5px solid ${BRAND.printColor}`, borderBottom: "0.6px solid #777", padding: "3px 0", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
         <div>
-          <div style={{ fontSize: "15pt", fontWeight: 800 }}>{c.title}</div>
-          {c.others.length > 0 && <div style={{ fontSize: "10pt", color: "#333" }}>Playing with {c.others.map(dn).join(", ")}</div>}
+          <div style={{ fontSize: F.name, fontWeight: 800 }}>{c.title}</div>
+          {c.others.length > 0 && <div style={{ fontSize: F.meta, color: "#333" }}>Playing with {c.others.map(dn).join(", ")}</div>}
         </div>
-        <div style={{ textAlign: "right", fontSize: "10pt", lineHeight: 1.35 }}>
+        <div style={{ textAlign: "right", fontSize: F.meta, lineHeight: 1.35 }}>
           <div style={{ fontWeight: 800 }}>{c.hcp} — Playing {c.ph}{c.adjusted ? "*" : ""}</div>
           <div>{formatLine}{c.tee ? ` · ${c.tee} tee` : ""}</div>
           {c.competition && <div style={{ fontWeight: 700 }}>{c.competition}</div>}
@@ -6567,7 +6599,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         <div style={{ flex: 1 }}>{nineTable(c, OUT)}</div>
         <div style={{ flex: 1 }}>{nineTable(c, IN)}</div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 5, fontSize: "10pt" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: a6 ? 3 : 5, fontSize: F.foot }}>
         <div style={{ flex: 1 }}>
           {drawNote && drawNote.trim() && <div style={{ fontStyle: "italic", marginBottom: 3 }}>{drawNote}</div>}
           <div style={{ color: "#333" }}>* = stroke received on this hole{c.adjusted ? " · playing handicap adjusted for this competition" : ""}</div>
@@ -6586,8 +6618,8 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
               const pts = c.hasScores ? c.scores.reduce((n, v, i) => n + (holePoints(course, v, i, c.ph) || 0), 0) : "";
               return [["Gross", gross], ["Nett", nett], ["Points", pts]].map(([k, v]) => (
                 <tr key={k}>
-                  <td style={{ fontSize: "10pt", padding: "0 5px", textAlign: "right", fontWeight: 700 }}>{k}</td>
-                  <td className="mono" style={{ border: "0.8px solid #000", width: "18mm", height: "7mm", textAlign: "center", fontSize: "13pt", fontWeight: 800 }}>{v}</td>
+                  <td style={{ fontSize: F.foot, padding: "0 4px", textAlign: "right", fontWeight: 700 }}>{k}</td>
+                  <td className="mono" style={{ border: "0.8px solid #000", width: F.boxW, height: F.boxH, textAlign: "center", fontSize: F.box, fontWeight: 800 }}>{v}</td>
                 </tr>
               ));
             })()}
@@ -6598,12 +6630,23 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
   );
 
   return (
-    <div style={{ padding: "12px 14px 40px" }}>
+    <div className="scorecards-page" style={{ padding: "12px 14px 40px" }}>
       <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, padding: 0, fontWeight: 600 }}>← Back</button>
         <button onClick={() => window.print()} disabled={sortedCards.length === 0} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 13.5, opacity: sortedCards.length === 0 ? 0.5 : 1 }}>
           <Printer size={15} /> Print
         </button>
+      </div>
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {[["a5", "A5 — two per sheet"], ["a6", "A6 — four per sheet (tear-off)"]].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setCardSize(k)}
+            style={{ flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, border: `1px solid ${headerColor}`, background: cardSize === k ? headerColor : "#FFFFFF", color: cardSize === k ? "#FFFFFF" : headerColor }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         {[["all", `Everyone (${cards.length})`], ["pick", `Chosen players${pickMode && picked.size ? ` (${picked.size})` : ""}`]].map(([k, label]) => (
@@ -6641,8 +6684,9 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         </div>
       )}
       <div className="no-print" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
-        {sortedCards.length} card{sortedCards.length === 1 ? "" : "s"} for {roundLabel}, in tee-time order — {pairs.length} sheet{pairs.length === 1 ? "" : "s"} of A4, two A5 cards to a sheet
-        (cut across the middle). Set Scale to 100% and Margins to "Default". Yardages come from Course setup; a card shows the yards for its player's tee.
+        {sortedCards.length} card{sortedCards.length === 1 ? "" : "s"} for {roundLabel}, in tee-time order — {pairs.length} sheet{pairs.length === 1 ? "" : "s"} of A4,{" "}
+        {a6 ? "four A6 cards to a landscape sheet (cut or tear into quarters)" : "two A5 cards to a portrait sheet (cut across the middle)"}.
+        Set Scale to 100% and Margins to "Default". Yardages come from Course setup; a card shows the yards for its player's tee.
       </div>
       {cards.length === 0 ? (
         <div style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>No players in the draw for this day yet.</div>
@@ -6650,7 +6694,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         <div className="no-print" style={{ fontSize: 13, color: "#9B9885", textAlign: "center", padding: 30 }}>Tick the players whose cards you want to print.</div>
       ) : (
         pairs.map((pr, i) => (
-          <div className="scorecard-sheet" key={i}>
+          <div className={`scorecard-sheet ${a6 ? "sheet-a6" : "sheet-a5"}`} key={i}>
             {pr.map(card)}
           </div>
         ))
@@ -6658,14 +6702,21 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
       <style>{`
         .scorecard-sheet { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
         .scorecard { background: #FFFFFF; border: 1px dashed #B5AF9A; padding: 6mm 7mm; font-family: "Bookman Old Style", "URW Bookman", Georgia, "Times New Roman", serif; color: #000; box-sizing: border-box; }
+        .sheet-a6 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         @media print {
           .no-print { display: none !important; }
-          @page { size: A4 portrait; margin: 0; }
+          @page { size: A4 ${a6 ? "landscape" : "portrait"}; margin: 0; }
           html, body { margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
-          .scorecard-sheet { display: block; width: 210mm; height: 297mm; margin: 0 !important; overflow: hidden; break-after: page; page-break-after: always; }
+          .scorecards-page { padding: 0 !important; margin: 0 !important; }
+          .scorecard-sheet { margin: 0 !important; overflow: hidden; break-after: page; page-break-after: always; }
           .scorecard-sheet:last-of-type { break-after: auto; page-break-after: auto; }
-          .scorecard { border: none; width: 210mm; height: 148.5mm; padding: 7mm 9mm 6mm; overflow: hidden; }
-          .scorecard + .scorecard { border-top: 0.4px dashed #999; }
+          .sheet-a5 { display: block; width: 210mm; height: 297mm; }
+          .sheet-a5 .scorecard { border: none; width: 210mm; height: 148.5mm; padding: 7mm 9mm 6mm; overflow: hidden; }
+          .sheet-a5 .scorecard + .scorecard { border-top: 0.4px dashed #999; }
+          .sheet-a6 { display: grid; width: 296mm; height: 209mm; grid-template-columns: 148mm 148mm; grid-template-rows: 104.5mm 104.5mm; gap: 0; }
+          .sheet-a6 .scorecard { width: 148mm; height: 104.5mm; padding: 5mm 6mm 4mm; overflow: hidden; border: none; box-sizing: border-box; }
+          .sheet-a6 .scorecard:nth-child(1), .sheet-a6 .scorecard:nth-child(2) { border-bottom: 0.4px dashed #999; }
+          .sheet-a6 .scorecard:nth-child(1), .sheet-a6 .scorecard:nth-child(3) { border-right: 0.4px dashed #999; }
         }
       `}</style>
     </div>
@@ -8227,7 +8278,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
             {savedMsg ? "Saved" : "Save"}
           </button>
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
-            Updates everywhere {selectedName} appears across the whole event, not just one day.
+            Updates the Society roster and every day {selectedName} hasn't yet played. A day already played keeps the handicap it was played off.
           </div>
         </div>
 
