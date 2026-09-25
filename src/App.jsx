@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 108";
+const APP_VERSION = "21 Sep 2026 · build 113";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -817,7 +817,7 @@ function emptyRound(label, course) {
     publicShowPoints: true,
     publicScoreEntry: false, // Admin switch — lets players open "Enter scores" for this day and help put cards in
     requireSignature: true, // ...and whether a card a player enters must then be signed by the player from their own phone
-    publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
+    publicShowDayBoard: true, // whether this day's own leaderboard is offered to players (Overall is always there)
     inOverall: true, // whether this day counts on the Overall (all days added together) leaderboard
     cardBack: "", // text printed on the reverse of this day's scorecards, under the club's logo
   };
@@ -867,7 +867,7 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicShowPoints: r.publicShowPoints === false ? false : true,
     publicScoreEntry: r.publicScoreEntry === true,
     requireSignature: r.requireSignature === false ? false : true,
-    publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
+    publicShowDayBoard: r.publicShowDayBoard === false ? false : true,
     inOverall: r.inOverall === false ? false : true,
     cardBack: typeof r.cardBack === "string" ? r.cardBack : "",
   };
@@ -1703,6 +1703,8 @@ function AppInner() {
   const boardTab = isFoursomes ? "foursomes" : "singles";
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [, setIdentityTick] = useState(0); // re-render after "who am I" is set on this phone
   const [live, setLive] = useState(false);
   const [syncError, setSyncError] = useState(false);
   const [activeId, setActiveId] = useState(null);
@@ -2610,14 +2612,18 @@ function AppInner() {
   // that are unchanged. Only organiser devices do this, so a room full of
   // players' phones can't all try to fix it at once.
   useEffect(() => {
-    if (!adminVisible || !isFoursomes || draw.length === 0 || loading) return;
+    // Only from a device that is live, in step with the server and not
+    // mid-save — never from a stale offline copy, which could push old
+    // data over newer.
+    if (!adminVisible || !isFoursomes || draw.length === 0 || loading || !live || offline || dirtyRef.current || pumpingRef.current) return;
+    if (stateRef.current !== syncedRef.current.state) return;
     const key = (p) => [normalizeName(p.name), normalizeName(p.partnerName)].join("|");
     const merged = mergedPairsFromDraw(players, draw, course);
     const a = players.filter((p) => p.name).map(key).sort().join(";");
     const b = merged.filter((p) => p.name).map(key).sort().join(";");
-    if (a !== b) updateRound({ players: merged });
+    if (a !== b) updateRound((prevRound) => ({ players: mergedPairsFromDraw(prevRound.players, prevRound.draw, prevRound.course) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRoundId, draw, isFoursomes, adminVisible, loading]);
+  }, [activeRoundId, draw, isFoursomes, adminVisible, loading, live, offline]);
 
   const updateCourse = (patch) => updateRound({ course: { ...course, ...patch } });
 
@@ -2748,26 +2754,23 @@ function AppInner() {
   // in this round's roster (matched by name) is left untouched rather than
   // duplicated.
   const addSocietyMembersToRound = (memberIds) => {
-    const toAdd = societyRoster.filter((m) => memberIds.includes(m.id));
-    const existingNames = new Set(players.map((p) => normalizeName(p.name)));
-    // Deliberately does NOT carry over the member's stored tee — that tee
-    // is very likely from whichever course they were last added on, which
-    // may be a completely different venue with completely different tee
-    // names. Left blank here (rather than silently guessing a default),
-    // it'll show up flagged in the roster so it gets set correctly for
-    // THIS day's actual course — see the bulk "Set tee" tool for doing
-    // that quickly for everyone at once.
-    const newPlayers = toAdd
-      .filter((m) => !existingNames.has(normalizeName(m.name)))
-      .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: "", scores: Array(18).fill("") }));
-    // Anyone already on the day but without a handicap gets the roster's.
-    const filled = players.map((p) => {
-      if (p.index !== "" && p.index != null) return p;
-      const m = toAdd.find((x) => normalizeName(x.name) === normalizeName(p.name));
-      return m && m.index ? { ...p, index: m.index } : p;
+    let addedCount = 0;
+    updateRound((prevRound) => {
+      const toAdd = stateRef.current.societyRoster.filter((m) => memberIds.includes(m.id));
+      const current = prevRound.players;
+      const existingNames = new Set(current.map((p) => normalizeName(p.name)));
+      const newPlayers = toAdd
+        .filter((m) => !existingNames.has(normalizeName(m.name)))
+        .map((m) => ({ id: crypto.randomUUID(), name: m.name, index: m.index || "", tee: "", scores: Array(18).fill("") }));
+      const filled = current.map((p) => {
+        if (p.index !== "" && p.index != null) return p;
+        const m = toAdd.find((x) => normalizeName(x.name) === normalizeName(p.name));
+        return m && m.index ? { ...p, index: m.index } : p;
+      });
+      addedCount = newPlayers.length;
+      return { players: [...filled, ...newPlayers] };
     });
-    if (newPlayers.length > 0 || filled.some((p, i) => p !== players[i])) updateRound({ players: [...filled, ...newPlayers] });
-    return newPlayers.length;
+    return addedCount;
   };
 
   // Sets the same tee for a whole batch of INDIVIDUAL PEOPLE at once — not
@@ -3128,7 +3131,7 @@ function AppInner() {
     updateRound({ matches: matches.filter((m) => m.id !== id) });
   };
 
-  const uploadDocument = async (file) => {
+  const uploadDocument = async (file, folder) => {
     const code = eventCodeRef.current;
     if (!code || !file) return { ok: false, error: "No event code." };
     if (file.size > MAX_DOC_SIZE_MB * 1024 * 1024) {
@@ -3146,9 +3149,18 @@ function AppInner() {
     } catch {
       return { ok: false, error: "Upload failed — check your connection and try again." };
     }
-    const entry = { id: docId, name: file.name, sizeKB: Math.round(file.size / 1024) };
+    const entry = { id: docId, name: file.name, sizeKB: Math.round(file.size / 1024), folder: (folder || "").trim() };
     save((prev) => ({ documents: [...prev.documents, entry] }));
     return { ok: true };
+  };
+
+  // Folders are just a label on each PDF ("Dinner", "Rules of golf") —
+  // no separate folder records, so renaming one is renaming the label.
+  const moveDocument = (docId, folder) => {
+    save((prev) => ({ documents: prev.documents.map((d) => (d.id === docId ? { ...d, folder: (folder || "").trim() } : d)) }));
+  };
+  const renameDocument = (docId, name) => {
+    save((prev) => ({ documents: prev.documents.map((d) => (d.id === docId ? { ...d, name } : d)) }));
   };
 
   const removeDocument = async (docId) => {
@@ -3330,10 +3342,14 @@ function AppInner() {
               {orgName}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, opacity: 0.85 }}>
+          <button
+            onClick={() => { setRefreshing(true); resync(); setTimeout(() => setRefreshing(false), 1500); }}
+            title="Refresh now"
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, opacity: 0.9, background: "rgba(241,239,227,0.12)", border: "1px solid rgba(241,239,227,0.3)", borderRadius: 14, padding: "4px 9px", color: "#F1EFE3" }}
+          >
             <Radio size={13} color={offline ? "#E0A33A" : live ? "#7FB88F" : accentColor} />
-            {offline ? "Offline" : live ? "Live" : "Connecting…"}
-          </div>
+            {refreshing ? "Refreshing…" : offline ? "Offline · tap to retry" : live ? "Live · tap to refresh" : "Connecting…"}
+          </button>
         </div>
         <div style={{ fontSize: 26, fontWeight: 700, marginTop: 6, letterSpacing: "-0.01em" }}>
           {course.eventName}
@@ -3588,7 +3604,9 @@ function AppInner() {
               claimCard(id);
             }}
             onReview={(id) => { setEntryNotice(""); setActiveId(id); load(); }}
-            reminderKey={`golf-entry-reminder-${eventCode}-${activeRoundId}`}
+            ownName={readOwnCard(eventCode, activeRoundId).name}
+            onSetOwnName={(name) => { const cur = readOwnCard(eventCode, activeRoundId); writeOwnCard(eventCode, activeRoundId, { ...cur, name }); setIdentityTick((n) => n + 1); }}
+            draw={draw}
             headerColor={headerColor}
             accentColor={accentColor}
           />
@@ -3689,6 +3707,8 @@ function AppInner() {
         <DocumentsSetup
           documents={documents}
           onUpload={uploadDocument}
+          onMove={moveDocument}
+          onRename={renameDocument}
           onRemove={removeDocument}
           onOpen={openDocument}
           onBack={() => setShowDocumentsSetup(false)}
@@ -4139,21 +4159,43 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
   // the admin has explicitly switched it on for this day.
   const todayAvailable =
     activeRound &&
-    activeRound.publicShowDayBoard &&
+    activeRound.publicShowDayBoard !== false &&
     activeRound.format !== "matchplay" &&
     ((tab === "singles" && activeRound.format !== "foursomes") || (tab === "foursomes" && activeRound.format === "foursomes"));
+  // The day being viewed comes first; Overall (every day added together)
+  // is a tap away. If Admin has hidden this day's board, only Overall shows.
+  const [view, setView] = useState("day");
+  const showDay = todayAvailable && view === "day";
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
-      <div
-        style={{
-          padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`, marginBottom: 12,
-          background: headerColor, color: "#FFFFFF", fontSize: 12.5, fontWeight: 700, textAlign: "center",
-        }}
-      >
-        {tab === "singles" ? "Singles" : "Foursomes"} — matches the day you're currently viewing
-      </div>
       {todayAvailable ? (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[["day", activeRound.label], ["overall", "Overall — all days"]].map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setView(k)}
+              style={{
+                flex: 1, padding: "9px 6px", borderRadius: 7, border: `1px solid ${headerColor}`,
+                background: view === k ? headerColor : "transparent", color: view === k ? "#FFFFFF" : headerColor,
+                fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            padding: "9px 0", borderRadius: 7, border: `1px solid ${headerColor}`, marginBottom: 12,
+            background: headerColor, color: "#FFFFFF", fontSize: 12.5, fontWeight: 700, textAlign: "center",
+          }}
+        >
+          Overall — {tab === "singles" ? "Singles" : "Foursomes"} days added together
+        </div>
+      )}
+      {showDay ? (
         <SingleDayBoard round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : (
         <>
@@ -8347,6 +8389,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
           </button>
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
             Updates the Society roster and every day {selectedName} hasn't yet played. A day already played keeps the handicap it was played off.
+            Saved straight away; other phones pick it up within a minute, or at once if they tap "Live" in the header.
           </div>
         </div>
 
@@ -8418,7 +8461,13 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
   );
 }
 
+function docFolders(documents) {
+  const names = [...new Set(documents.map((d) => (d.folder || "").trim()).filter(Boolean))].sort((x, y) => x.localeCompare(y));
+  return names;
+}
+
 function DocumentsView({ documents, onOpen, headerColor, accentColor }) {
+  const [openFolder, setOpenFolder] = useState(null);
   if (documents.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center", color: "#6B6B5F" }}>
@@ -8428,37 +8477,65 @@ function DocumentsView({ documents, onOpen, headerColor, accentColor }) {
       </div>
     );
   }
+  const folders = docFolders(documents);
+  const loose = documents.filter((d) => !(d.folder || "").trim());
+  const docRow = (doc) => (
+    <button
+      key={doc.id}
+      onClick={() => onOpen(doc)}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+        background: "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
+      }}
+    >
+      <FileText size={20} color={headerColor} style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {doc.name}
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
+          {doc.sizeKB < 1024 ? `${doc.sizeKB} KB` : `${(doc.sizeKB / 1024).toFixed(1)} MB`}
+        </div>
+      </div>
+      <ChevronRight size={16} color="#9B9885" />
+    </button>
+  );
   return (
     <div style={{ padding: "14px 12px 40px" }}>
-      {documents.map((doc) => (
-        <button
-          key={doc.id}
-          onClick={() => onOpen(doc)}
-          style={{
-            width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left",
-            background: "#FFFFFF", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid #E4E0D0",
-          }}
-        >
-          <FileText size={20} color={headerColor} style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {doc.name}
-            </div>
-            <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 1 }}>
-              {doc.sizeKB < 1024 ? `${doc.sizeKB} KB` : `${(doc.sizeKB / 1024).toFixed(1)} MB`}
-            </div>
+      {folders.map((f) => {
+        const inside = documents.filter((d) => (d.folder || "").trim() === f);
+        const open = openFolder === f || folders.length === 1;
+        return (
+          <div key={f} style={{ marginBottom: 10 }}>
+            <button
+              onClick={() => setOpenFolder(open && folders.length > 1 ? null : f)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+                background: headerColor, color: "#FFFFFF", borderRadius: 10, padding: "12px 14px", border: "none",
+              }}
+            >
+              <span style={{ fontSize: 14, fontWeight: 800, flex: 1 }}>{f}</span>
+              <span className="mono" style={{ fontSize: 11.5, opacity: 0.85 }}>{inside.length} {inside.length === 1 ? "file" : "files"}</span>
+              <ChevronRight size={16} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+            </button>
+            {open && <div style={{ paddingTop: 8, paddingLeft: 6 }}>{inside.map(docRow)}</div>}
           </div>
-          <ChevronRight size={16} color="#9B9885" />
-        </button>
-      ))}
+        );
+      })}
+      {loose.map(docRow)}
     </div>
   );
 }
 
-function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerColor, accentColor }) {
+function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRename, onBack, headerColor, accentColor }) {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState("");
+  const folders = docFolders(documents);
+  const [folderChoice, setFolderChoice] = useState(""); // "" = no folder, "__new__" = typing a new one
+  const [newFolder, setNewFolder] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const targetFolder = folderChoice === "__new__" ? newFolder : folderChoice;
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
@@ -8466,7 +8543,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
     if (!file) return;
     setUploading(true);
     setMsg("");
-    const result = await onUpload(file);
+    const result = await onUpload(file, targetFolder);
     setUploading(false);
     setMsg(result.ok ? `Uploaded "${file.name}".` : result.error || "Upload failed.");
   };
@@ -8481,6 +8558,27 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Add a PDF</div>
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 10 }}>
           Anything players should be able to read — a dinner table plan, a programme, rules of golf notes. Shared across every day, not tied to whichever day you're currently on. Max {MAX_DOC_SIZE_MB}MB per file.
+          Group them into folders by subject; players see each folder as a heading they can open. Tap Edit on a file to rename it or move it to another folder.
+        </div>
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Put it in a folder (optional)</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <select
+            value={folderChoice}
+            onChange={(e) => setFolderChoice(e.target.value)}
+            style={{ flex: 1, fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+          >
+            <option value="">No folder</option>
+            {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+            <option value="__new__">New folder…</option>
+          </select>
+          {folderChoice === "__new__" && (
+            <input
+              value={newFolder}
+              onChange={(e) => setNewFolder(e.target.value)}
+              placeholder="Folder name"
+              style={{ flex: 1, fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", fontFamily: "inherit" }}
+            />
+          )}
         </div>
         <input
           ref={fileInputRef}
@@ -8509,20 +8607,52 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onBack, headerC
           <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
             Posted documents
           </div>
-          {documents.map((doc) => (
-            <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid #EFEDE0" }}>
-              <button
-                onClick={() => onOpen(doc)}
-                style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", textAlign: "left", padding: 0 }}
-              >
-                <FileText size={15} color={headerColor} />
-                <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</span>
-              </button>
-              <button onClick={() => onRemove(doc.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
-                <X size={14} />
-              </button>
-            </div>
-          ))}
+          {[...folders, ""].map((f) => {
+            const inside = documents.filter((d) => (d.folder || "").trim() === f);
+            if (inside.length === 0) return null;
+            return (
+              <div key={f || "__loose__"}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: headerColor, marginTop: 8, marginBottom: 2 }}>{f || (folders.length ? "Not in a folder" : "")}</div>
+                {inside.map((doc) => (
+                  <div key={doc.id} style={{ padding: "8px 0", borderTop: "1px solid #EFEDE0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button
+                        onClick={() => onOpen(doc)}
+                        style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", textAlign: "left", padding: 0, minWidth: 0 }}
+                      >
+                        <FileText size={15} color={headerColor} style={{ flexShrink: 0 }} />
+                        <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</span>
+                      </button>
+                      <button onClick={() => setEditingId(editingId === doc.id ? null : doc.id)} style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 600, padding: "2px 4px" }}>
+                        {editingId === doc.id ? "Done" : "Edit"}
+                      </button>
+                      <button onClick={() => onRemove(doc.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {editingId === doc.id && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <input
+                          value={doc.name}
+                          onChange={(e) => onRename(doc.id, e.target.value)}
+                          placeholder="Shown as…"
+                          style={{ flex: 1.4, fontSize: 12.5, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0", fontFamily: "inherit", minWidth: 0 }}
+                        />
+                        <input
+                          list={`folders-${doc.id}`}
+                          value={doc.folder || ""}
+                          onChange={(e) => onMove(doc.id, e.target.value)}
+                          placeholder="Folder (blank = none)"
+                          style={{ flex: 1, fontSize: 12.5, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0", fontFamily: "inherit", minWidth: 0 }}
+                        />
+                        <datalist id={`folders-${doc.id}`}>{folders.map((x) => <option key={x} value={x} />)}</datalist>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -9162,63 +9292,146 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor, reminderKey }) {
-  // A reminder that flashes up for 6 seconds the FIRST time this phone
-  // opens Enter scores for the day: you score your OPPONENT'S card, not
-  // your own. Not again when coming back to sign at the end.
-  const [flash, setFlash] = useState(() => {
-    try { return !window.localStorage.getItem(reminderKey); } catch { return true; }
-  });
-  useEffect(() => {
-    if (!flash) return;
-    try { window.localStorage.setItem(reminderKey, "1"); } catch { /* ignore */ }
-    const t = setTimeout(() => setFlash(false), 6000);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const waiting = ranked.filter((p) => p.name && awaitingSignature(p));
-  const waitingForMe = waiting.filter((p) => p.submittedBy !== deviceId);
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor, ownName = "", onSetOwnName, draw = [] }) {
+  // Three short steps: who are you → player or marker → the card.
+  // "Who" is remembered on this phone for the day (it's the same name the
+  // private own-card panel uses), so it's asked once.
+  const [step, setStep] = useState(ownName ? "role" : "who");
   const [search, setSearch] = useState("");
+  const [role, setRole] = useState(null); // "marker" | "player"
+
+  // Everyone on the day as individual people (a Foursomes pair is two).
+  const people = [...new Set(ranked.flatMap((p) => [p.name, p.partnerName]).filter(Boolean))].sort(cmpName);
+  const cardOf = (name) => ranked.find((p) => normalizeName(p.name) === normalizeName(name) || normalizeName(p.partnerName) === normalizeName(name));
+  const myCard = ownName ? cardOf(ownName) : null;
+  // Cards in my tee time other than my own (fallback: every other card).
+  const myGroup = (() => {
+    const target = normalizeName(ownName);
+    const entry = draw.find((e) => (e.players || []).some((n) => normalizeName(n) === target));
+    if (!entry) return null;
+    return new Set((entry.players || []).filter(Boolean).map(normalizeName));
+  })();
+  const label = (p) => dn(isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name);
+  const groupFilterOn = step !== "all" && !!myGroup;
   const cards = [...ranked]
     .filter((p) => p.name)
-    .map((p) => ({ ...p, label: dn(isFoursomes && p.partnerName ? `${p.name} & ${p.partnerName}` : p.name) }))
+    .map((p) => ({ ...p, label: label(p) }))
+    .filter((p) => !myCard || p.id !== myCard.id)
+    .filter((p) => !groupFilterOn || (p.name && myGroup.has(normalizeName(p.name))) || (p.partnerName && myGroup.has(normalizeName(p.partnerName))))
     .filter((p) => !search.trim() || p.label.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => a.label.localeCompare(b.label));
   const doneCount = ranked.filter((p) => p.name && p.thru > 0 && isScoreComplete(p)).length;
   const totalCount = ranked.filter((p) => p.name).length;
 
-  return (
-    <div style={{ padding: "14px 12px 40px" }}>
-      {flash && (
-        <div
-          onClick={() => setFlash(false)}
-          style={{
-            position: "fixed", inset: 0, zIndex: 70, background: "rgba(27,27,27,0.55)",
-            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
-          }}
-        >
-          <div style={{ background: headerColor, color: "#FFFFFF", borderRadius: 14, padding: "26px 22px", maxWidth: 340, textAlign: "center", boxShadow: "0 8px 30px rgba(0,0,0,0.35)" }}>
-            <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>
-              Select the card you will be scoring — your opponent/playing partner's!
-            </div>
-          </div>
+  const bigBtn = (label, onClick, opts = {}) => (
+    <button
+      key={label}
+      onClick={onClick}
+      style={{
+        width: "100%", padding: "16px 14px", borderRadius: 12, marginBottom: 10, textAlign: "left", fontSize: 16, fontWeight: 800,
+        border: `2px solid ${opts.accent ? accentColor : headerColor}`, background: opts.accent ? accentColor : headerColor, color: "#FFFFFF",
+      }}
+    >
+      {label}
+      {opts.sub && <div style={{ fontSize: 12, fontWeight: 500, opacity: 0.9, marginTop: 3 }}>{opts.sub}</div>}
+    </button>
+  );
+
+  const header = (
+    <>
+      <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>Enter scores — {roundLabel}</div>
+      {ownName && step !== "who" && (
+        <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
+          You are <strong>{dn(ownName)}</strong> ·{" "}
+          <button onClick={() => { setStep("who"); setSearch(""); }} style={{ background: "none", border: "none", color: headerColor, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline" }}>not you?</button>
         </div>
       )}
-      <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>Enter scores — {roundLabel}</div>
-      <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
-        Tap a card, type in the gross score for each hole, then press SUBMIT CARD. {doneCount} of {totalCount} cards done.
-      </div>
       {notice && (
-        <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", color: "#6B4E00", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
+        <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", color: "#6B4E00", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, margin: "8px 0 10px" }}>
           {notice}
         </div>
       )}
-      {waitingForMe.length > 0 && (
-        <div style={{ background: "#EEF3FB", border: `1px solid ${accentColor}`, color: "#1B1B1B", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
-          ✍ {waitingForMe.length === 1 ? "1 card is" : `${waitingForMe.length} cards are`} waiting to be signed: {waitingForMe.map((p) => p.label).join(", ")}.
-          If one of them is yours, tap it, check every hole, and sign it.
+    </>
+  );
+
+  // ---- Step 1: who are you? ----
+  if (step === "who") {
+    const shown = people.filter((n) => !search.trim() || dn(n).toLowerCase().includes(search.trim().toLowerCase()));
+    return (
+      <div style={{ padding: "14px 12px 40px" }}>
+        {header}
+        <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 4px" }}>Who are you?</div>
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>Tap your own name. This phone remembers it for the day.</div>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search your name…"
+          style={{ width: "100%", fontSize: 15, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box" }}
+        />
+        {shown.map((n) => (
+          <button
+            key={n}
+            onClick={() => { onSetOwnName && onSetOwnName(n); setSearch(""); setStep("role"); }}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", textAlign: "left", background: "#FFFFFF", borderRadius: 10, padding: "13px 14px", marginBottom: 8, border: `1px solid ${headerColor}`, fontSize: 15, fontWeight: 700, color: "#1B1B1B" }}
+          >
+            {dn(n)} <ChevronRight size={16} color="#9B9885" />
+          </button>
+        ))}
+        {shown.length === 0 && <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>No name matching that.</div>}
+      </div>
+    );
+  }
+
+  // ---- Step 2: player or marker? ----
+  if (step === "role") {
+    const waitingMine = myCard && awaitingSignature(myCard) && myCard.submittedBy !== deviceId;
+    return (
+      <div style={{ padding: "14px 12px 40px" }}>
+        {header}
+        <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 12px" }}>Are you the player or the marker?</div>
+        {bigBtn("I'm the MARKER — scoring someone else's card", () => { setRole("marker"); setStep("cards"); }, { sub: "Your opponent's / playing partner's card. You can keep your own scores alongside it." })}
+        {bigBtn(waitingMine ? "I'm the PLAYER — my card is ready to sign" : "I'm the PLAYER — see my own card", () => {
+          setRole("player");
+          if (myCard && (awaitingSignature(myCard) || isScoreComplete(myCard))) onReview(myCard.id);
+          else setStep("mine");
+        }, { accent: true, sub: waitingMine ? "Check it hole by hole, then sign." : myCard && myCard.thru > 0 ? `${myCard.thru} of 18 holes in so far.` : "Your marker hasn't started your card yet." })}
+      </div>
+    );
+  }
+
+  // ---- Player, card not yet submitted ----
+  if (step === "mine") {
+    return (
+      <div style={{ padding: "14px 12px 40px" }}>
+        {header}
+        <div style={{ background: "#FFFFFF", borderRadius: 12, border: `1px solid ${headerColor}`, padding: 16, marginTop: 10 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: headerColor }}>{myCard ? label(myCard) : dn(ownName)}</div>
+          <div style={{ fontSize: 13, color: "#3F3F38", marginTop: 6, lineHeight: 1.45 }}>
+            {!myCard
+              ? "You aren't on a card for this day yet — see the organiser."
+              : myCard.thru > 0
+              ? `Your marker has ${myCard.thru} of 18 holes in. When they press SUBMIT CARD it will pop up here for you to check and sign.`
+              : "Your marker hasn't started your card yet. When they press SUBMIT CARD it will pop up here for you to check and sign."}
+          </div>
+          <div style={{ fontSize: 12, color: "#6B6B5F", marginTop: 10 }}>
+            Meanwhile, to keep your own scores as a private note, tap "I'm the marker" and use the panel under your opponent's card.
+          </div>
         </div>
-      )}
+        <button onClick={() => setStep("role")} style={{ marginTop: 12, background: "none", border: "none", color: headerColor, fontSize: 13, fontWeight: 700, padding: 0 }}>← Back</button>
+      </div>
+    );
+  }
+
+  // ---- Step 3 (marker): which card? ----
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      {header}
+      <div style={{ background: headerColor, color: "#FFFFFF", borderRadius: 10, padding: "12px 14px", margin: "8px 0 10px", fontSize: 14, fontWeight: 800, lineHeight: 1.3 }}>
+        Select the card you will be scoring — your opponent's / playing partner's, not your own.
+      </div>
+      <div style={{ fontSize: 12, color: "#6B6B5F", margin: "0 0 10px" }}>
+        {groupFilterOn ? "The other cards in your tee time." : "Every card on the day."} {doneCount} of {totalCount} cards done.
+      </div>
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -9239,12 +9452,12 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           : mine
           ? "✍ Submitted from this phone — the player signs it on their own phone (tap to look)"
           : waitingSig
-          ? "✍ Waiting to be signed — tap to check and sign"
+          ? "✍ Waiting to be signed — tap to check"
           : busy
           ? "● Being entered on another phone"
           : p.thru > 0
           ? `In progress (${p.thru}/18) — tap to continue`
-          : "Tap to enter";
+          : "Tap to score this card";
         return (
           <button
             key={p.id}
@@ -9265,6 +9478,12 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           </button>
         );
       })}
+      {groupFilterOn && (
+        <button onClick={() => setStep("all")} style={{ background: "none", border: "none", color: headerColor, fontSize: 12.5, fontWeight: 700, padding: "6px 0", textDecoration: "underline" }}>
+          Show every card on the day
+        </button>
+      )}
+      <button onClick={() => setStep("role")} style={{ display: "block", marginTop: 10, background: "none", border: "none", color: headerColor, fontSize: 13, fontWeight: 700, padding: 0 }}>← Back</button>
     </div>
   );
 }
