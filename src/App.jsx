@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 107";
+const APP_VERSION = "21 Sep 2026 · build 108";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -819,6 +819,7 @@ function emptyRound(label, course) {
     requireSignature: true, // ...and whether a card a player enters must then be signed by the player from their own phone
     publicShowDayBoard: false, // master switch — whether "This day" leaderboard is offered to the public at all
     inOverall: true, // whether this day counts on the Overall (all days added together) leaderboard
+    cardBack: "", // text printed on the reverse of this day's scorecards, under the club's logo
   };
 }
 
@@ -868,6 +869,7 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     requireSignature: r.requireSignature === false ? false : true,
     publicShowDayBoard: r.publicShowDayBoard === true ? true : false,
     inOverall: r.inOverall === false ? false : true,
+    cardBack: typeof r.cardBack === "string" ? r.cardBack : "",
   };
 }
 
@@ -3768,6 +3770,9 @@ function AppInner() {
           isFoursomes={isFoursomes}
           scoring={scoring}
           roundLabel={activeRound.label}
+          cardBack={activeRound.cardBack || ""}
+          onUpdateCardBack={(text) => updateRound({ cardBack: text })}
+          onUpdateDrawNote={updateDrawNote}
           onBack={() => setShowPrintCards(false)}
           headerColor={headerColor}
         />
@@ -6442,7 +6447,12 @@ function writeLabelCal(cal) {
 // Hole, Yards (for the player's tee, when the course has yardages), Par,
 // S.I. and the Score column, with the player's shot holes marked with a
 // small * in the corner of the box (** for two shots).
-function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eventName, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor }) {
+function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eventName, drawNote, competitions, handicapAllowance, isFoursomes, scoring, roundLabel, onBack, headerColor, cardBack = "", onUpdateCardBack, onUpdateDrawNote }) {
+  // side: "front" prints the cards; "back" prints the reverse sides — the
+  // club's logo in the middle with the back text under it — laid out so
+  // they line up when the sheets go through again (or a duplex printer
+  // is set to flip on the long edge).
+  const [side, setSide] = useState("front");
   const namesInDraw = new Set(draw.flatMap((e) => e.players || []).filter(Boolean).map(normalizeName));
   const inDraw = (p) => namesInDraw.size === 0 || namesInDraw.has(normalizeName(p.name)) || (p.partnerName && namesInDraw.has(normalizeName(p.partnerName)));
   const drawInfoFor = (name) => {
@@ -6571,6 +6581,21 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
     );
   };
 
+  const backCard = (c) => (
+    <div className="scorecard scorecard-back" key={`b-${c.id}`} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
+      {course.logo ? (
+        <img src={course.logo} alt="" style={{ height: a6 ? "32mm" : "45mm", width: "auto", maxWidth: "70%", objectFit: "contain" }} />
+      ) : (
+        <div style={{ fontSize: F.org, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: BRAND.printColor, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{course.name}</div>
+      )}
+      {course.logo && <div style={{ fontSize: F.sub, fontWeight: 700, marginTop: 4 }}>{course.name}</div>}
+      {cardBack && cardBack.trim() && (
+        <div style={{ fontSize: F.meta, marginTop: a6 ? 5 : 8, whiteSpace: "pre-wrap", lineHeight: 1.4, maxWidth: "88%" }}>{cardBack}</div>
+      )}
+      <div style={{ fontSize: F.foot, color: "#555", marginTop: a6 ? 5 : 8 }}>{c.title}</div>
+    </div>
+  );
+
   const card = (c) => (
     <div className="scorecard" key={c.id}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
@@ -6638,6 +6663,45 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
         </button>
       </div>
       <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {[["front", "Front — the cards"], ["back", "Reverse — logo & notes"]].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setSide(k)}
+            style={{ flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, border: `1px solid ${headerColor}`, background: side === k ? headerColor : "#FFFFFF", color: side === k ? "#FFFFFF" : headerColor }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {side === "back" && (
+        <div className="no-print" style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>What goes on the reverse</div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+            The club's logo (set in Course setup — {course.logo ? "one is set for " + course.name : "none set yet for " + course.name}) in the middle, then this text under it. Print the fronts first, put the sheets back in the printer, then print this side;
+            or on a duplex printer choose "flip on long edge". A6 sheets are mirrored here so each reverse lands behind its own card.
+          </div>
+          <textarea
+            value={cardBack}
+            onChange={(e) => onUpdateCardBack && onUpdateCardBack(e.target.value)}
+            placeholder={"e.g. local rules in brief, dinner 7.30 pm, the club's address…"}
+            rows={5}
+            style={{ width: "100%", fontSize: 13, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
+          />
+        </div>
+      )}
+      {side === "front" && (
+        <div className="no-print" style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Note printed on the front</div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>Same as the "Note to competitors" in Draw setup — shows under the card, and on the Draw screen and labels.</div>
+          <input
+            value={drawNote || ""}
+            onChange={(e) => onUpdateDrawNote && onUpdateDrawNote(e.target.value)}
+            placeholder="e.g. Preferred lies on all fairways"
+            style={{ width: "100%", fontSize: 13, padding: "8px 9px", borderRadius: 7, border: "1px solid #D8D4C0", fontFamily: "inherit", boxSizing: "border-box" }}
+          />
+        </div>
+      )}
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         {[["a5", "A5 — two per sheet"], ["a6", "A6 — four per sheet (tear-off)"]].map(([k, label]) => (
           <button
             key={k}
@@ -6695,7 +6759,11 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
       ) : (
         pairs.map((pr, i) => (
           <div className={`scorecard-sheet ${a6 ? "sheet-a6" : "sheet-a5"}`} key={i}>
-            {pr.map(card)}
+            {side === "front"
+              ? pr.map(card)
+              // Reverse: on A6 the left/right columns swap (a sheet flipped on
+              // its long edge mirrors left to right; top/bottom stay put).
+              : (a6 ? [1, 0, 3, 2] : [0, 1]).map((k) => pr[k] || null).map((c, k) => (c ? backCard(c) : <div className="scorecard" key={`e-${k}`} />))}
           </div>
         ))
       )}
@@ -10177,6 +10245,20 @@ function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
   const [libraryMsg, setLibraryMsg] = useState("");
   const libraryFileRef = useRef(null);
+  const logoFileRef = useRef(null);
+  const [logoMsg, setLogoMsg] = useState("");
+  // Kept small (it travels inside the event data): a PNG/JPG a few hundred
+  // pixels across is plenty for a 40 mm print.
+  const onLogoFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 250 * 1024) { setLogoMsg("That image is over 250 KB — please use a smaller one (a few hundred pixels across is enough)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => { onUpdate({ logo: String(reader.result || "") }); setLogoMsg(""); };
+    reader.onerror = () => setLogoMsg("Couldn't read that file.");
+    reader.readAsDataURL(file);
+  };
   const setHole = (idx, field, val) => {
     const clean = val === "" ? "" : Math.max(1, Math.min(field === "par" ? 7 : 18, Number(val)));
     const holes = course.holes.map((h, i) => (i === idx ? { ...h, [field]: clean } : h));
@@ -10395,6 +10477,25 @@ function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor
 
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Club logo <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional — printed in the middle of the reverse of the scorecards; saved with the course)</span></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          {course.logo ? (
+            <img src={course.logo} alt="" style={{ height: 56, width: "auto", maxWidth: 120, objectFit: "contain", border: "1px solid #E4E0D0", borderRadius: 6, padding: 4, background: "#FFF" }} />
+          ) : (
+            <div style={{ height: 56, width: 80, border: "1px dashed #D8D4C0", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#9B9885" }}>no logo</div>
+          )}
+          <input ref={logoFileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" style={{ display: "none" }} onChange={onLogoFile} />
+          <button
+            onClick={() => logoFileRef.current && logoFileRef.current.click()}
+            style={{ padding: "8px 12px", borderRadius: 7, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontSize: 12.5, fontWeight: 600 }}
+          >
+            {course.logo ? "Change logo…" : "Choose logo…"}
+          </button>
+          {course.logo && (
+            <button onClick={() => onUpdate({ logo: "" })} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>Remove</button>
+          )}
+        </div>
+        {logoMsg && <div style={{ fontSize: 11.5, color: "#B5442E", marginBottom: 10 }}>{logoMsg}</div>}
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>Course / venue name</div>
         <input
           value={course.name}
