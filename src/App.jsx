@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 142";
+const APP_VERSION = "21 Sep 2026 · build 143";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -159,6 +159,9 @@ const ARCHIVE_CACHE_PREFIX = "golf-archive-cache-";
 async function readArchive(code) {
   try {
     const res = await window.storage.get(archiveKeyFor(code), true);
+    // The live site answers "nothing stored yet" with an empty result
+    // rather than an error — that just means the Archive is empty.
+    if (!res || res.value == null || res.value === "") return { meetings: [], offline: false };
     const parsed = JSON.parse(res.value);
     const meetings = parsed && Array.isArray(parsed.meetings) ? parsed.meetings : [];
     try { window.localStorage.setItem(ARCHIVE_CACHE_PREFIX + code, res.value); } catch { /* phone storage full — still fine online */ }
@@ -11919,7 +11922,7 @@ function ArchiveSetup({ rounds, archiveIndex = [], onArchive, onUpdateArchive, e
   const chosen = rounds.filter((r) => picked.has(r.id));
   const all = chosen.length === rounds.length;
   const toggle = (id) => setPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const fail = (e) => setErr(String(e && e.message) === "offline" ? "No signal — the Archive can only be changed with a signal. Nothing has been moved." : "That didn't save, so nothing has been moved. Please try again.");
+  const fail = (e) => setErr(String(e && e.message) === "offline" ? "No signal — the Archive can only be changed with a signal. Nothing has been moved." : `That didn't save, so nothing has been moved. Please try again. (${String((e && e.message) || e).slice(0, 120)})`);
 
   const doArchive = async () => {
     setBusy(true); setErr(""); setMsg("");
