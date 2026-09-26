@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 122";
+const APP_VERSION = "21 Sep 2026 · build 123";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1863,6 +1863,32 @@ function AppInner() {
   useEffect(() => { modeRef.current = mode; }, [mode]);
   const activeIdRef = useRef(null);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  // A phone tied before the ties were kept in the event (build 120/121)
+  // only knows it locally: tell the event, once, so Admin's list is right
+  // and it can be released from there. Cleared locally if Admin has since
+  // released it in the event.
+  useEffect(() => {
+    if (!eventCode || !live || loading || adminVisible) return;
+    const local = readHandicapIdentity(eventCode);
+    const remote = (state.handicapDevices || {})[deviceId] || "";
+    const syncedKey = `golf-handicap-identity-synced-${eventCode}`;
+    let synced = false;
+    try { synced = window.localStorage.getItem(syncedKey) === "1"; } catch { /* ignore */ }
+    if (local && !remote && !synced) {
+      // tied before ties were kept in the event: register it once
+      save((prev) => ((prev.handicapDevices || {})[deviceId] ? {} : { handicapDevices: { ...(prev.handicapDevices || {}), [deviceId]: local } }));
+      try { window.localStorage.setItem(syncedKey, "1"); } catch { /* ignore */ }
+    } else if (local && !remote && synced) {
+      // Admin released this phone in the event: drop the local copy too
+      writeHandicapIdentity(eventCode, "");
+      try { window.localStorage.removeItem(syncedKey); } catch { /* ignore */ }
+      setIdentityTick((n) => n + 1);
+    } else if (remote) {
+      if (!local) writeHandicapIdentity(eventCode, remote);
+      try { window.localStorage.setItem(syncedKey, "1"); } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventCode, live, loading, adminVisible, state.handicapDevices]);
   // Cards this phone has already opened for signing by itself — so backing
   // out without signing doesn't have it pop straight back up.
   const autoOpenedRef = useRef(new Set());
