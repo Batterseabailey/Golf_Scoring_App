@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 141";
+const APP_VERSION = "21 Sep 2026 · build 142";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -145,6 +145,46 @@ function storageKeyFor(code) {
 // fetched when a player actually taps to open it.
 function docStorageKey(code, docId) {
   return `${STORAGE_PREFIX}-${code}-doc-${docId}`;
+}
+
+// Finished meetings (e.g. the Autumn Meeting) are moved out of the live
+// event into its Archive — kept under their own key so the live event
+// stays small and quick to sync, and only fetched when someone opens the
+// Archive. The live event carries a short index (state.archiveIndex) so
+// every phone knows the Archive exists and what's in it.
+function archiveKeyFor(code) {
+  return `${STORAGE_PREFIX}-${code}-archive`;
+}
+const ARCHIVE_CACHE_PREFIX = "golf-archive-cache-";
+async function readArchive(code) {
+  try {
+    const res = await window.storage.get(archiveKeyFor(code), true);
+    const parsed = JSON.parse(res.value);
+    const meetings = parsed && Array.isArray(parsed.meetings) ? parsed.meetings : [];
+    try { window.localStorage.setItem(ARCHIVE_CACHE_PREFIX + code, res.value); } catch { /* phone storage full — still fine online */ }
+    return { meetings, offline: false };
+  } catch (err) {
+    const msg = String(err).toLowerCase();
+    if (msg.includes("not found") || msg.includes("404")) return { meetings: [], offline: false };
+    try {
+      const cached = JSON.parse(window.localStorage.getItem(ARCHIVE_CACHE_PREFIX + code) || "null");
+      if (cached && Array.isArray(cached.meetings)) return { meetings: cached.meetings, offline: true };
+    } catch { /* ignore */ }
+    throw err;
+  }
+}
+async function writeArchive(code, meetings) {
+  const text = JSON.stringify({ kind: "golf-event-archive", formatVersion: 1, eventCode: code, meetings });
+  await window.storage.set(archiveKeyFor(code), text, true);
+  try { window.localStorage.setItem(ARCHIVE_CACHE_PREFIX + code, text); } catch { /* ignore */ }
+}
+function archiveIndexEntry(m) {
+  const dates = (m.rounds || []).map((r) => r.date).filter(Boolean).sort();
+  return { id: m.id, title: m.title, archivedAt: m.archivedAt, days: (m.rounds || []).length, from: dates[0] || "", to: dates[dates.length - 1] || "" };
+}
+function archiveDateRange(m) {
+  if (!m.from) return "";
+  return m.from === m.to ? formatDisplayDate(m.from) : `${formatDisplayDate(m.from)} – ${formatDisplayDate(m.to)}`;
 }
 
 const MAX_DOC_SIZE_MB = 4;
@@ -1354,6 +1394,7 @@ function sanitizeState(parsed) {
     handicapReleases: parsed.handicapReleases && typeof parsed.handicapReleases === "object" && !Array.isArray(parsed.handicapReleases) ? parsed.handicapReleases : {},
     handicapLog: Array.isArray(parsed.handicapLog) ? parsed.handicapLog.slice(-300) : [],
     courseSuggestions: Array.isArray(parsed.courseSuggestions) ? parsed.courseSuggestions.filter((c) => c && isValidCourse(c.course)).slice(-30) : [],
+    archiveIndex: Array.isArray(parsed.archiveIndex) ? parsed.archiveIndex.filter((m) => m && m.id && typeof m.title === "string") : [],
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -1757,7 +1798,7 @@ function MyRounds({ headerColor, accentColor, onBack }) {
   );
 }
 
-function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap, onSelectMyRounds }) {
+function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap, onSelectMyRounds, archiveIndex = [], onSelectArchive }) {
   const sectionCard = (title, items) => (
     <div style={{ background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", marginBottom: 12, overflow: "hidden" }}>
       <div
@@ -1817,6 +1858,7 @@ function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectD
       {standaloneRow("Local Rules", onSelectRules)}
       {standaloneRow("Your Handicap", onSelectHandicap)}
       {onSelectMyRounds && standaloneRow("My rounds (on this phone)", onSelectMyRounds)}
+      {archiveIndex.length > 0 && onSelectArchive && sectionCard("Archive — past meetings", [...archiveIndex].reverse().map((m) => row(m.title, () => onSelectArchive(m.id), m.id, [archiveDateRange(m), `${m.days} ${m.days === 1 ? "day" : "days"}`].filter(Boolean).join(" · "), false)))}
     </div>
   );
 }
@@ -3635,6 +3677,55 @@ function AppInner() {
 
   const setActiveRound = (roundId) => setLocalActiveRoundId(roundId);
 
+  // ---- Archive (owner) ----
+  // Moves the chosen days, draws and results intact, into the Archive as
+  // one meeting, then takes them off the live event. If every day goes,
+  // a fresh blank Day 1 (same course) is left so the event is ready for
+  // the next meeting. The Archive is written and checked FIRST; the live
+  // days are only removed once it's safely saved.
+  const archiveDays = async (title, ids) => {
+    const chosen = rounds.filter((r) => ids.includes(r.id));
+    if (!chosen.length) throw new Error("no days chosen");
+    const meeting = {
+      id: crypto.randomUUID(),
+      title: title.trim() || "Past meeting",
+      archivedAt: Date.now(),
+      rounds: chosen.map((r) => ({ ...r, publicScoreEntry: false, players: r.players.map((p) => ({ ...p, entryLock: null })) })),
+    };
+    const { meetings, offline } = await readArchive(eventCode);
+    if (offline) throw new Error("offline");
+    await writeArchive(eventCode, [...meetings, meeting]);
+    const check = await readArchive(eventCode);
+    if (!check.meetings.some((m) => m.id === meeting.id)) throw new Error("not saved");
+    const lastCourse = chosen[chosen.length - 1].course;
+    const fresh = emptyRound("Day 1", lastCourse);
+    const remainingNow = rounds.filter((r) => !ids.includes(r.id));
+    const nextActive = remainingNow.length ? remainingNow[0].id : fresh.id;
+    save((prev) => {
+      const left = prev.rounds.filter((r) => !ids.includes(r.id));
+      const next = left.length ? left : [fresh];
+      return {
+        rounds: next,
+        activeRoundId: next.some((r) => r.id === prev.activeRoundId) ? prev.activeRoundId : next[0].id,
+        archiveIndex: [...(prev.archiveIndex || []), archiveIndexEntry(meeting)],
+      };
+    });
+    setLocalActiveRoundId(nextActive);
+    return meeting;
+  };
+  // Rename or remove archived meetings (owner): rewrites the Archive and
+  // refreshes the index on the live event to match.
+  const updateArchive = async (changeFn) => {
+    const { meetings, offline } = await readArchive(eventCode);
+    if (offline) throw new Error("offline");
+    const next = changeFn(meetings);
+    await writeArchive(eventCode, next);
+    save(() => ({ archiveIndex: next.map(archiveIndexEntry) }));
+    return next;
+  };
+  const [archiveOpenId, setArchiveOpenId] = useState(null);
+  const [showArchiveSetup, setShowArchiveSetup] = useState(false);
+
   const handleScorerTap = () => {
     if (!adminVisible) return;
     if (scorerUnlocked) {
@@ -3921,6 +4012,19 @@ function AppInner() {
           >
             Your Handicap
           </button>
+          {(state.archiveIndex || []).length > 0 && (
+          <button
+            onClick={() => { setArchiveOpenId(null); setMode("archive"); setShowCourseSetup(false); }}
+            style={{
+              flex: "1 1 30%", padding: "8px 0", borderRadius: 7, border: "1px solid rgba(241,239,227,0.25)",
+              background: mode === "archive" ? "#F1EFE3" : "transparent",
+              color: mode === "archive" ? headerColor : "#F1EFE3",
+              fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
+            }}
+          >
+            Archive
+          </button>
+          )}
           {activeRound.publicScoreEntry && !isMatchPlay && (
           <button
             onClick={() => { closeCard(); setEntryNotice(""); setMode("entry"); setShowCourseSetup(false); load(); }}
@@ -3978,6 +4082,17 @@ function AppInner() {
           onSelectInfo={() => setMode("docs")}
           onSelectHandicap={handleHandicapTap}
           onSelectMyRounds={() => setMode("myrounds")}
+          archiveIndex={state.archiveIndex || []}
+          onSelectArchive={(id) => { setArchiveOpenId(id); setMode("archive"); }}
+        />
+      ) : mode === "archive" ? (
+        <ArchiveView
+          key={archiveOpenId || "list"}
+          eventCode={eventCode}
+          initialMeetingId={archiveOpenId}
+          indexVersion={(state.archiveIndex || []).map((m) => m.id + m.title).join("|")}
+          headerColor={headerColor}
+          accentColor={accentColor}
         />
       ) : mode === "board" ? (
         <Board rounds={rounds} tab={boardTab} competitions={allCompetitionsAcrossRounds()} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
@@ -4224,6 +4339,18 @@ function AppInner() {
           accentColor={accentColor}
           roundLabel={activeRound.label}
         />
+      ) : showArchiveSetup && isOwner ? (
+        <ArchiveSetup
+          rounds={rounds}
+          archiveIndex={state.archiveIndex || []}
+          onArchive={archiveDays}
+          onUpdateArchive={updateArchive}
+          eventCode={eventCode}
+          onBack={() => setShowArchiveSetup(false)}
+          onViewArchive={(id) => { setShowArchiveSetup(false); setArchiveOpenId(id); setMode("archive"); }}
+          headerColor={headerColor}
+          accentColor={accentColor}
+        />
       ) : showBackup && isOwner ? (
         <BackupRestore
           eventCode={eventCode}
@@ -4404,6 +4531,7 @@ function AppInner() {
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
           onOpenBackup={() => setShowBackup(true)}
+          onOpenArchiveSetup={() => setShowArchiveSetup(true)}
           onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[deviceId]; return { handicapDevices: d }; }); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
           tiedPhones={Object.entries(state.handicapDevices || {}).map(([id, name]) => ({ id, name }))}
           handicapLog={state.handicapLog || []}
@@ -4413,7 +4541,7 @@ function AppInner() {
           isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
-          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onLock={() => { setScorerUnlocked(false); setMode("board"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowArchiveSetup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
           publicScoreEntry={activeRound.publicScoreEntry}
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
           requireSignature={activeRound.requireSignature !== false}
@@ -4421,7 +4549,7 @@ function AppInner() {
           allowSelfMark={activeRound.allowSelfMark === true}
           onToggleAllowSelfMark={() => updateRound((prevRound) => ({ allowSelfMark: !prevRound.allowSelfMark }))}
           roundLabel={activeRound.label}
-          onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
+          onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowArchiveSetup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
       )}
 
@@ -9549,7 +9677,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [], handicapLog = [], allowSelfMark = false, onToggleAllowSelfMark }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, onOpenArchiveSetup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [], handicapLog = [], allowSelfMark = false, onToggleAllowSelfMark }) {
   const [showLog, setShowLog] = useState(false);
   const [showTied, setShowTied] = useState(false);
   const [releaseSearch, setReleaseSearch] = useState("");
@@ -9812,6 +9940,20 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
       >
         <Upload size={14} style={{ transform: "rotate(180deg)" }} />
         <span style={{ flex: 1, textAlign: "left" }}>Backup &amp; restore</span>
+        <ChevronRight size={15} color="#9B9885" />
+      </button>
+      )}
+      {isOwner && onOpenArchiveSetup && (
+      <button
+        onClick={onOpenArchiveSetup}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+          borderRadius: 10, border: "1px solid #E4E0D0", background: "#FFFFFF", marginBottom: 10,
+          color: headerColor, fontSize: 12.5, fontWeight: 600,
+        }}
+      >
+        <FileText size={14} />
+        <span style={{ flex: 1, textAlign: "left" }}>Archive a finished meeting</span>
         <ChevronRight size={15} color="#9B9885" />
       </button>
       )}
@@ -11634,6 +11776,248 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Archive: past meetings, view only ----
+// Anyone can open it (like the Draw and Leaderboard). Pick a meeting, then
+// a day, then Results or Draw. Nothing in here can be changed by players.
+function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", headerColor, accentColor }) {
+  const [meetings, setMeetings] = useState(null);
+  const [error, setError] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [meetingId, setMeetingId] = useState(initialMeetingId);
+  const [dayId, setDayId] = useState(null);
+  const [tab, setTab] = useState("results");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    readArchive(eventCode)
+      .then((r) => { if (alive) { setMeetings(r.meetings); setOffline(r.offline); } })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [eventCode, indexVersion, attempt]);
+
+  if (error) {
+    return (
+      <div style={{ padding: "40px 24px", textAlign: "center" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>Couldn't open the Archive</div>
+        <div style={{ fontSize: 13.5, color: "#6B6B5F", marginBottom: 16 }}>It needs a signal the first time it's opened on this phone.</div>
+        <button onClick={() => setAttempt((a) => a + 1)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700 }}>Try again</button>
+      </div>
+    );
+  }
+  if (!meetings) return <div style={{ padding: 40, textAlign: "center", color: "#6B6B5F" }}>Opening the Archive…</div>;
+
+  const meeting = meetings.find((m) => m.id === meetingId);
+
+  if (!meeting) {
+    return (
+      <div style={{ padding: "14px 14px 40px" }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: headerColor, marginBottom: 4 }}>Archive</div>
+        <div style={{ fontSize: 13, color: "#6B6B5F", marginBottom: 12 }}>Draws and results from past meetings. Tap one to look at it.</div>
+        {offline && <div style={{ fontSize: 11.5, background: "#F3D58A", borderRadius: 6, padding: "5px 8px", marginBottom: 10, fontWeight: 600 }}>No signal — showing the copy saved on this phone.</div>}
+        {meetings.length === 0 && <div style={{ fontSize: 13.5, color: "#8A8774", padding: 20, textAlign: "center" }}>Nothing in the Archive yet.</div>}
+        {[...meetings].reverse().map((m) => {
+          const ix = archiveIndexEntry(m);
+          return (
+            <button
+              key={m.id}
+              onClick={() => { setMeetingId(m.id); setDayId(null); setTab("results"); }}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", background: "#FFFFFF", border: "1px solid #E4E0D0", borderRadius: 12, marginBottom: 10, textAlign: "left" }}
+            >
+              <span>
+                <span style={{ fontSize: 15, fontWeight: 700, color: headerColor, display: "block" }}>{m.title}</span>
+                <span className="mono" style={{ fontSize: 11.5, color: "#8A8774" }}>{[archiveDateRange(ix), `${ix.days} ${ix.days === 1 ? "day" : "days"}`].filter(Boolean).join(" · ")}</span>
+              </span>
+              <ChevronRight size={16} color="#9B9885" />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const days = meeting.rounds || [];
+  const day = days.find((r) => r.id === dayId) || days[0];
+  const competitions = (() => {
+    const seen = new Set();
+    const out = [];
+    days.forEach((r) => (r.competitions || []).forEach((c) => {
+      const k = (c.abbreviation || "").toUpperCase();
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      out.push(c);
+    }));
+    return out;
+  })();
+  const isMP = day && day.format === "matchplay";
+  const isFs = day && day.format === "foursomes";
+
+  return (
+    <div style={{ padding: "14px 12px 40px" }}>
+      <button onClick={() => setMeetingId(null)} style={{ background: "none", border: "none", padding: 0, color: accentColor, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>‹ All past meetings</button>
+      <div style={{ fontSize: 18, fontWeight: 800, color: headerColor }}>{meeting.title}</div>
+      <div className="mono" style={{ fontSize: 11.5, color: "#8A8774", marginBottom: 10 }}>Archive · view only</div>
+      {offline && <div style={{ fontSize: 11.5, background: "#F3D58A", borderRadius: 6, padding: "5px 8px", marginBottom: 10, fontWeight: 600 }}>No signal — showing the copy saved on this phone.</div>}
+      {days.length > 1 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          {days.map((r) => {
+            const on = day && r.id === day.id;
+            return (
+              <button
+                key={r.id}
+                onClick={() => setDayId(r.id)}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "9px 12px", borderRadius: 8, border: `1px solid ${on ? accentColor : "#E4E0D0"}`, background: on ? `${accentColor}14` : "#FFFFFF", textAlign: "left" }}
+              >
+                <span style={{ fontSize: 13.5, fontWeight: on ? 800 : 600, color: on ? accentColor : "#1B1B1B" }}>{r.label}</span>
+                <span className="mono" style={{ fontSize: 11, color: "#8A8774", whiteSpace: "nowrap" }}>{formatDisplayDate(r.date)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {day && (
+        <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+            {[["results", isMP ? "Matches" : "Results"], ["draw", "Draw"]].map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                style={{ flex: 1, padding: "9px 6px", borderRadius: 7, border: `1px solid ${headerColor}`, background: tab === k ? headerColor : "transparent", color: tab === k ? "#FFFFFF" : headerColor, fontSize: 13, fontWeight: 700 }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ margin: "0 -12px" }}>
+            {isMP ? (
+              <MatchResultsView key={day.id} matches={day.matches || []} players={day.players || []} course={day.course} drawNote={day.drawNote} headerColor={headerColor} accentColor={accentColor} />
+            ) : tab === "results" ? (
+              <Board key={day.id} rounds={days} tab={isFs ? "foursomes" : "singles"} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={{ ...day, publicShowDayBoard: true }} />
+            ) : (
+              <DrawView key={day.id} draw={day.draw || []} startingHole={day.startingHole} drawNote={day.drawNote} headerColor={headerColor} accentColor={accentColor} course={day.course} players={day.players || []} handicapAllowance={day.handicapAllowance} isFoursomes={isFs} publicShowIndex={day.publicShowIndex} publicShowCH={day.publicShowCH} publicShowTee={day.publicShowTee} publicShowComp={day.publicShowComp} publicShowStartTee={day.publicShowStartTee} />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Owner only (Admin → Archive a finished meeting).
+function ArchiveSetup({ rounds, archiveIndex = [], onArchive, onUpdateArchive, eventCode, onBack, onViewArchive, headerColor, accentColor }) {
+  const [title, setTitle] = useState("");
+  const [picked, setPicked] = useState(() => new Set(rounds.map((r) => r.id)));
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const chosen = rounds.filter((r) => picked.has(r.id));
+  const all = chosen.length === rounds.length;
+  const toggle = (id) => setPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const fail = (e) => setErr(String(e && e.message) === "offline" ? "No signal — the Archive can only be changed with a signal. Nothing has been moved." : "That didn't save, so nothing has been moved. Please try again.");
+
+  const doArchive = async () => {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const m = await onArchive(title, chosen.map((r) => r.id));
+      setMsg(`"${m.title}" is now in the Archive.${all ? " The live event has a fresh blank Day 1, ready for the next meeting." : ""}`);
+      setTitle(""); setConfirming(false);
+      setPicked(new Set());
+    } catch (e) { fail(e); setConfirming(false); }
+    setBusy(false);
+  };
+  const rename = async (m) => {
+    const t = window.prompt("New name for this meeting:", m.title);
+    if (!t || !t.trim() || t.trim() === m.title) return;
+    setBusy(true); setErr("");
+    try { await onUpdateArchive((ms) => ms.map((x) => (x.id === m.id ? { ...x, title: t.trim() } : x))); } catch (e) { fail(e); }
+    setBusy(false);
+  };
+  const remove = async (m) => {
+    if (!window.confirm(`Delete "${m.title}" from the Archive for good? Its draws and results can't be brought back (unless you've downloaded a copy).`)) return;
+    setBusy(true); setErr("");
+    try { await onUpdateArchive((ms) => ms.filter((x) => x.id !== m.id)); } catch (e) { fail(e); }
+    setBusy(false);
+  };
+  const download = async () => {
+    try {
+      const { meetings } = await readArchive(eventCode);
+      downloadTextFile(`golf-archive-${eventCode}-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ kind: "golf-event-archive", formatVersion: 1, eventCode, meetings }, null, 1));
+    } catch { setErr("Couldn't fetch the Archive to download — check the signal."); }
+  };
+
+  const card = { background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 14, marginBottom: 12 };
+  return (
+    <div style={{ padding: "14px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", padding: 0, color: accentColor, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>‹ Back to Admin</button>
+      <div style={{ fontSize: 18, fontWeight: 800, color: headerColor, marginBottom: 4 }}>Archive a finished meeting</div>
+      <div style={{ fontSize: 12.5, color: "#6B6B5F", marginBottom: 12, lineHeight: 1.5 }}>
+        Moves the days you tick — draws, cards and results — into the Archive under one name. Anyone can still look at them there (Menu → Archive), but they come off the live event.
+        The society roster, handicaps, course library, Information documents and PINs all stay as they are. The event code stays {eventCode}.
+      </div>
+
+      {msg && <div style={{ ...card, background: "#EEF6EE", borderColor: "#8DBF8D", fontSize: 13, fontWeight: 600 }}>{msg}</div>}
+      {err && <div style={{ ...card, background: "#FDF2EF", borderColor: "#B5442E", fontSize: 13, fontWeight: 600, color: "#B5442E" }}>{err}</div>}
+
+      {rounds.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: headerColor, marginBottom: 6 }}>Name for this meeting</div>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Autumn Meeting 2026" style={{ width: "100%", boxSizing: "border-box", fontSize: 15, padding: "9px 10px", borderRadius: 7, border: "1px solid #D8D4C0", marginBottom: 12 }} />
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: headerColor, marginBottom: 6 }}>Days to move</div>
+          {rounds.map((r) => (
+            <label key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid #EFEDE0", fontSize: 13.5 }}>
+              <input type="checkbox" checked={picked.has(r.id)} onChange={() => toggle(r.id)} style={{ width: 18, height: 18 }} />
+              <span style={{ flex: 1 }}>
+                <span style={{ fontWeight: 600, display: "block" }}>{r.label}</span>
+                <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{[formatDisplayDate(r.date), r.format === "foursomes" ? "Foursomes" : r.format === "matchplay" ? "Match play" : "Singles", `${playersOnDay(r).length} players`].filter(Boolean).join(" · ")}</span>
+              </span>
+            </label>
+          ))}
+          {!confirming ? (
+            <button
+              disabled={!chosen.length || !title.trim() || busy}
+              onClick={() => setConfirming(true)}
+              style={{ marginTop: 12, width: "100%", padding: "12px 0", borderRadius: 8, border: "none", background: !chosen.length || !title.trim() ? "#C9C5B2" : accentColor, color: "#FFFFFF", fontWeight: 800, fontSize: 14 }}
+            >
+              Move {chosen.length} {chosen.length === 1 ? "day" : "days"} to the Archive
+            </button>
+          ) : (
+            <div style={{ marginTop: 12, background: "#FFF8E1", border: "1px solid #D9A400", borderRadius: 8, padding: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                Move {chosen.length} {chosen.length === 1 ? "day" : "days"} into the Archive as "{title.trim()}"?
+                {all ? " Every day will go, and the live event will be left with a blank Day 1." : ""}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button disabled={busy} onClick={doArchive} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: accentColor, color: "#FFFFFF", fontWeight: 800 }}>{busy ? "Saving…" : "Yes, move them"}</button>
+                <button disabled={busy} onClick={() => setConfirming(false)} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F", fontWeight: 600 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={card}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: headerColor, marginBottom: 6 }}>In the Archive ({archiveIndex.length})</div>
+        {archiveIndex.length === 0 && <div style={{ fontSize: 12.5, color: "#8A8774" }}>Nothing yet.</div>}
+        {[...archiveIndex].reverse().map((m) => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid #EFEDE0" }}>
+            <button onClick={() => onViewArchive(m.id)} style={{ flex: 1, background: "none", border: "none", padding: 0, textAlign: "left" }}>
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: headerColor, display: "block" }}>{m.title}</span>
+              <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{[archiveDateRange(m), `${m.days} ${m.days === 1 ? "day" : "days"}`].filter(Boolean).join(" · ")}</span>
+            </button>
+            <button disabled={busy} onClick={() => rename(m)} style={{ padding: "5px 9px", borderRadius: 6, border: "1px solid #D8D4C0", background: "#FFFFFF", fontSize: 11.5 }}>Rename</button>
+            <button disabled={busy} onClick={() => remove(m)} style={{ padding: "5px 9px", borderRadius: 6, border: "1px solid #B5442E", background: "#FFFFFF", color: "#B5442E", fontSize: 11.5 }}>Delete</button>
+          </div>
+        ))}
+        {archiveIndex.length > 0 && (
+          <button onClick={download} style={{ marginTop: 10, padding: "7px 12px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFFFFF", fontSize: 12, color: headerColor, fontWeight: 600 }}>Download a copy of the Archive</button>
+        )}
+      </div>
     </div>
   );
 }
