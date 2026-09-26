@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 125";
+const APP_VERSION = "21 Sep 2026 · build 130";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1168,6 +1168,7 @@ const DEFAULT_STATE = {
   surnameFirst: false, // show names "Bailey, Will" everywhere (display only)
   handicapDevices: {}, // { deviceId: playerName } — phones tied to one player on Your Handicap; Admin can release
   handicapReleases: {}, // { normalised name: time } — Admin released this player: any phone tied to them before that time lets go
+  handicapLog: [], // recent handicap changes from Your Handicap: { at, name, from, to, by } — by = the player the changing phone is tied to (or "organiser")
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
@@ -1233,6 +1234,7 @@ function sanitizeState(parsed) {
     surnameFirst: parsed.surnameFirst === true,
     handicapDevices: parsed.handicapDevices && typeof parsed.handicapDevices === "object" && !Array.isArray(parsed.handicapDevices) ? parsed.handicapDevices : {},
     handicapReleases: parsed.handicapReleases && typeof parsed.handicapReleases === "object" && !Array.isArray(parsed.handicapReleases) ? parsed.handicapReleases : {},
+    handicapLog: Array.isArray(parsed.handicapLog) ? parsed.handicapLog.slice(-300) : [],
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -2907,6 +2909,44 @@ function AppInner() {
   // Bulk-add via the same paste format used elsewhere (Name, Handicap,
   // Tee) — duplicates (matched by name) are skipped rather than added
   // twice.
+  // Brings a roster across from another event on this site (last year's
+  // code), or from a roster file. Anyone already here (by name) is left as
+  // they are; blank details are filled in from the incoming copy.
+  const mergeRosterMembers = (incoming) => {
+    let added = 0, updated = 0;
+    save((prev) => {
+      const next = [...prev.societyRoster];
+      (incoming || []).filter((m) => m && typeof m.name === "string" && m.name.trim()).forEach((m) => {
+        const i = next.findIndex((x) => normalizeName(x.name) === normalizeName(m.name));
+        if (i === -1) {
+          next.push({ id: crypto.randomUUID(), name: m.name.trim(), index: m.index ?? "", tee: "", isLady: !!m.isLady, surname: m.surname || "" });
+          added += 1;
+        } else {
+          const cur = next[i];
+          const patched = { ...cur, index: cur.index || m.index || "", isLady: cur.isLady || !!m.isLady, surname: cur.surname || m.surname || "" };
+          if (patched.index !== cur.index || patched.isLady !== cur.isLady || patched.surname !== cur.surname) { next[i] = patched; updated += 1; }
+        }
+      });
+      return { societyRoster: next };
+    });
+    return { added, updated };
+  };
+  const copyRosterFromEvent = async (rawCode) => {
+    const { code } = splitAdminCode(rawCode);
+    if (!code) return { ok: false, error: "Type the other event's code." };
+    if (code === eventCodeRef.current) return { ok: false, error: "That's this event." };
+    try {
+      const res = await withTimeout(window.storage.get(storageKeyFor(code), true), 12000);
+      const other = sanitizeState(JSON.parse(res.value));
+      if (!other.societyRoster.length) return { ok: false, error: `${code} has no roster.` };
+      const r = mergeRosterMembers(other.societyRoster);
+      return { ok: true, ...r, total: other.societyRoster.length, code };
+    } catch (err) {
+      const msg = String(err).toLowerCase();
+      return { ok: false, error: msg.includes("not found") || msg.includes("404") ? `No event called ${code} on this site.` : "Couldn't reach the server — check the signal and try again." };
+    }
+  };
+
   const importSocietyMembers = (newMembers) => {
     let addedCount = 0;
     save((prev) => {
@@ -3724,7 +3764,12 @@ function AppInner() {
           players={allPlayersAcrossRounds()}
           competitions={allCompetitionsAcrossRounds()}
           onUpdateIndexAndCompetition={(name, idx, comp) => {
+            const before = (allPlayersAcrossRounds().find((p) => normalizeName(p.name) === normalizeName(name)) || {}).index;
+            const tied = adminVisible ? "" : ((state.handicapDevices || {})[deviceId] || readHandicapIdentity(eventCode) || "");
             updateIndexAndCompetitionEverywhere(name, idx, comp);
+            if (String(before ?? "") !== String(idx ?? "")) {
+              save((prev) => ({ handicapLog: [...(prev.handicapLog || []), { at: Date.now(), name, from: before ?? "", to: idx, by: adminVisible ? "organiser" : (tied || name), device: deviceId }].slice(-300) }));
+            }
             if (!adminVisible && !(state.handicapDevices || {})[deviceId]) {
               writeHandicapIdentity(eventCode, name);
               save((prev) => ({ handicapDevices: { ...(prev.handicapDevices || {}), [deviceId]: name } }));
@@ -3733,6 +3778,13 @@ function AppInner() {
           }}
           onUpdateTeeForRound={updateTeeForRound}
           lockedTo={adminVisible ? "" : ((state.handicapDevices || {})[deviceId] || readHandicapIdentity(eventCode) || "")}
+          handicapLog={state.handicapLog || []}
+          isAdminDevice={adminVisible}
+          othersChangedToday={adminVisible ? 0 : (() => {
+            const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+            const tied = (state.handicapDevices || {})[deviceId] || readHandicapIdentity(eventCode) || "";
+            return new Set((state.handicapLog || []).filter((e) => e.device === deviceId && e.at >= dayStart.getTime() && normalizeName(e.name) !== normalizeName(tied)).map((e) => normalizeName(e.name))).size;
+          })()}
           suggestedName={readOwnCard(eventCode, activeRoundId).name}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4044,6 +4096,9 @@ function AppInner() {
           onUpdate={updateSocietyMember}
           onRemove={removeSocietyMember}
           onImport={importSocietyMembers}
+          onCopyFromEvent={copyRosterFromEvent}
+          onImportRosterFile={(members) => mergeRosterMembers(members)}
+          eventCode={eventCode}
           onClearAll={clearSocietyRoster}
           course={course}
           roundPlayers={players}
@@ -4103,6 +4158,7 @@ function AppInner() {
           onOpenBackup={() => setShowBackup(true)}
           onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[deviceId]; return { handicapDevices: d }; }); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
           tiedPhones={Object.entries(state.handicapDevices || {}).map(([id, name]) => ({ id, name }))}
+          handicapLog={state.handicapLog || []}
           onReleasePlayer={(id) => save((prev) => { const d = { ...(prev.handicapDevices || {}) }; const name = d[id]; delete d[id]; return { handicapDevices: d, handicapReleases: name ? { ...(prev.handicapReleases || {}), [normalizeName(name)]: Date.now() } : prev.handicapReleases }; })}
           onReleaseByName={(name) => save((prev) => ({ handicapReleases: { ...(prev.handicapReleases || {}), [normalizeName(name)]: Date.now() } }))}
           allNames={[...new Set(rounds.flatMap((r) => r.players.flatMap((p) => [p.name, p.partnerName])).filter(Boolean))].sort(cmpName)}
@@ -7432,6 +7488,27 @@ function buildResultsCsv(state) {
   return "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }
 
+// ---- Roster & handicap history export (CSV) ----
+// Two sheets in one file, one after the other: every roster member with
+// their current handicap, then every handicap change (who, from, to, by
+// whom, when).
+function buildRosterCsv(state) {
+  const rows = [["ROSTER"], ["Player", "Handicap index", "Lady", "Surname (if set)", "Changes logged"]];
+  const log = state.handicapLog || [];
+  [...(state.societyRoster || [])].filter((m) => m.name).sort((a, b) => cmpName(a.name, b.name)).forEach((m) => {
+    const n = log.filter((e) => normalizeName(e.name) === normalizeName(m.name)).length;
+    rows.push([m.name, m.index ?? "", m.isLady ? "yes" : "", m.surname || "", n]);
+  });
+  rows.push([]);
+  rows.push(["HANDICAP HISTORY"]);
+  rows.push(["When", "Player", "From", "To", "Changed by"]);
+  [...log].sort((a, b) => a.at - b.at).forEach((e) => {
+    const by = e.by === "organiser" ? "organiser" : normalizeName(e.by) === normalizeName(e.name) ? "themselves" : e.by;
+    rows.push([new Date(e.at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }), e.name, e.from ?? "", e.to ?? "", by]);
+  });
+  return "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+
 function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accentColor }) {
   const fileRef = useRef(null);
   const lastKey = `golf-last-backup-${eventCode}`;
@@ -7505,6 +7582,16 @@ function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accen
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     setMsg(`Saved "${name}" to this device's downloads — one row per player per day, opens in Excel.`);
   };
+  const exportRoster = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    const name = `${eventCode}-roster-handicaps-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.csv`;
+    const url = URL.createObjectURL(new Blob([buildRosterCsv(state)], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    setMsg(`Saved "${name}" — the roster with current handicaps, then every handicap change with who made it.`);
+  };
   const shareCsv = async () => {
     try {
       const d = new Date(); const p = (n) => String(n).padStart(2, "0");
@@ -7549,6 +7636,9 @@ function BackupRestore({ eventCode, state, onRestore, onBack, headerColor, accen
           competition, all 18 gross scores, gross, nett and points. Every day of <strong>{eventCode}</strong> in one file. Opens in Excel or Numbers.
         </div>
         <button onClick={exportCsv} style={bigBtn(headerColor, "#FFFFFF")}>Download results (CSV)</button>
+        <button onClick={exportRoster} style={{ ...bigBtn("transparent", headerColor, `1px solid ${headerColor}`), marginTop: 8 }}>
+          Download roster &amp; handicap history (CSV)
+        </button>
         {canShare && (
           <button onClick={shareCsv} style={{ ...bigBtn("transparent", headerColor, `1px solid ${headerColor}`), marginTop: 8 }}>
             Share / email results instead
@@ -8161,7 +8251,20 @@ function MatchesSetup({ matches, players, onAdd, onUpdate, onRemove, onBack, hea
   );
 }
 
-function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor, surnameFirst = false, onUpdateSurnameFirst }) {
+function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor, surnameFirst = false, onUpdateSurnameFirst, onCopyFromEvent, onImportRosterFile, eventCode = "" }) {
+  const [copyCode, setCopyCode] = useState("");
+  const [copyMsg, setCopyMsg] = useState("");
+  const [copying, setCopying] = useState(false);
+  const rosterFileRef = useRef(null);
+  const [picking, setPicking] = useState(false);          // ticking members for a partial roster file
+  const [pickedIds, setPickedIds] = useState(new Set());
+  const togglePick = (id) => setPickedIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const downloadRosterFile = (members, label) => {
+    const d = new Date(); const p = (n) => String(n).padStart(2, "0");
+    downloadTextFile(`${eventCode || "roster"}-roster${label ? "-" + label : ""}-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.json`,
+      JSON.stringify({ kind: "golf-society-roster", formatVersion: 1, eventCode, savedAt: new Date().toISOString(), members: members.map(({ name, index, isLady, surname }) => ({ name, index, isLady: !!isLady, surname: surname || "" })) }, null, 1));
+    setCopyMsg(`Roster file saved to this device's downloads (${members.length} member${members.length === 1 ? "" : "s"}). Import it on the other event's Society roster screen.`);
+  };
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -8264,6 +8367,80 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
           <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginBottom: 8 }}>{importMsg}</div>
         )}
 
+        <div style={{ background: "#FAF8F0", borderRadius: 8, padding: 10, border: "1px solid #E4E0D0", marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Carry the roster from year to year</div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+            Type last year's event code and its members come across with their handicaps, L marks and surnames. Anyone already
+            on this roster is left as they are. Tees aren't copied (they belong to a course).
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input
+              value={copyCode}
+              onChange={(e) => setCopyCode(e.target.value.toUpperCase())}
+              placeholder="e.g. LGS2026"
+              className="mono"
+              style={{ flex: 1, fontSize: 14, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", textTransform: "uppercase", minWidth: 0 }}
+            />
+            <button
+              disabled={copying || !copyCode.trim()}
+              onClick={async () => {
+                setCopying(true); setCopyMsg("");
+                const r = await onCopyFromEvent(copyCode);
+                setCopying(false);
+                setCopyMsg(r.ok ? `Copied from ${r.code}: ${r.added} added${r.updated ? `, ${r.updated} filled in` : ""} (of ${r.total}).` : r.error);
+                if (r.ok) setCopyCode("");
+              }}
+              style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12.5, opacity: copying || !copyCode.trim() ? 0.5 : 1 }}
+            >
+              {copying ? "Copying…" : "Copy roster"}
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+            Or as a file — to keep with the records, or to move a roster to the other site:
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => downloadRosterFile(roster, "")} disabled={roster.length === 0} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12, opacity: roster.length === 0 ? 0.5 : 1 }}>Download whole roster</button>
+            <button onClick={() => { setPicking((v) => !v); setPickedIds(new Set()); }} disabled={roster.length === 0} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${picking ? accentColor : headerColor}`, background: picking ? accentColor : "transparent", color: picking ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12, opacity: roster.length === 0 ? 0.5 : 1 }}>{picking ? "Cancel picking" : "Pick some to download…"}</button>
+            <button onClick={() => rosterFileRef.current && rosterFileRef.current.click()} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`, background: "transparent", color: headerColor, fontWeight: 600, fontSize: 12 }}>Import roster file…</button>
+            <input
+              ref={rosterFileRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                e.target.value = "";
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  try {
+                    const parsed = JSON.parse(String(reader.result || ""));
+                    if (!parsed || parsed.kind !== "golf-society-roster" || !Array.isArray(parsed.members)) throw new Error("wrong file");
+                    const r = onImportRosterFile(parsed.members);
+                    setCopyMsg(`Imported from "${file.name}": ${r.added} added${r.updated ? `, ${r.updated} filled in` : ""}.`);
+                  } catch {
+                    setCopyMsg(`"${file.name}" isn't a roster file from this app — nothing changed.`);
+                  }
+                };
+                reader.readAsText(file);
+              }}
+            />
+          </div>
+          {picking && (
+            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ flex: 1, fontSize: 11.5, color: "#6B6B5F" }}>Tick members in the list below, then:</span>
+              <button
+                disabled={pickedIds.size === 0}
+                onClick={() => { downloadRosterFile(roster.filter((m) => pickedIds.has(m.id)), "selected"); setPicking(false); setPickedIds(new Set()); }}
+                style={{ padding: "8px 12px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12, opacity: pickedIds.size === 0 ? 0.5 : 1 }}
+              >
+                Download {pickedIds.size} selected
+              </button>
+            </div>
+          )}
+          {copyMsg && <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginTop: 8 }}>{copyMsg}</div>}
+        </div>
+
         {roster.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             {confirmClearRoster ? (
@@ -8328,6 +8505,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
             key={m.id}
             style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
           >
+            {picking && <input type="checkbox" checked={pickedIds.has(m.id)} onChange={() => togglePick(m.id)} style={{ width: 18, height: 18, flexShrink: 0 }} />}
             <input
               value={m.name}
               onChange={(e) => onUpdate(m.id, { name: e.target.value })}
@@ -8634,7 +8812,11 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onUpdateTeeForRound, headerColor, accentColor, lockedTo = "", suggestedName = "" }) {
+const OTHERS_PER_DAY = 3;
+function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onUpdateTeeForRound, headerColor, accentColor, lockedTo = "", suggestedName = "", othersChangedToday = 0, handicapLog = [], isAdminDevice = false }) {
+  const [permissionFor, setPermissionFor] = useState(null); // name awaiting "do you have permission?"
+  const isOther = (name) => !!lockedTo && normalizeName(name) !== normalizeName(lockedTo);
+  const othersLeft = Math.max(0, OTHERS_PER_DAY - othersChangedToday);
   const [query, setQuery] = useState("");
   // A phone tied to a player goes straight to that player; otherwise, if
   // the phone already knows who's using it (from Enter scores), start there.
@@ -8682,6 +8864,11 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
     setDirty(false);
     setTimeout(() => setSavedMsg(false), 1500);
   };
+  // Picking someone else on a tied phone asks first.
+  const choose = (p) => {
+    if (isOther(p.name)) { setPermissionFor(p.name); return; }
+    selectPlayer(p);
+  };
 
   const saveTee = (roundId, newTee) => {
     onUpdateTeeForRound(roundId, selectedName, newTee);
@@ -8692,17 +8879,17 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
   if (selectedName && selectedPlayer) {
     return (
       <div style={{ padding: "14px 14px 40px" }}>
-        {lockedTo ? (
+        <button
+          onClick={() => setSelectedName(null)}
+          style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 12, padding: 0, fontWeight: 600 }}
+        >
+          ← Back to search
+        </button>
+        {lockedTo && (
           <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 12 }}>
-            This phone is set to <strong>{dn(lockedTo)}</strong> and can only change this handicap. If that's wrong, ask the organiser to release it.
+            This phone is <strong>{dn(lockedTo)}</strong>'s.
+            {isOther(selectedName) ? ` You're changing ${dn(selectedName)}'s handicap on their behalf — every change is logged for the organiser.` : ""}
           </div>
-        ) : (
-          <button
-            onClick={() => setSelectedName(null)}
-            style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 12, padding: 0, fontWeight: 600 }}
-          >
-            ← Back to search
-          </button>
         )}
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{selectedName}</div>
@@ -8768,21 +8955,64 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
             </div>
           ))}
         </div>
+
+        {(() => {
+          // This player's handicap history — every change made through
+          // Your Handicap, newest first, with who made it.
+          const mine = handicapLog.filter((e) => normalizeName(e.name) === normalizeName(selectedName)).reverse();
+          return (
+            <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0", marginTop: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Handicap history</div>
+              <div style={{ fontSize: 11, color: "#8A8774", marginBottom: mine.length ? 8 : 0 }}>
+                Changes made through Your Handicap, and who made them.{mine.length === 0 ? " None yet." : ""}
+              </div>
+              {mine.map((e, i) => {
+                const onBehalf = e.by && e.by !== "organiser" && normalizeName(e.by) !== normalizeName(e.name);
+                return (
+                  <div key={i} style={{ padding: "6px 0", borderTop: "1px solid #EFEDE0", fontSize: 12.5 }}>
+                    <span className="mono" style={{ fontWeight: 700 }}>{e.from === "" ? "–" : e.from} → {e.to === "" ? "–" : e.to}</span>
+                    <span style={{ color: onBehalf ? "#B5442E" : "#8A8774", fontWeight: onBehalf ? 700 : 400 }}> · {e.by === "organiser" ? "organiser" : onBehalf ? `by ${dn(e.by)}` : "themselves"}</span>
+                    <span className="mono" style={{ color: "#9B9885", fontSize: 11 }}> · {new Date(e.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
     );
   }
 
-  if (lockedTo) {
-    return (
-      <div style={{ padding: "24px 14px 40px", textAlign: "center", color: "#6B6B5F", fontSize: 13.5 }}>
-        This phone is set to <strong>{dn(lockedTo)}</strong>, who isn't on this event's list at the moment. Ask the organiser to release the phone or check the name.
-      </div>
-    );
-  }
   return (
     <div style={{ padding: "14px 14px 40px" }}>
+      {permissionFor && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(27,27,27,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setPermissionFor(null)}>
+          <div style={{ background: "#FFFFFF", borderRadius: 14, padding: 22, width: "100%", maxWidth: 340 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, lineHeight: 1.25 }}>You're about to change another player's handicap</div>
+            <div style={{ fontSize: 13.5, color: "#3F3F38", marginTop: 8, lineHeight: 1.45 }}>
+              This phone is {dn(lockedTo)}'s. Do you have {dn(permissionFor)}'s permission to change theirs?
+              {othersLeft > 0
+                ? ` The change will be logged for the organiser. You can change ${othersLeft} more player${othersLeft === 1 ? "" : "s"}' today.`
+                : " You've already changed 3 other players' handicaps today — ask the organiser to do this one."}
+            </div>
+            {othersLeft > 0 && (
+              <button
+                onClick={() => { const p = players.find((x) => x.name === permissionFor); setPermissionFor(null); if (p) selectPlayer(p); }}
+                style={{ width: "100%", marginTop: 16, padding: "13px 0", borderRadius: 10, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 800, fontSize: 15 }}
+              >
+                Yes, I have their permission
+              </button>
+            )}
+            <button onClick={() => setPermissionFor(null)} style={{ width: "100%", marginTop: 8, padding: "11px 0", borderRadius: 10, border: "1px solid #D8D4C0", background: "#FFFFFF", color: "#6B6B5F", fontWeight: 700, fontSize: 14 }}>
+              No — go back
+            </button>
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: 12.5, color: "#6B6B5F", marginBottom: 10 }}>
-        Find your name to check or update your handicap index.
+        {lockedTo
+          ? <>This phone is <strong>{dn(lockedTo)}</strong>'s. Tap your own name to change your handicap. Changing someone else's needs their permission, is logged, and is limited to {OTHERS_PER_DAY} players a day.</>
+          : "Find your name to check or update your handicap index."}
       </div>
       <input
         value={query}
@@ -8798,7 +9028,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
         filtered.map((p) => (
           <button
             key={p.name}
-            onClick={() => selectPlayer(p)}
+            onClick={() => choose(p)}
             style={{
               width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
               padding: "12px 14px", background: "#FFFFFF", borderRadius: 10, marginBottom: 8, border: "1px solid #E4E0D0",
@@ -9025,7 +9255,8 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [] }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [], handicapLog = [] }) {
+  const [showLog, setShowLog] = useState(false);
   const [showTied, setShowTied] = useState(false);
   const [releaseSearch, setReleaseSearch] = useState("");
   const [releasedMsg, setReleasedMsg] = useState("");
@@ -9274,6 +9505,28 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
           Helper access — Course setup (tees, slope, holes), PINs, backups and switching event are the organiser's only.
         </div>
       )}
+
+      <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 12, marginTop: 12 }}>
+        <button onClick={() => setShowLog((v) => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: headerColor }}>Handicap changes ({handicapLog.length})</span>
+          <ChevronRight size={15} color="#9B9885" style={{ transform: showLog ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+        </button>
+        {showLog && (
+          <div style={{ marginTop: 8 }}>
+            {handicapLog.length === 0 && <div style={{ fontSize: 12, color: "#9B9885" }}>No changes made from Your Handicap yet.</div>}
+            {[...handicapLog].reverse().slice(0, 60).map((e, i) => {
+              const onBehalf = e.by && e.by !== "organiser" && normalizeName(e.by) !== normalizeName(e.name);
+              return (
+                <div key={i} style={{ padding: "6px 0", borderTop: "1px solid #EFEDE0", fontSize: 12.5 }}>
+                  <span style={{ fontWeight: 700 }}>{dn(e.name)}</span> <span className="mono">{e.from === "" ? "–" : e.from} → {e.to === "" ? "–" : e.to}</span>
+                  <span style={{ color: onBehalf ? "#B5442E" : "#8A8774", fontWeight: onBehalf ? 700 : 400 }}> · {e.by === "organiser" ? "organiser" : onBehalf ? `by ${dn(e.by)}` : "themselves"}</span>
+                  <span className="mono" style={{ color: "#9B9885", fontSize: 11 }}> · {new Date(e.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 12, marginTop: 12 }}>
         <button onClick={() => setShowTied((v) => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}>
