@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 145";
+const APP_VERSION = "21 Sep 2026 · build 146";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -6671,7 +6671,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
                               return next;
                             })}
                           />
-                          <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.name}</span>
+                          <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{dn(m.name)}</span>
                           <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>{m.index || "no HCP"}</span>
                         </label>
                       ))}
@@ -8701,6 +8701,23 @@ function MatchesSetup({ matches, players, onAdd, onUpdate, onRemove, onBack, hea
   );
 }
 
+// A roster member's name box. With "Show surname first" on it reads
+// "Hawkins, Ben" like everywhere else; tap into it and it shows the name
+// as stored ("Ben Hawkins") for editing, then flips back.
+function RosterNameBox({ name, onChange, style }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <input
+      value={editing ? name : dn(name)}
+      onFocus={() => setEditing(true)}
+      onBlur={() => setEditing(false)}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Name"
+      style={style}
+    />
+  );
+}
+
 function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onImport, course, roundPlayers, roundLabel, onAddToRound, onBack, headerColor, accentColor, surnameFirst = false, onUpdateSurnameFirst, onCopyFromEvent, onImportRosterFile, eventCode = "" }) {
   const [copyCode, setCopyCode] = useState("");
   const [copyMsg, setCopyMsg] = useState("");
@@ -8953,14 +8970,13 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
         {alphaSorted.map((m) => (
           <div
             key={m.id}
-            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
           >
             {picking && <input type="checkbox" checked={pickedIds.has(m.id)} onChange={() => togglePick(m.id)} style={{ width: 18, height: 18, flexShrink: 0 }} />}
-            <input
-              value={m.name}
-              onChange={(e) => onUpdate(m.id, { name: e.target.value })}
-              placeholder="Name"
-              style={{ flex: 2, fontSize: 13, fontWeight: 600, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0 }}
+            <RosterNameBox
+              name={m.name}
+              onChange={(v) => onUpdate(m.id, { name: v })}
+              style={{ flex: "1 1 100%", fontSize: 13, fontWeight: 600, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0, boxSizing: "border-box" }}
             />
             <input
               value={m.index}
