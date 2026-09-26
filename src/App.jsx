@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 123";
+const APP_VERSION = "21 Sep 2026 · build 125";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -573,9 +573,12 @@ function readHandicapIdentity(code) {
 }
 function writeHandicapIdentity(code, name) {
   try {
-    if (name) window.localStorage.setItem(handicapIdentityKey(code), name);
-    else window.localStorage.removeItem(handicapIdentityKey(code));
+    if (name) { window.localStorage.setItem(handicapIdentityKey(code), name); window.localStorage.setItem(`${handicapIdentityKey(code)}-at`, String(Date.now())); }
+    else { window.localStorage.removeItem(handicapIdentityKey(code)); window.localStorage.removeItem(`${handicapIdentityKey(code)}-at`); }
   } catch { /* ignore */ }
+}
+function readHandicapIdentityAt(code) {
+  try { return Number(window.localStorage.getItem(`${handicapIdentityKey(code)}-at`) || 0); } catch { return 0; }
 }
 
 // ---- Remembering the card being marked on this phone ----
@@ -1164,6 +1167,7 @@ const DEFAULT_STATE = {
   documents: [], // event-wide, not tied to any particular day
   surnameFirst: false, // show names "Bailey, Will" everywhere (display only)
   handicapDevices: {}, // { deviceId: playerName } — phones tied to one player on Your Handicap; Admin can release
+  handicapReleases: {}, // { normalised name: time } — Admin released this player: any phone tied to them before that time lets go
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
@@ -1228,6 +1232,7 @@ function sanitizeState(parsed) {
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
     surnameFirst: parsed.surnameFirst === true,
     handicapDevices: parsed.handicapDevices && typeof parsed.handicapDevices === "object" && !Array.isArray(parsed.handicapDevices) ? parsed.handicapDevices : {},
+    handicapReleases: parsed.handicapReleases && typeof parsed.handicapReleases === "object" && !Array.isArray(parsed.handicapReleases) ? parsed.handicapReleases : {},
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -1832,6 +1837,7 @@ function AppInner() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [, setIdentityTick] = useState(0); // re-render after "who am I" is set on this phone
+  const [ownOnly, setOwnOnly] = useState(false); // players' Enter scores → "Mark my own card": the private card on its own
   const [live, setLive] = useState(false);
   const [syncError, setSyncError] = useState(false);
   const [activeId, setActiveId] = useState(null);
@@ -1874,6 +1880,15 @@ function AppInner() {
     const syncedKey = `golf-handicap-identity-synced-${eventCode}`;
     let synced = false;
     try { synced = window.localStorage.getItem(syncedKey) === "1"; } catch { /* ignore */ }
+    // Admin released this player by name after this phone was tied → let go.
+    const releasedAt = local ? (state.handicapReleases || {})[normalizeName(local)] || 0 : 0;
+    if (local && releasedAt && releasedAt > readHandicapIdentityAt(eventCode)) {
+      writeHandicapIdentity(eventCode, "");
+      try { window.localStorage.removeItem(syncedKey); } catch { /* ignore */ }
+      if (remote) save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[deviceId]; return { handicapDevices: d }; });
+      setIdentityTick((n) => n + 1);
+      return;
+    }
     if (local && !remote && !synced) {
       // tied before ties were kept in the event: register it once
       save((prev) => ((prev.handicapDevices || {})[deviceId] ? {} : { handicapDevices: { ...(prev.handicapDevices || {}), [deviceId]: local } }));
@@ -1888,7 +1903,7 @@ function AppInner() {
       try { window.localStorage.setItem(syncedKey, "1"); } catch { /* ignore */ }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventCode, live, loading, adminVisible, state.handicapDevices]);
+  }, [eventCode, live, loading, adminVisible, state.handicapDevices, state.handicapReleases]);
   // Cards this phone has already opened for signing by itself — so backing
   // out without signing doesn't have it pop straight back up.
   const autoOpenedRef = useRef(new Set());
@@ -2344,6 +2359,7 @@ function AppInner() {
 
   // Leaving the score screens lets go of whichever card was open.
   useEffect(() => {
+    if (mode !== "entry") setOwnOnly(false);
     if (mode === "entry" || mode === "scorer" || !activeId) return;
     releaseCard(activeId);
     setActiveId(null);
@@ -3716,14 +3732,33 @@ function AppInner() {
             }
           }}
           onUpdateTeeForRound={updateTeeForRound}
-          lockedTo={adminVisible ? "" : ((state.handicapDevices || {})[deviceId] || "")}
+          lockedTo={adminVisible ? "" : ((state.handicapDevices || {})[deviceId] || readHandicapIdentity(eventCode) || "")}
           suggestedName={readOwnCard(eventCode, activeRoundId).name}
           headerColor={headerColor}
           accentColor={accentColor}
         />
       ) : mode === "entry" && activeRound.publicScoreEntry && !isMatchPlay ? (
         // Players helping to put cards in — only while Admin has it switched on.
-        active ? (
+        ownOnly ? (
+          <ScoreEntry
+            publicMode
+            ownOnly
+            requireSignature={activeRound.requireSignature !== false}
+            deviceId={deviceId}
+            ownCardStore={{ code: eventCode, roundId: activeRoundId }}
+            rosterPlayers={players}
+            groupNames={[readOwnCard(eventCode, activeRoundId).name].filter(Boolean)}
+            course={course}
+            player={{ id: "own", name: readOwnCard(eventCode, activeRoundId).name || "You", index: "", tee: "", scores: Array(18).fill("") }}
+            onBack={() => setOwnOnly(false)}
+            onUpdate={() => {}}
+            onScore={() => {}}
+            headerColor={headerColor}
+            isFoursomes={format === "foursomes"}
+            isMedal={isMedal}
+            handicapAllowance={handicapAllowance}
+          />
+        ) : active ? (
           <ScoreEntry
             publicMode
             requireSignature={activeRound.requireSignature !== false}
@@ -3767,6 +3802,7 @@ function AppInner() {
               claimCard(id);
             }}
             onReview={(id) => { setEntryNotice(""); setActiveId(id); load(); }}
+            onOwnCard={() => { setEntryNotice(""); setOwnOnly(true); }}
             ownName={readOwnCard(eventCode, activeRoundId).name}
             onSetOwnName={(name) => { const cur = readOwnCard(eventCode, activeRoundId); writeOwnCard(eventCode, activeRoundId, { ...cur, name }); setIdentityTick((n) => n + 1); }}
             draw={draw}
@@ -4067,7 +4103,9 @@ function AppInner() {
           onOpenBackup={() => setShowBackup(true)}
           onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[deviceId]; return { handicapDevices: d }; }); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
           tiedPhones={Object.entries(state.handicapDevices || {}).map(([id, name]) => ({ id, name }))}
-          onReleasePlayer={(id) => save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[id]; return { handicapDevices: d }; })}
+          onReleasePlayer={(id) => save((prev) => { const d = { ...(prev.handicapDevices || {}) }; const name = d[id]; delete d[id]; return { handicapDevices: d, handicapReleases: name ? { ...(prev.handicapReleases || {}), [normalizeName(name)]: Date.now() } : prev.handicapReleases }; })}
+          onReleaseByName={(name) => save((prev) => ({ handicapReleases: { ...(prev.handicapReleases || {}), [normalizeName(name)]: Date.now() } }))}
+          allNames={[...new Set(rounds.flatMap((r) => r.players.flatMap((p) => [p.name, p.partnerName])).filter(Boolean))].sort(cmpName)}
           isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -8987,8 +9025,10 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [] }) {
   const [showTied, setShowTied] = useState(false);
+  const [releaseSearch, setReleaseSearch] = useState("");
+  const [releasedMsg, setReleasedMsg] = useState("");
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -9252,6 +9292,24 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
                 <button onClick={() => onReleasePlayer && onReleasePlayer(t.id)} style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "1px solid #B5442E", borderRadius: 6, padding: "4px 9px" }}>Release</button>
               </div>
             ))}
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
+              <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+                Not in the list? A phone tied before this list existed only knows it itself. Release the player by name and their phone lets go the next time it refreshes:
+              </div>
+              <input
+                value={releaseSearch}
+                onChange={(e) => { setReleaseSearch(e.target.value); setReleasedMsg(""); }}
+                placeholder="Search a player to release…"
+                style={{ width: "100%", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", fontFamily: "inherit", boxSizing: "border-box", marginBottom: 6 }}
+              />
+              {releaseSearch.trim() && allNames.filter((n) => dn(n).toLowerCase().includes(releaseSearch.trim().toLowerCase())).slice(0, 8).map((n) => (
+                <div key={n} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: "1px solid #EFEDE0" }}>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{dn(n)}</span>
+                  <button onClick={() => { onReleaseByName && onReleaseByName(n); setReleasedMsg(`${dn(n)} released — their phone will let go when it next refreshes.`); setReleaseSearch(""); }} style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "1px solid #B5442E", borderRadius: 6, padding: "4px 9px" }}>Release</button>
+                </div>
+              ))}
+              {releasedMsg && <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginTop: 4 }}>{releasedMsg}</div>}
+            </div>
             {onReleaseHandicapPhone && (
               <div style={{ fontSize: 11, color: "#8A8774", marginTop: 8 }}>
                 This phone itself: <button onClick={onReleaseHandicapPhone} style={{ background: "none", border: "none", color: headerColor, fontSize: 11, fontWeight: 700, padding: 0, textDecoration: "underline" }}>release this phone</button>.
@@ -9646,7 +9704,7 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, headerColor, accentColor, ownName = "", onSetOwnName, draw = [] }) {
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, onOwnCard, headerColor, accentColor, ownName = "", onSetOwnName, draw = [] }) {
   // Three short steps: who are you → player or marker → the card.
   // "Who" is remembered on this phone for the day (it's the same name the
   // private own-card panel uses), so it's asked once.
@@ -9749,6 +9807,18 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           if (myCard && (awaitingSignature(myCard) || isScoreComplete(myCard))) onReview(myCard.id);
           else setStep("mine");
         }, { accent: true, sub: waitingMine ? "Check it hole by hole, then sign." : myCard && myCard.thru > 0 ? `${myCard.thru} of 18 holes in so far.` : "Your marker hasn't started your card yet." })}
+        {onOwnCard && (
+          <button
+            onClick={onOwnCard}
+            style={{
+              width: "100%", padding: "16px 14px", borderRadius: 12, marginBottom: 10, textAlign: "left", fontSize: 16, fontWeight: 800,
+              border: "2px dashed #B5AF9A", background: "#F5F3E9", color: headerColor,
+            }}
+          >
+            Mark MY OWN card — a private note
+            <div style={{ fontSize: 12, fontWeight: 500, color: "#6B6B5F", marginTop: 3 }}>Kept on this phone only; used to check your marker's card when it comes to you to sign.</div>
+          </button>
+        )}
       </div>
     );
   }
@@ -9876,7 +9946,7 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [] }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [], ownOnly = false }) {
   // The marker's own private card (see readOwnCard) — only in players' mode.
   const [ownCard, setOwnCard] = useState(() => (ownCardStore ? readOwnCard(ownCardStore.code, ownCardStore.roundId) : { name: "", scores: Array(18).fill("") }));
   const [showOwnCard, setShowOwnCard] = useState(true);
@@ -10244,6 +10314,96 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     </div>
   );
 
+  const ownCardPanel = publicMode && ownCardStore && (
+    <div style={{ background: "#F5F3E9", borderRadius: 12, border: "2px dashed #B5AF9A", padding: 12, marginTop: 4, marginBottom: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#6B6B5F", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 6 }}>
+        {ownCard.name ? `${dn(ownCard.name)} — your own card (private)` : "Your own card — choose your name"}
+      </div>
+      <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+        Your own scores, kept privately on this phone. Nobody else sees them — they're there so the card your marker enters
+        for you can be checked against them when it comes to you to sign.
+      </div>
+      <select
+        value={ownCard.name}
+        onChange={(e) => updateOwnCard({ name: e.target.value })}
+        style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", marginBottom: 8 }}
+      >
+        <option value="">I am…</option>
+        {[...new Set([ownCard.name, ...groupNames].filter(Boolean))].map((n) => <option key={n} value={n}>{dn(n)}</option>)}
+      </select>
+      {ownCard.name && (
+        <div className="mono" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
+          {ownPh === null ? "No handicap found for that name — shot holes can't be marked." : `Playing ${ownPh} — shots on the holes marked *`}
+        </div>
+      )}
+      {[[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12], [13, 14, 15, 16, 17, 18]].map((holes, hi) => (
+        <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 6 }}>
+          {holes.map((h) => (
+            <div key={h} style={{ textAlign: "center" }}>
+              <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
+                {h}{ownShots(h - 1) > 0 && <span style={{ color: "#C00000", fontSize: 12, marginLeft: 1 }}>{"*".repeat(ownShots(h - 1))}</span>}
+              </div>
+              <div className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[h - 1].par}</div>
+              <input
+                ref={(el) => (ownRefs.current[h - 1] = el)}
+                className="mono scoreInput"
+                type="number"
+                inputMode={ownTypingHole === h - 1 ? "numeric" : "none"}
+                value={ownCard.scores[h - 1]}
+                readOnly={ownLocked(h - 1) || ownTypingHole !== h - 1}
+                onClick={() => ownTap(h - 1)}
+                onBlur={() => { if (ownTypingHole === h - 1) setOwnTypingHole(null); }}
+                onChange={(e) => setOwnScore(h - 1, e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setOwnTypingHole(null); e.target.blur(); setOwnPadHole(ownNextOpen(h - 1)); } }}
+                style={{
+                  width: "100%", textAlign: "center", padding: "10px 0", borderRadius: 8, fontSize: 17, fontWeight: 800, caretColor: ownTypingHole === h - 1 ? "auto" : "transparent",
+                  border: ownPadHole === h - 1 ? `3px solid ${headerColor}` : ownShots(h - 1) > 0 && !ownLocked(h - 1) ? `${ownCard.scores[h - 1] !== "" ? 2 : 1.5}px solid #C00000` : ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
+                  background: ownLocked(h - 1) ? `${headerColor}22` : ownShots(h - 1) > 0 ? "#FFF3F3" : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
+                }}
+              />
+            </div>
+          ))}
+          {ownPadHole !== null && holes.includes(ownPadHole + 1) && ownPad(ownPadHole)}
+        </div>
+      ))}
+      {ownCard.scores.some((v) => v !== "") && (
+        <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+          <button
+            onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 10000); if (editing) ownTouchedAt.current = {}; }}
+            style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
+          >
+            {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
+          </button>
+          {confirmClearOwn ? (
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E" }}>Clear all your own scores?</span>
+              <button onClick={() => { updateOwnCard({ scores: Array(18).fill("") }); setConfirmClearOwn(false); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#B5442E", color: "#FFFFFF", fontSize: 11.5, fontWeight: 700 }}>Yes, clear</button>
+              <button onClick={() => setConfirmClearOwn(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #D8D4C0", background: "#FFF", color: "#6B6B5F", fontSize: 11.5, fontWeight: 600 }}>Cancel</button>
+            </span>
+          ) : (
+            <button onClick={() => setConfirmClearOwn(true)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+              Clear my own card
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  if (ownOnly) {
+    return (
+      <div style={{ padding: "12px 14px 40px" }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
+          ← Back
+        </button>
+        {ownCardPanel}
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginTop: 4 }}>
+          This card never goes anywhere. When your marker submits your card it pops up here to sign, with any holes that don't agree with this one flagged.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: "12px 14px 40px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>
@@ -10513,93 +10673,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         );
       })()}
 
-      {publicMode && !reviewing && ownCardStore && (
-        <div style={{ background: "#F5F3E9", borderRadius: 12, border: "2px dashed #B5AF9A", padding: 12, marginTop: 4, marginBottom: 10 }}>
-          <button
-            onClick={() => setShowOwnCard((v) => !v)}
-            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}
-          >
-            <span style={{ fontSize: 13, fontWeight: 800, color: "#6B6B5F", letterSpacing: "0.04em", textTransform: "uppercase" }}>{ownCard.name ? `${ownCard.name} — your own card (marker)` : "Your own card (marker) — choose your name"}</span>
-            <ChevronRight size={15} color="#9B9885" style={{ transform: showOwnCard ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
-          </button>
-          {showOwnCard && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-                Your own scores, kept privately on this phone while you mark {player.name ? `${player.name}'s` : "this"} card. Nobody else
-                sees them — they're there so the card your marker enters for you can be checked against them when it comes to you to sign.
-              </div>
-              <select
-                value={ownCard.name}
-                onChange={(e) => updateOwnCard({ name: e.target.value })}
-                style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", marginBottom: 8 }}
-              >
-                <option value="">I am…</option>
-                {[...new Set([ownCard.name, ...groupNames].filter(Boolean))].map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-              {ownCard.name && (
-                <div className="mono" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-                  {ownPh === null ? "No handicap found for that name — shot holes can't be marked." : `Playing ${ownPh} — shots on the holes marked *`}
-                </div>
-              )}
-              {[[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12], [13, 14, 15, 16, 17, 18]].map((holes, hi) => (
-                <div key={hi} style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 6 }}>
-                  {holes.map((h) => (
-                    <div key={h} style={{ textAlign: "center" }}>
-                      <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
-                        {h}{ownShots(h - 1) > 0 && <span style={{ color: "#C00000", fontSize: 12, marginLeft: 1 }}>{"*".repeat(ownShots(h - 1))}</span>}
-                      </div>
-                      <div className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[h - 1].par}</div>
-                      <input
-                        ref={(el) => (ownRefs.current[h - 1] = el)}
-                        className="mono scoreInput"
-                        type="number"
-                        inputMode={ownTypingHole === h - 1 ? "numeric" : "none"}
-                        value={ownCard.scores[h - 1]}
-                        readOnly={ownLocked(h - 1) || ownTypingHole !== h - 1}
-                        onClick={() => ownTap(h - 1)}
-                        onBlur={() => { if (ownTypingHole === h - 1) setOwnTypingHole(null); }}
-                        onChange={(e) => setOwnScore(h - 1, e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setOwnTypingHole(null); e.target.blur(); setOwnPadHole(ownNextOpen(h - 1)); } }}
-                        style={{
-                          width: "100%", textAlign: "center", padding: "10px 0", borderRadius: 8, fontSize: 17, fontWeight: 800, caretColor: ownTypingHole === h - 1 ? "auto" : "transparent",
-                          border: ownPadHole === h - 1
-                            ? `3px solid ${headerColor}`
-                            : ownShots(h - 1) > 0 && !ownLocked(h - 1)
-                            ? `${ownCard.scores[h - 1] !== "" ? 2 : 1.5}px solid #C00000`
-                            : ownCard.scores[h - 1] !== "" && !ownLocked(h - 1) ? `2px solid ${headerColor}` : "1px solid #D8D4C0",
-                          background: ownLocked(h - 1) ? `${headerColor}22` : ownShots(h - 1) > 0 ? "#FFF3F3" : "#FBFAF6", color: ownLocked(h - 1) ? headerColor : "#1B1B1B",
-                        }}
-                      />
-                    </div>
-                  ))}
-                  {ownPadHole !== null && holes.includes(ownPadHole + 1) && ownPad(ownPadHole)}
-                </div>
-              ))}
-              {ownCard.scores.some((v) => v !== "") && (
-                <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                  <button
-                    onClick={() => { const editing = Date.now() <= ownEditUntil; setOwnEditUntil(editing ? 0 : Date.now() + 10000); if (editing) ownTouchedAt.current = {}; }}
-                    style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}
-                  >
-                    {Date.now() <= ownEditUntil ? "Lock now" : "Edit my own card"}
-                  </button>
-                  {confirmClearOwn ? (
-                    <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E" }}>Clear all your own scores?</span>
-                      <button onClick={() => { updateOwnCard({ scores: Array(18).fill("") }); setConfirmClearOwn(false); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#B5442E", color: "#FFFFFF", fontSize: 11.5, fontWeight: 700 }}>Yes, clear</button>
-                      <button onClick={() => setConfirmClearOwn(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #D8D4C0", background: "#FFF", color: "#6B6B5F", fontSize: 11.5, fontWeight: 600 }}>Cancel</button>
-                    </span>
-                  ) : (
-                    <button onClick={() => setConfirmClearOwn(true)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
-                      Clear my own card
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {!reviewing && ownCardPanel}
 
       {(() => {
         // Card totals — Out / In / Total for gross, net and Stableford
