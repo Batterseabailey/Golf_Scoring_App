@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 114";
+const APP_VERSION = "21 Sep 2026 · build 120";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -442,6 +442,79 @@ function stillLevel(a, b, isMedal) {
   return a.sortValue !== null && b.sortValue !== null && compareWithCountback(a, b, isMedal) === 0;
 }
 
+// ---- Team result between two sides of unequal size ----
+// Each side's counting cards (complete, or NR with points) give a total,
+// an average per player, and a "best half" average (the top 50% of each
+// side's cards, rounded up — so a side of 70 counts its best 35 and a
+// side of 50 its best 25). The averages are the pro-rata comparison; the
+// total is there for interest only.
+function sideResult(round, abbr) {
+  const isM = round.scoring === "medal";
+  const rows = playersOnDay(round)
+    .filter((p) => p.name && (hasComp(p.competition, abbr) || (p.partnerName && hasComp(p.partnerCompetition, abbr))))
+    .map((p) => totals(round.course, forLeaderboard(p), round.handicapAllowance, round.format === "foursomes"))
+    .filter((t) => t.thru > 0)
+    .map((t) => (isM ? (t.thru === 18 && !t.nr ? t.netTotal : null) : t.pts))
+    .filter((v) => v !== null);
+  if (rows.length === 0) return { n: 0, total: 0, avg: null, bestHalfAvg: null, bestHalfN: 0 };
+  const sorted = [...rows].sort((a, b) => (isM ? a - b : b - a));
+  const half = Math.ceil(sorted.length / 2);
+  const best = sorted.slice(0, half);
+  const sum = (xs) => xs.reduce((n, v) => n + v, 0);
+  return { n: rows.length, total: sum(rows), avg: sum(rows) / rows.length, bestHalfAvg: sum(best) / best.length, bestHalfN: half };
+}
+
+function TeamResult({ round, competitions, headerColor, accentColor, print = false }) {
+  if (!round.sideA || !round.sideB) return null;
+  const isM = round.scoring === "medal";
+  const nameOf = (a) => compNames(a, competitions)[0] || a;
+  const A = sideResult(round, round.sideA), B = sideResult(round, round.sideB);
+  if (A.n === 0 && B.n === 0) return null;
+  const better = (x, y) => (x === null || y === null ? 0 : isM ? (x < y ? 1 : x > y ? -1 : 0) : (x > y ? 1 : x < y ? -1 : 0));
+  const lead = better(A.bestHalfAvg, B.bestHalfAvg);
+  const fmt = (v) => (v === null ? "–" : v.toFixed(2));
+  const cell = { padding: print ? "5px 8px" : "8px 10px", fontSize: print ? 13 : 14, textAlign: "right", whiteSpace: "nowrap" };
+  const th = { ...cell, fontSize: print ? 11 : 11.5, fontWeight: 700, color: print ? "#000" : "#8A8774", borderBottom: print ? "2px solid #000" : "1px solid #DDDDDD" };
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: print ? 15 : 14, fontWeight: 800, color: print ? "#000" : headerColor, marginBottom: 4 }}>
+        {nameOf(round.sideA)} v {nameOf(round.sideB)}
+        {lead !== 0 && A.n > 0 && B.n > 0 && (
+          <span style={{ fontWeight: 600, fontSize: print ? 13 : 13, marginLeft: 8, color: print ? "#000" : accentColor }}>— {lead > 0 ? nameOf(round.sideA) : nameOf(round.sideB)} lead{A.n + B.n < 4 ? "" : ""}</span>
+        )}
+        {lead === 0 && A.n > 0 && B.n > 0 && <span style={{ fontWeight: 600, fontSize: 13, marginLeft: 8 }}>— level</span>}
+      </div>
+      <table style={{ borderCollapse: "collapse", background: print ? "transparent" : "#FFFFFF", width: "100%" }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: "left" }}>Side</th>
+            <th style={th}>Cards</th>
+            <th style={th}>Best half</th>
+            <th style={{ ...th, fontWeight: 800 }}>Best-half avg</th>
+            <th style={th}>Avg (all)</th>
+            <th style={th}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[[round.sideA, A, lead > 0], [round.sideB, B, lead < 0]].map(([abbr, r, leads]) => (
+            <tr key={abbr} style={{ borderBottom: "1px solid #DDDDDD", fontWeight: leads ? 800 : 500 }}>
+              <td style={{ ...cell, textAlign: "left" }}>{nameOf(abbr)}</td>
+              <td className="mono" style={cell}>{r.n}</td>
+              <td className="mono" style={cell}>{r.bestHalfN}</td>
+              <td className="mono" style={{ ...cell, fontWeight: 800 }}>{fmt(r.bestHalfAvg)}</td>
+              <td className="mono" style={cell}>{fmt(r.avg)}</td>
+              <td className="mono" style={cell}>{r.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: print ? 10 : 11, color: print ? "#444" : "#8A8774", marginTop: 4 }}>
+        Pro rata for sides of different sizes: each side's best half of counting cards (rounded up) averaged — {isM ? "lowest" : "highest"} wins. Average of all cards shown for comparison.
+      </div>
+    </div>
+  );
+}
+
 // A card only counts towards any leaderboard once Admin has pressed
 // COMPLETE on it — until then the scores are saved (nothing is lost if
 // you're interrupted halfway through a card) but stay private to Admin.
@@ -485,6 +558,24 @@ function readOwnCard(code, roundId) {
 }
 function writeOwnCard(code, roundId, card) {
   try { window.localStorage.setItem(ownCardKey(code, roundId), JSON.stringify(card)); } catch { /* ignore */ }
+}
+
+// ---- One player per phone on Your Handicap ----
+// The first time a handicap is saved from a phone, that phone is tied to
+// that player: from then on it can only change that one handicap. There's
+// no sign-in to arrange; it simply stops one person altering everyone's.
+// An organiser's device isn't tied, and Admin can release a phone.
+function handicapIdentityKey(code) {
+  return `golf-handicap-identity-${code}`;
+}
+function readHandicapIdentity(code) {
+  try { return window.localStorage.getItem(handicapIdentityKey(code)) || ""; } catch { return ""; }
+}
+function writeHandicapIdentity(code, name) {
+  try {
+    if (name) window.localStorage.setItem(handicapIdentityKey(code), name);
+    else window.localStorage.removeItem(handicapIdentityKey(code));
+  } catch { /* ignore */ }
 }
 
 // ---- Remembering the card being marked on this phone ----
@@ -586,6 +677,35 @@ function formatGroupNames(names) {
 // pasting, which would otherwise silently fail an exact-match lookup.
 function normalizeName(name) {
   return (name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// ---- Competition tags ----
+// A player can be in MORE THAN ONE competition on a day — a country trophy
+// and an over-75s, say. The tags live in the one competition field as a
+// comma-separated list ("AUS, O75"), so nothing stored elsewhere changes.
+function compTags(str) {
+  return [...new Set(String(str || "").split(/[,;/]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))];
+}
+function hasComp(str, abbr) {
+  return !!abbr && compTags(str).includes(String(abbr).trim().toUpperCase());
+}
+function addComp(str, abbr) {
+  return [...new Set([...compTags(str), String(abbr).trim().toUpperCase()])].filter(Boolean).join(", ");
+}
+function removeComp(str, abbr) {
+  return compTags(str).filter((t) => t !== String(abbr).trim().toUpperCase()).join(", ");
+}
+// A competition can be marked SEPARATE: its players are playing that
+// competition INSTEAD of the day's main one (the Bader for over-75s,
+// say), so they're left out of the main "everyone" ranking and appear
+// only under their own button. Anyone not in a separate competition is
+// in the main one.
+function inSeparateComp(str, competitions) {
+  const seps = new Set((competitions || []).filter((c) => c.separate).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
+  return compTags(str).some((t) => seps.has(t));
+}
+function compNames(str, competitions) {
+  return compTags(str).map((t) => { const c = (competitions || []).find((x) => (x.abbreviation || "").toUpperCase() === t); return c ? c.fullName || c.abbreviation : t; });
 }
 
 function findIndividualByName(rosterPlayers, name) {
@@ -820,6 +940,8 @@ function emptyRound(label, course) {
     publicShowDayBoard: true, // whether this day's own leaderboard is offered to players (Overall is always there)
     inOverall: true, // whether this day counts on the Overall (all days added together) leaderboard
     cardBack: "", // text printed on the reverse of this day's scorecards, under the club's logo
+    sideA: "", // team result: competition code of side A (e.g. "UK") — blank for no team result
+    sideB: "", // ...and side B (e.g. "OS")
   };
 }
 
@@ -870,6 +992,8 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicShowDayBoard: r.publicShowDayBoard === false ? false : true,
     inOverall: r.inOverall === false ? false : true,
     cardBack: typeof r.cardBack === "string" ? r.cardBack : "",
+    sideA: typeof r.sideA === "string" ? r.sideA : "",
+    sideB: typeof r.sideB === "string" ? r.sideB : "",
   };
 }
 
@@ -1140,15 +1264,16 @@ function combinedStandings(rounds, competitionFilter) {
     // been "visited" and resynced — computing it fresh here means the
     // leaderboard is always correct straight from the draw for every
     // round, not just whichever one happens to be currently selected.
+    const dayComps = round.competitions || [];
     playersOnDay(round).forEach((p) => {
       const t = totals(round.course, forLeaderboard(p), round.handicapAllowance, round.format === "foursomes");
-      if (!competitionFilter || p.competition === competitionFilter) credit(p.name, round.id, t);
+      if (competitionFilter ? hasComp(p.competition, competitionFilter) : !inSeparateComp(p.competition, dayComps)) credit(p.name, round.id, t);
       // On a Foursomes day, both partners earned this result together — the
       // combined-across-days table only makes sense (and stays comparable
       // to Individual/Medal days) if each person is credited individually,
       // not just whichever name happens to be stored first in the pair.
       if (round.format === "foursomes" && p.partnerName) {
-        if (!competitionFilter || p.partnerCompetition === competitionFilter) credit(p.partnerName, round.id, t);
+        if (competitionFilter ? hasComp(p.partnerCompetition, competitionFilter) : !inSeparateComp(p.partnerCompetition, dayComps)) credit(p.partnerName, round.id, t);
       }
     });
   });
@@ -2304,7 +2429,8 @@ function AppInner() {
   // part of this paste at all (a different, unrelated player already on
   // the roster) is left completely untouched.
   const mergeCompetitionsIntoPlayers = (currentPlayers, compPairs, namesInThisPaste) => {
-    const compMap = new Map((compPairs || []).map(({ name, abbreviation }) => [normalizeName(name), abbreviation]));
+    const compMap = new Map();
+    (compPairs || []).forEach(({ name, abbreviation }) => { const k = normalizeName(name); compMap.set(k, addComp(compMap.get(k) || "", abbreviation)); });
     const pasteSet = new Set((namesInThisPaste || []).map(normalizeName));
     return currentPlayers.map((p) => {
       // On a Foursomes day one record holds two people, each with their
@@ -2890,12 +3016,12 @@ function AppInner() {
       players: prevRound.players.map((p) => {
         let patch = {};
         if (p.name) {
-          if (selectedSet.has(normalizeName(p.name))) patch.competition = abbreviation;
-          else if (p.competition === abbreviation) patch.competition = "";
+          if (selectedSet.has(normalizeName(p.name))) patch.competition = addComp(p.competition, abbreviation);
+          else if (hasComp(p.competition, abbreviation)) patch.competition = removeComp(p.competition, abbreviation);
         }
         if (p.partnerName) {
-          if (selectedSet.has(normalizeName(p.partnerName))) patch.partnerCompetition = abbreviation;
-          else if (p.partnerCompetition === abbreviation) patch.partnerCompetition = "";
+          if (selectedSet.has(normalizeName(p.partnerName))) patch.partnerCompetition = addComp(p.partnerCompetition, abbreviation);
+          else if (hasComp(p.partnerCompetition, abbreviation)) patch.partnerCompetition = removeComp(p.partnerCompetition, abbreviation);
         }
         return Object.keys(patch).length > 0 ? { ...p, ...patch } : p;
       }),
@@ -3553,8 +3679,13 @@ function AppInner() {
         <HandicapCheck
           players={allPlayersAcrossRounds()}
           competitions={allCompetitionsAcrossRounds()}
-          onUpdateIndexAndCompetition={updateIndexAndCompetitionEverywhere}
+          onUpdateIndexAndCompetition={(name, idx, comp) => {
+            updateIndexAndCompetitionEverywhere(name, idx, comp);
+            if (!adminVisible && !readHandicapIdentity(eventCode)) { writeHandicapIdentity(eventCode, name); setIdentityTick((n) => n + 1); }
+          }}
           onUpdateTeeForRound={updateTeeForRound}
+          lockedTo={adminVisible ? "" : readHandicapIdentity(eventCode)}
+          suggestedName={readOwnCard(eventCode, activeRoundId).name}
           headerColor={headerColor}
           accentColor={accentColor}
         />
@@ -3723,6 +3854,9 @@ function AppInner() {
           onRemove={removeCompetition}
           allPlayers={players}
           onBulkTag={bulkTagCompetition}
+          sideA={activeRound.sideA || ""}
+          sideB={activeRound.sideB || ""}
+          onUpdateSides={(patch) => updateRound(patch)}
           onBack={() => setShowCompetitionsSetup(false)}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -3899,6 +4033,7 @@ function AppInner() {
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
           onOpenBackup={() => setShowBackup(true)}
+          onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
           isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4212,7 +4347,7 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
         // not every competition from every day of the event.
         const dayComps = (activeRound && activeRound.competitions) || [];
         const dayAbbrsInUse = new Set(
-          playersOnDay(activeRound).flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null]).filter(Boolean).map((a) => a.toUpperCase())
+          playersOnDay(activeRound).flatMap((p) => [...(p.name ? compTags(p.competition) : []), ...(p.partnerName ? compTags(p.partnerCompetition) : [])])
         );
         const combinedCompsInUse = dayComps.filter((c) => c.abbreviation && dayAbbrsInUse.has(c.abbreviation.toUpperCase()));
         if (combinedCompsInUse.length === 0) return null;
@@ -4363,11 +4498,12 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
   // was running) doesn't put that competition on this day's board.
   const dayCompAbbrs = new Set((round.competitions || []).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
   const compsInUse = [...new Set(
-    effectivePlayers.flatMap((p) => [p.name ? p.competition : null, p.partnerName ? p.partnerCompetition : null]).filter(Boolean)
+    effectivePlayers.flatMap((p) => [...(p.name ? compTags(p.competition) : []), ...(p.partnerName ? compTags(p.partnerCompetition) : [])])
   )].filter((abbr) => dayCompAbbrs.has(abbr.toUpperCase()));
+  const dayComps = round.competitions || [];
   const filteredPlayers = subFilter
-    ? effectivePlayers.filter((p) => (p.name && p.competition === subFilter) || (p.partnerName && p.partnerCompetition === subFilter))
-    : effectivePlayers;
+    ? effectivePlayers.filter((p) => (p.name && hasComp(p.competition, subFilter)) || (p.partnerName && hasComp(p.partnerCompetition, subFilter)))
+    : effectivePlayers.filter((p) => !inSeparateComp(p.competition, dayComps) && !(p.partnerName && inSeparateComp(p.partnerCompetition, dayComps)));
 
   const rows = filteredPlayers
     .filter((p) => p.name)
@@ -4481,10 +4617,10 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
               color: subFilter === "" ? "#FFFFFF" : accentColor,
             }}
           >
-            All
+            {dayComps.some((c) => c.separate) ? "Main" : "All"}
           </button>
           {compsInUse.map((abbr) => {
-            const full = (round.competitions || []).find((c) => c.abbreviation.toUpperCase() === abbr.toUpperCase());
+            const full = (round.competitions || []).find((c) => (c.abbreviation || "").toUpperCase() === abbr.toUpperCase());
             return (
               <button
                 key={abbr}
@@ -4502,6 +4638,7 @@ function SingleDayBoard({ round, competitions, headerColor, accentColor }) {
           })}
         </div>
       )}
+      <TeamResult round={round} competitions={round.competitions || []} headerColor={headerColor} accentColor={accentColor} />
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -6336,7 +6473,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
 function SlotHandicapEditor({ currentAdjustment = 0, name, currentIndex, currentTee, currentCompetition, competitions, course, headerColor, accentColor, onSave, onRemove, onMove, onClose }) {
   const [value, setValue] = useState(currentIndex);
   const [tee, setTee] = useState(currentTee);
-  const [competition, setCompetition] = useState(currentCompetition || (competitions[0] && competitions[0].abbreviation) || "");
+  const [competition, setCompetition] = useState(currentCompetition || "");
 
   return (
     <div
@@ -6381,16 +6518,15 @@ function SlotHandicapEditor({ currentAdjustment = 0, name, currentIndex, current
         </select>
         {competitions.length > 0 && (
           <>
-            <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
-            <select
-              value={competition}
-              onChange={(e) => setCompetition(e.target.value)}
-              style={{ width: "100%", fontSize: 15, fontWeight: 600, padding: "9px 10px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
-            >
-              {competitions.map((c) => (
-                <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+            <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competitions (tick all that apply)</div>
+            <div style={{ border: "1px solid #D8D4C0", borderRadius: 8, marginBottom: 14, overflow: "hidden" }}>
+              {competitions.filter((c) => c.abbreviation).map((c) => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderTop: "1px solid #EFEDE0", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                  <input type="checkbox" checked={hasComp(competition, c.abbreviation)} onChange={(e) => setCompetition(e.target.checked ? addComp(competition, c.abbreviation) : removeComp(competition, c.abbreviation))} />
+                  {c.fullName || c.abbreviation}
+                </label>
               ))}
-            </select>
+            </div>
           </>
         )}
         <button
@@ -6505,7 +6641,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
     }
     return null;
   };
-  const compName = (abbr) => { if (!abbr) return ""; const c = competitions.find((x) => x.abbreviation.toUpperCase() === abbr.toUpperCase()); return c ? c.fullName || c.abbreviation : ""; };
+  const compName = (abbr) => compNames(abbr, competitions).join(" · ");
   const teeYards = (teeLabel) => {
     const t = getTee(course, teeLabel);
     if (!t) return null;
@@ -6858,11 +6994,7 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
   // Only the sub-competition this specific player is tagged into on the
   // roster (e.g. "Prince of Wales Cup" or "Sir John Hay Bowl") — blank for
   // anyone not tagged into one.
-  const competitionNameFor = (abbreviation) => {
-    if (!abbreviation) return "";
-    const match = competitions.find((c) => c.abbreviation.toUpperCase() === abbreviation.toUpperCase());
-    return match ? match.fullName || match.abbreviation : "";
-  };
+  const competitionNameFor = (abbreviation) => compNames(abbreviation, competitions).join(" · ");
 
   // Once a draw exists, labels are only printed for people actually IN it —
   // anyone still sitting unplaced in the pool (a reserve, a withdrawal
@@ -7184,7 +7316,7 @@ function buildResultsCsv(state) {
     const isF = round.format === "foursomes";
     const isM = round.scoring === "medal";
     const comps = round.competitions || [];
-    const compName = (a) => { const c = comps.find((x) => (x.abbreviation || "").toUpperCase() === (a || "").toUpperCase()); return c ? c.fullName || c.abbreviation : a || ""; };
+    const compName = (a) => compNames(a, comps).join("; ");
     const drawInfo = (name) => {
       const target = normalizeName(name);
       for (const e of round.draw || []) if ((e.players || []).some((n) => normalizeName(n) === target)) return { time: e.time || "", startTee: e.startTee || "" };
@@ -7386,14 +7518,14 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
   // ---- This day ----
   const dayPlayers = playersOnDay(activeRound).filter((p) => p.name);
   const dayCompAbbrs = new Set((activeRound.competitions || []).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
-  const compsInUse = [...new Set(dayPlayers.flatMap((p) => [p.competition, p.partnerName ? p.partnerCompetition : null]).filter(Boolean))].filter((a) => dayCompAbbrs.has(a.toUpperCase()));
+  const compsInUse = [...new Set(dayPlayers.flatMap((p) => [...compTags(p.competition), ...(p.partnerName ? compTags(p.partnerCompetition) : [])]))].filter((a) => dayCompAbbrs.has(a.toUpperCase()));
   const totalHoles = activeRound.course.holes.length;
   // filter: "" = everyone, an abbreviation = that competition only,
   // "__none__" = players not tagged into any competition.
   const inFilter = (p, filter) => {
-    if (!filter) return true;
-    if (filter === "__none__") return !p.competition && !(p.partnerName && p.partnerCompetition);
-    return p.competition === filter || (p.partnerName && p.partnerCompetition === filter);
+    if (!filter) return !inSeparateComp(p.competition, competitions) && !(p.partnerName && inSeparateComp(p.partnerCompetition, competitions));
+    if (filter === "__none__") return compTags(p.competition).length === 0 && !(p.partnerName && compTags(p.partnerCompetition).length > 0);
+    return hasComp(p.competition, filter) || (p.partnerName && hasComp(p.partnerCompetition, filter));
   };
   const dayRowsFor = (filter) => dayPlayers
     .filter((p) => inFilter(p, filter))
@@ -7452,7 +7584,9 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
   const canFilter = !(view === "overall" && isFoursomes);
   const activeFilter = canFilter ? compFilter : "";
   let sections;
-  if (activeFilter === "__split__") {
+  if (activeFilter === "__prizes__") {
+    sections = [];
+  } else if (activeFilter === "__split__") {
     sections = compsInUse.map((abbr) => ({ key: abbr, heading: compName(abbr), filter: abbr }));
     if (view === "day" && dayPlayers.some((p) => inFilter(p, "__none__"))) {
       sections.push({ key: "__none__", heading: "Not in a competition", filter: "__none__" });
@@ -7464,6 +7598,21 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
     .map((sec) => ({ ...sec, rows: view === "day" ? dayRankedFor(sec.filter) : overallRankedFor(sec.filter) }))
     .filter((sec) => sec.rows.length > 0);
 
+  // Prize-giving sheet: the overall winner and runner-up, then the top
+  // two (or three) in each competition — one page, in the order the
+  // competitions are listed in Admin.
+  const [prizeDepth, setPrizeDepth] = useState(2);
+  const prizeList = (() => {
+    const scoreOf = (r) => (view === "day" ? (isMedal ? (r.net !== null ? `Nett ${r.net}` : "NR") : (r.points !== null ? `${r.points} pts` : "–")) : (r.anyPlayed ? `${r.total} pts` : "–"));
+    const top = (rows) => rows.filter((r) => r.sortValue !== null).slice(0, prizeDepth).map((r) => ({ pos: r.pos, name: r.name, score: scoreOf(r), ph: r.ph }));
+    const blocks = [{ heading: view === "day" ? `${activeRound.label} — ${competitions.some((c) => c.separate) ? "Main competition" : "Overall"}` : "Overall", rows: top(view === "day" ? dayRankedFor("") : overallRankedFor("")) }];
+    compsInUse.forEach((abbr) => {
+      const rows = top(view === "day" ? dayRankedFor(abbr) : overallRankedFor(abbr));
+      if (rows.length > 0) blocks.push({ heading: compName(abbr), rows });
+    });
+    return blocks;
+  })();
+
   const th = { textAlign: "left", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000", whiteSpace: "nowrap" };
   const thR = { ...th, textAlign: "right" };
   const td = { padding: "6px 8px", fontSize: 13, borderBottom: "1px solid #999" };
@@ -7472,7 +7621,8 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
     flex: 1, padding: "8px 6px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, border: `1px solid ${headerColor}`,
     background: active ? headerColor : "#FFFFFF", color: active ? "#FFFFFF" : headerColor,
   });
-  const nothingToPrint = isMatchPlay || sections.length === 0;
+  const prizes = activeFilter === "__prizes__";
+  const nothingToPrint = isMatchPlay || (prizes ? prizeList.every((b) => b.rows.length === 0) : sections.length === 0);
   const printedAt = new Date().toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   return (
@@ -7502,6 +7652,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
         >
           <option value="">Everyone together</option>
           {compsInUse.length > 0 && <option value="__split__">Each competition separately (one page each)</option>}
+          {compsInUse.length > 0 && <option value="__prizes__">Prize-giving sheet — winners and runners-up only</option>}
           {compsInUse.map((abbr) => <option key={abbr} value={abbr}>{compName(abbr)} only</option>)}
         </select>
       )}
@@ -7527,6 +7678,46 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
         </div>
       ) : nothingToPrint ? (
         <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>No players to show yet.</div>
+      ) : prizes ? (
+        <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
+          <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {[2, 3].map((n) => (
+              <button key={n} onClick={() => setPrizeDepth(n)} style={{ ...pill(prizeDepth === n), fontSize: 11.5, padding: "6px 4px" }}>Top {n} in each</button>
+            ))}
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            {orgName && (
+              <div style={{ ...PRINT_ORG_NAME_STYLE, display: "flex", alignItems: "center", gap: 12 }}>
+                <SocietyLogo orgName={orgName} height={70} />
+                <span>{orgName}</span>
+              </div>
+            )}
+            <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.2 }}>Prize-giving — {view === "day" ? activeRound.label : "Overall"}</div>
+            <div style={{ fontSize: 13, marginTop: 2 }}>
+              {view === "day"
+                ? [activeRound.course.name, formatDisplayDateLong(activeRound.date), isMedal ? "Medal" : "Stableford"].filter(Boolean).join("  ·  ")
+                : sameFormatRounds.map((r) => r.label).join("  ·  ")}
+            </div>
+          </div>
+          {view === "day" && <TeamResult round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={headerColor} print />}
+          {prizeList.map((b) => (
+            <div key={b.heading} style={{ marginBottom: 16, breakInside: "avoid", pageBreakInside: "avoid" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, borderBottom: "2px solid #000", paddingBottom: 3, marginBottom: 4 }}>{b.heading}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <tbody>
+                  {b.rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="mono" style={{ width: 70, padding: "5px 8px", fontSize: 13, fontWeight: 700 }}>{i === 0 ? "Winner" : i === 1 ? "Runner-up" : "Third"}{String(r.pos).endsWith("=") ? " (tied)" : ""}</td>
+                      <td style={{ padding: "5px 8px", fontSize: 15, fontWeight: 700 }}>{r.name}{r.ph !== undefined ? <span style={{ fontWeight: 400, fontSize: 12 }}> ({r.ph})</span> : null}</td>
+                      <td className="mono" style={{ padding: "5px 8px", fontSize: 15, fontWeight: 800, textAlign: "right", whiteSpace: "nowrap" }}>{r.score}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+          <div style={{ fontSize: 10, marginTop: 8, color: "#444" }}>Level scores are separated by countback (last 9, 6, 3, 1); "tied" means still level after that. Printed {printedAt}</div>
+        </div>
       ) : (
         <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
           {sections.map((sec, secIdx) => (
@@ -8139,13 +8330,13 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
   );
 }
 
-function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor, roundLabel }) {
+function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers, onBulkTag, onBack, headerColor, accentColor, roundLabel, sideA = "", sideB = "", onUpdateSides }) {
   const [bulkTarget, setBulkTarget] = useState(""); // abbreviation being edited, or "" if none chosen
   const [selectedNames, setSelectedNames] = useState(new Set());
 
   const chooseBulkTarget = (abbreviation) => {
     setBulkTarget(abbreviation);
-    setSelectedNames(new Set(allPlayers.filter((p) => p.competition === abbreviation).map((p) => p.name)));
+    setSelectedNames(new Set(allPlayers.flatMap((p) => [hasComp(p.competition, abbreviation) ? p.name : null, p.partnerName && hasComp(p.partnerCompetition, abbreviation) ? p.partnerName : null]).filter(Boolean)));
   };
 
   const toggleName = (name) => {
@@ -8173,9 +8364,10 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
       <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0" }}>
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Competitions{roundLabel ? ` — ${roundLabel}` : ""}</div>
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 12 }}>
-          Sub-competitions running alongside the main one — e.g. a seniors' trophy or a ladies' event. Give each a
-          short abbreviation (matched automatically when you paste a draw with that abbreviation next to a name,
-          or add it here yourself) and a full name for display. This list belongs to this day only — every day
+          Sub-competitions running alongside the main one — a country trophy, an over-75s, a ladies' event. A player
+          can be in several at once (an Australian over 75 is in both AUS and O75, and can win either). Give each a
+          short code (matched automatically when a draw is pasted with that code next to a name — several codes
+          after a name all count) and a full name for display. This list belongs to this day only — every day
           keeps its own competitions, so setting these up here never changes what any other day has.
         </div>
         {competitions.map((c) => (
@@ -8193,11 +8385,21 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
               placeholder="John Hay Bowl"
               style={{ flex: 1, fontSize: 13, border: "1px solid #D8D4C0", borderRadius: 6, padding: "6px 8px", fontFamily: "inherit" }}
             />
+            <label title="Its players are in this competition INSTEAD of the main one — left out of the main ranking" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#6B6B5F", whiteSpace: "nowrap", cursor: "pointer" }}>
+              <input type="checkbox" checked={!!c.separate} onChange={(e) => onUpdate(c.id, { separate: e.target.checked })} />
+              separate
+            </label>
             <button onClick={() => onRemove(c.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}>
               <X size={15} />
             </button>
           </div>
         ))}
+        {competitions.some((c) => c.separate) && (
+          <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 8 }}>
+            "separate" = players in it are playing that competition instead of the main one (an over-75s Bader alongside the main tournament, say).
+            They're left out of the main ranking and the main prize, and ranked only among themselves. Their other tags (country, side) still apply.
+          </div>
+        )}
         {competitions.length === 0 && (
           <div style={{ fontSize: 12, color: "#9B9885", marginBottom: 10 }}>
             None yet — just the one main competition. Add one below whenever you need a sub-trophy running alongside it.
@@ -8214,6 +8416,33 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
           <Plus size={13} /> Add competition
         </button>
       </div>
+
+      {competitions.filter((c) => c.abbreviation).length >= 2 && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Team result (two sides)</div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 10 }}>
+            Pick two competitions as sides (UK v Overseas, say) and the leaderboard shows a team result between them. Sides
+            of different sizes are compared pro rata: each side's best half of cards averaged. Leave blank for none.
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {[["sideA", sideA], ["sideB", sideB]].map(([k, v], i) => (
+              <React.Fragment key={k}>
+                {i === 1 && <span style={{ fontSize: 12, fontWeight: 700, color: "#8A8774" }}>v</span>}
+                <select
+                  value={v || ""}
+                  onChange={(e) => onUpdateSides && onUpdateSides({ [k]: e.target.value })}
+                  style={{ flex: 1, fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", minWidth: 0 }}
+                >
+                  <option value="">— none —</option>
+                  {competitions.filter((c) => c.abbreviation).map((c) => (
+                    <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+                  ))}
+                </select>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
 
       {competitions.length > 0 && (
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 14, border: "1px solid #E4E0D0", marginTop: 12 }}>
@@ -8238,7 +8467,7 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
                 {allPlayers.length === 0 ? (
                   <div style={{ fontSize: 12, color: "#9B9885", padding: 12 }}>No players yet.</div>
                 ) : (
-                  allPlayers.map((p) => (
+                  allPlayers.flatMap((p) => [{ name: p.name, index: p.index, competition: p.competition }, ...(p.partnerName ? [{ name: p.partnerName, index: p.partnerIndex, competition: p.partnerCompetition }] : [])]).filter((p) => p.name).sort((a, b) => cmpName(a.name, b.name)).map((p) => (
                     <label
                       key={p.name}
                       style={{
@@ -8255,7 +8484,7 @@ function CompetitionsSetup({ competitions, onAdd, onUpdate, onRemove, allPlayers
                       <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{p.name}</span>
                       <span className="mono" style={{ fontSize: 11, color: "#8A8774" }}>
                         {p.index !== "" && p.index != null ? `HCP ${p.index}` : "no HCP"}
-                        {p.competition && p.competition !== bulkTarget ? ` · ${p.competition}` : ""}
+                        {compTags(p.competition).filter((t) => t !== bulkTarget.toUpperCase()).length ? ` · ${compTags(p.competition).filter((t) => t !== bulkTarget.toUpperCase()).join(", ")}` : ""}
                       </span>
                     </label>
                   ))
@@ -8314,11 +8543,18 @@ function LocalRulesSetup({ text, onUpdate, onBack, headerColor }) {
   );
 }
 
-function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onUpdateTeeForRound, headerColor, accentColor }) {
+function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onUpdateTeeForRound, headerColor, accentColor, lockedTo = "", suggestedName = "" }) {
   const [query, setQuery] = useState("");
-  const [selectedName, setSelectedName] = useState(null);
-  const [value, setValue] = useState("");
-  const [competition, setCompetition] = useState("");
+  // A phone tied to a player goes straight to that player; otherwise, if
+  // the phone already knows who's using it (from Enter scores), start there.
+  const [selectedName, setSelectedName] = useState(() => {
+    const start = lockedTo || suggestedName;
+    const p = start ? players.find((x) => normalizeName(x.name) === normalizeName(start)) : null;
+    return p ? p.name : null;
+  });
+  const initial = selectedName ? players.find((x) => x.name === selectedName) : null;
+  const [value, setValue] = useState(initial ? initial.index || "" : "");
+  const [competition, setCompetition] = useState(initial ? initial.competition || "" : "");
   const [savedMsg, setSavedMsg] = useState(false);
   const [teeSavedRoundId, setTeeSavedRoundId] = useState(null);
 
@@ -8365,12 +8601,18 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
   if (selectedName && selectedPlayer) {
     return (
       <div style={{ padding: "14px 14px 40px" }}>
-        <button
-          onClick={() => setSelectedName(null)}
-          style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 12, padding: 0, fontWeight: 600 }}
-        >
-          ← Back to search
-        </button>
+        {lockedTo ? (
+          <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 12 }}>
+            This phone is set to <strong>{dn(lockedTo)}</strong> and can only change this handicap. If that's wrong, ask the organiser to release it.
+          </div>
+        ) : (
+          <button
+            onClick={() => setSelectedName(null)}
+            style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 12, padding: 0, fontWeight: 600 }}
+          >
+            ← Back to search
+          </button>
+        )}
         <div style={{ background: "#FFFFFF", borderRadius: 10, padding: 16, border: "1px solid #E4E0D0", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: headerColor, marginBottom: 12 }}>{selectedName}</div>
           <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Handicap index</div>
@@ -8384,17 +8626,15 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
           />
           {competitions.length > 0 && (
             <>
-              <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competition</div>
-              <select
-                value={competition}
-                onChange={(e) => { setCompetition(e.target.value); setDirty(true); }}
-                style={{ width: "100%", fontSize: 16, fontWeight: 600, padding: "10px 12px", borderRadius: 8, border: "1px solid #D8D4C0", marginBottom: 14, background: "#FFF" }}
-              >
-                <option value="">Main competition (no sub-trophy)</option>
-                {competitions.map((c) => (
-                  <option key={c.id} value={c.abbreviation}>{c.fullName || c.abbreviation}</option>
+              <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 4 }}>Competitions (tick all that apply — none ticked = main competition only)</div>
+              <div style={{ border: "1px solid #D8D4C0", borderRadius: 8, marginBottom: 14, overflow: "hidden" }}>
+                {competitions.filter((c) => c.abbreviation).map((c) => (
+                  <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderTop: "1px solid #EFEDE0", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                    <input type="checkbox" checked={hasComp(competition, c.abbreviation)} onChange={(e) => { setCompetition(e.target.checked ? addComp(competition, c.abbreviation) : removeComp(competition, c.abbreviation)); setDirty(true); }} />
+                    {c.fullName || c.abbreviation}
+                  </label>
                 ))}
-              </select>
+              </div>
             </>
           )}
           <button
@@ -8404,6 +8644,7 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
             {savedMsg ? "Saved" : "Save"}
           </button>
           <div style={{ fontSize: 10.5, color: "#9B9885", marginTop: 10 }}>
+            {!lockedTo && <>Once saved, this phone is set to {dn(selectedName)} and can only change this handicap from then on. </>}
             Updates the Society roster and every day {selectedName} hasn't yet played. A day already played keeps the handicap it was played off.
             Saved straight away; other phones pick it up within a minute, or at once if they tap "Live" in the header.
           </div>
@@ -8440,6 +8681,13 @@ function HandicapCheck({ players, competitions, onUpdateIndexAndCompetition, onU
     );
   }
 
+  if (lockedTo) {
+    return (
+      <div style={{ padding: "24px 14px 40px", textAlign: "center", color: "#6B6B5F", fontSize: 13.5 }}>
+        This phone is set to <strong>{dn(lockedTo)}</strong>, who isn't on this event's list at the moment. Ask the organiser to release the phone or check the name.
+      </div>
+    );
+  }
   return (
     <div style={{ padding: "14px 14px 40px" }}>
       <div style={{ fontSize: 12.5, color: "#6B6B5F", marginBottom: 10 }}>
@@ -8553,15 +8801,25 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   const [editingId, setEditingId] = useState(null);
   const targetFolder = folderChoice === "__new__" ? newFolder : folderChoice;
 
+  // Several PDFs can be picked at once; they go up one after another
+  // into the chosen folder.
   const handleFile = async (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setUploading(true);
     setMsg("");
-    const result = await onUpload(file, targetFolder);
+    const done = [], failed = [];
+    for (const file of files) {
+      setMsg(`Uploading ${done.length + failed.length + 1} of ${files.length}: ${file.name}…`);
+      const result = await onUpload(file, targetFolder);
+      if (result.ok) done.push(file.name); else failed.push(`${file.name} (${result.error || "failed"})`);
+    }
     setUploading(false);
-    setMsg(result.ok ? `Uploaded "${file.name}".` : result.error || "Upload failed.");
+    setMsg(
+      (done.length ? `Uploaded ${done.length === 1 ? `"${done[0]}"` : `${done.length} files`}${targetFolder ? ` into "${targetFolder}"` : ""}.` : "") +
+      (failed.length ? ` Not uploaded: ${failed.join("; ")}.` : "")
+    );
   };
 
   return (
@@ -8600,6 +8858,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
           ref={fileInputRef}
           type="file"
           accept="application/pdf"
+          multiple
           onChange={handleFile}
           style={{ display: "none" }}
         />
@@ -8613,7 +8872,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
             opacity: uploading ? 0.6 : 1,
           }}
         >
-          <Upload size={15} /> {uploading ? "Uploading…" : "Choose PDF"}
+          <Upload size={15} /> {uploading ? "Uploading…" : "Choose PDF(s)"}
         </button>
         {msg && <div style={{ fontSize: 11.5, color: headerColor, textAlign: "center", marginTop: 8 }}>{msg}</div>}
       </div>
@@ -8675,7 +8934,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone }) {
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -8922,6 +9181,12 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
         </div>
       )}
 
+      {onReleaseHandicapPhone && (
+        <div style={{ textAlign: "center", marginTop: 16, fontSize: 11.5, color: "#8A8774" }}>
+          Your Handicap: a player's phone is tied to the first handicap it saves. To free a phone, open Admin on it and tap{" "}
+          <button onClick={onReleaseHandicapPhone} style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}>release this phone</button>.
+        </div>
+      )}
       <div style={{ textAlign: "center", marginTop: 16 }}>
         <button
           onClick={onHideAdmin}
