@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 143";
+const APP_VERSION = "21 Sep 2026 · build 144";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1870,7 +1870,10 @@ function CodeGate({ onSubmit }) {
   const [value, setValue] = useState(prefilledEventCode);
 
   const submit = () => {
-    if (value.trim()) onSubmit(value);
+    // Typed letters are shown as capitals by the box itself and only turned
+    // into capitals here — changing them while typing threw the cursor to
+    // the end, so typing over "LGS" landed after the 2026.
+    if (value.trim()) onSubmit(value.toUpperCase());
   };
 
   return (
@@ -1896,7 +1899,7 @@ function CodeGate({ onSubmit }) {
         </div>
         <input
           value={value}
-          onChange={(e) => setValue(e.target.value.toUpperCase())}
+          onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder={`e.g. ${BRAND.defaultEventCode}`}
           className="mono"
@@ -8801,7 +8804,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             <input
               value={copyCode}
-              onChange={(e) => setCopyCode(e.target.value.toUpperCase())}
+              onChange={(e) => setCopyCode(e.target.value)}
               placeholder="e.g. LGS2026"
               className="mono"
               style={{ flex: 1, fontSize: 14, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", textTransform: "uppercase", minWidth: 0 }}
@@ -8810,7 +8813,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
               disabled={copying || !copyCode.trim()}
               onClick={async () => {
                 setCopying(true); setCopyMsg("");
-                const r = await onCopyFromEvent(copyCode);
+                const r = await onCopyFromEvent(copyCode.toUpperCase());
                 setCopying(false);
                 setCopyMsg(r.ok ? `Copied from ${r.code}: ${r.added} added${r.updated ? `, ${r.updated} filled in` : ""} (of ${r.total}).` : r.error);
                 if (r.ok) setCopyCode("");
