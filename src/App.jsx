@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 121";
+const APP_VERSION = "21 Sep 2026 · build 122";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1163,6 +1163,7 @@ const DEFAULT_STATE = {
   activeRoundId: null, // resolved to rounds[0].id at use-time if null/stale
   documents: [], // event-wide, not tied to any particular day
   surnameFirst: false, // show names "Bailey, Will" everywhere (display only)
+  handicapDevices: {}, // { deviceId: playerName } — phones tied to one player on Your Handicap; Admin can release
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
 
@@ -1226,6 +1227,7 @@ function sanitizeState(parsed) {
     activeRoundId,
     documents: Array.isArray(parsed.documents) ? parsed.documents : [],
     surnameFirst: parsed.surnameFirst === true,
+    handicapDevices: parsed.handicapDevices && typeof parsed.handicapDevices === "object" && !Array.isArray(parsed.handicapDevices) ? parsed.handicapDevices : {},
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -3681,10 +3683,14 @@ function AppInner() {
           competitions={allCompetitionsAcrossRounds()}
           onUpdateIndexAndCompetition={(name, idx, comp) => {
             updateIndexAndCompetitionEverywhere(name, idx, comp);
-            if (!adminVisible && !readHandicapIdentity(eventCode)) { writeHandicapIdentity(eventCode, name); setIdentityTick((n) => n + 1); }
+            if (!adminVisible && !(state.handicapDevices || {})[deviceId]) {
+              writeHandicapIdentity(eventCode, name);
+              save((prev) => ({ handicapDevices: { ...(prev.handicapDevices || {}), [deviceId]: name } }));
+              setIdentityTick((n) => n + 1);
+            }
           }}
           onUpdateTeeForRound={updateTeeForRound}
-          lockedTo={adminVisible ? "" : readHandicapIdentity(eventCode)}
+          lockedTo={adminVisible ? "" : ((state.handicapDevices || {})[deviceId] || "")}
           suggestedName={readOwnCard(eventCode, activeRoundId).name}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4033,7 +4039,9 @@ function AppInner() {
           onOpenPrintDraw={() => setShowPrintDraw(true)}
           onOpenPrintBoard={() => setShowPrintBoard(true)}
           onOpenBackup={() => setShowBackup(true)}
-          onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
+          onReleaseHandicapPhone={() => { writeHandicapIdentity(eventCode, ""); save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[deviceId]; return { handicapDevices: d }; }); setIdentityTick((n) => n + 1); window.alert("This phone can now be used for any player on Your Handicap."); }}
+          tiedPhones={Object.entries(state.handicapDevices || {}).map(([id, name]) => ({ id, name }))}
+          onReleasePlayer={(id) => save((prev) => { const d = { ...(prev.handicapDevices || {}) }; delete d[id]; return { handicapDevices: d }; })}
           isOwner={isOwner}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -8953,7 +8961,8 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer }) {
+  const [showTied, setShowTied] = useState(false);
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button
@@ -9200,12 +9209,31 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
         </div>
       )}
 
-      {onReleaseHandicapPhone && (
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 11.5, color: "#8A8774" }}>
-          Your Handicap: a player's phone is tied to the first handicap it saves. To free a phone, open Admin on it and tap{" "}
-          <button onClick={onReleaseHandicapPhone} style={{ background: "none", border: "none", color: headerColor, fontSize: 11.5, fontWeight: 700, padding: 0, textDecoration: "underline" }}>release this phone</button>.
-        </div>
-      )}
+      <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: 12, marginTop: 12 }}>
+        <button onClick={() => setShowTied((v) => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: headerColor }}>Phones tied on Your Handicap ({tiedPhones.length})</span>
+          <ChevronRight size={15} color="#9B9885" style={{ transform: showTied ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+        </button>
+        {showTied && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+              A player's phone is tied to the first handicap it saves and can only change that one. Release a player here and their phone is free to choose again.
+            </div>
+            {tiedPhones.length === 0 && <div style={{ fontSize: 12, color: "#9B9885" }}>No phones tied yet.</div>}
+            {[...tiedPhones].sort((a, b) => cmpName(a.name, b.name)).map((t) => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EFEDE0" }}>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{dn(t.name)}</span>
+                <button onClick={() => onReleasePlayer && onReleasePlayer(t.id)} style={{ fontSize: 11.5, fontWeight: 700, color: "#B5442E", background: "none", border: "1px solid #B5442E", borderRadius: 6, padding: "4px 9px" }}>Release</button>
+              </div>
+            ))}
+            {onReleaseHandicapPhone && (
+              <div style={{ fontSize: 11, color: "#8A8774", marginTop: 8 }}>
+                This phone itself: <button onClick={onReleaseHandicapPhone} style={{ background: "none", border: "none", color: headerColor, fontSize: 11, fontWeight: 700, padding: 0, textDecoration: "underline" }}>release this phone</button>.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       <div style={{ textAlign: "center", marginTop: 16 }}>
         <button
           onClick={onHideAdmin}
