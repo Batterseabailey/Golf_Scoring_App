@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 120";
+const APP_VERSION = "21 Sep 2026 · build 121";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -5625,6 +5625,12 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      // The stepper shows the CURRENT adjustment of whoever is ticked, so
+      // going back to a player starts from what they already have (+2,
+      // say) rather than from 0. With several ticked on different
+      // figures it starts from the first one's.
+      const first = adjustablePeople.find((p) => next.has(p.key));
+      setAdjustBulkValue(first ? first.adj : 0);
       return next;
     });
   };
@@ -6305,6 +6311,19 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
           </div>
           {selectedAdjustKeys.size > 0 && (
             <>
+              {(() => {
+                const ticked = adjustablePeople.filter((p) => selectedAdjustKeys.has(p.key));
+                const current = [...new Set(ticked.map((p) => p.adj))];
+                return (
+                  <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
+                    {ticked.length === 1
+                      ? `${dn(ticked[0].name)} currently ${ticked[0].adj === 0 ? "has no adjustment" : `${ticked[0].adj > 0 ? "+" : ""}${ticked[0].adj} shot${Math.abs(ticked[0].adj) === 1 ? "" : "s"}`}. Set the figure below to what it should be in total — it replaces the current one.`
+                      : current.length === 1
+                      ? `All ${ticked.length} currently ${current[0] === 0 ? "have no adjustment" : `${current[0] > 0 ? "+" : ""}${current[0]}`}. The figure below replaces it.`
+                      : `The ${ticked.length} ticked have different adjustments (${current.map((v) => (v > 0 ? `+${v}` : v)).join(", ")}). The figure below replaces all of them.`}
+                  </div>
+                );
+              })()}
               <HandicapAdjuster value={adjustBulkValue} onChange={setAdjustBulkValue} headerColor={headerColor} />
               <button
                 onClick={applyBulkAdjustment}
