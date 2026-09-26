@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 130";
+const APP_VERSION = "21 Sep 2026 · build 139";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -515,6 +515,103 @@ function TeamResult({ round, competitions, headerColor, accentColor, print = fal
   );
 }
 
+// ---- Team format: best N Stableford scores per hole from each group ----
+// Each tee time on the draw is a team (a 4-ball, usually). Every player's
+// own card is entered as normal; the team's score on a hole is the sum of
+// the best N points scored on it by the team. Countback on the team's own
+// per-hole totals. Only cards that have been submitted count.
+function teamRows(round, best) {
+  const isF = round.format === "foursomes";
+  const players = playersOnDay(round);
+  const cardFor = (name) => players.find((p) => normalizeName(p.name) === normalizeName(name) || normalizeName(p.partnerName) === normalizeName(name));
+  return (round.draw || []).map((entry) => {
+    const names = (entry.players || []).filter(Boolean);
+    const cards = [...new Map(names.map((n) => cardFor(n)).filter(Boolean).map((c) => [c.id, c])).values()];
+    const perCard = cards.map((c) => {
+      const p = forLeaderboard(c);
+      const t = totals(round.course, p, round.handicapAllowance, isF);
+      return { card: c, ph: t.ph, scores: Array.isArray(p.scores) ? p.scores : Array(18).fill("") };
+    });
+    const holePts = Array.from({ length: 18 }, (_, i) => {
+      const pts = perCard.map(({ scores, ph }) => (scores[i] === "" || scores[i] == null ? null : holePoints(round.course, scores[i], i, ph))).filter((v) => v !== null);
+      if (pts.length === 0) return null;
+      return pts.sort((a, b) => b - a).slice(0, best).reduce((n, v) => n + v, 0);
+    });
+    const played = holePts.filter((v) => v !== null).length;
+    const total = holePts.reduce((n, v) => n + (v || 0), 0);
+    const seg = (from) => { let v = 0; for (let i = from; i < 18; i++) { if (holePts[i] === null) return null; v += holePts[i]; } return v; };
+    return {
+      id: entry.id, time: entry.time, name: names.map(dn).join(", "), members: names.length, cardsIn: perCard.filter((x) => x.scores.some((v) => v !== "" && v != null)).length,
+      played, total, sortValue: played > 0 ? total : null, countback: [seg(9), seg(12), seg(15), seg(17)], holePts,
+    };
+  }).filter((r) => r.members > 0);
+}
+function rankedTeams(round, best) {
+  const rows = teamRows(round, best).sort((a, b) => compareWithCountback(a, b, false));
+  return rows.map((r, i, all) => {
+    let pos = i + 1;
+    if (i > 0 && stillLevel(all[i - 1], r, false)) pos = all[i - 1].pos;
+    return { ...r, pos };
+  }).map((r, i, all) => ({ ...r, tied: r.sortValue !== null && all.some((o, j) => j !== i && o.pos === r.pos && o.sortValue !== null) }));
+}
+
+function TeamBoard({ round, headerColor, accentColor, print = false }) {
+  const best = round.teamBest;
+  const rows = rankedTeams(round, best);
+  const rs = resultsStyles(headerColor);
+  const [openId, setOpenId] = useState(null);
+  if (rows.length === 0) return <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>No teams yet — the draw makes the teams.</div>;
+  return (
+    <div style={print ? {} : rs.frame}>
+      {!print && (
+        <ResultsHeading
+          title={`${round.label} — Teams`}
+          subtitle={[formatResultsDate(round.date), round.course.name].filter(Boolean).join(", ")}
+          note={`Best ${best} Stableford score${best === 1 ? "" : "s"} per hole from each ${round.format === "foursomes" ? "group" : "4-ball"} count`}
+        />
+      )}
+      <table style={print ? { width: "100%", borderCollapse: "collapse" } : rs.table}>
+        <thead>
+          <tr style={print ? {} : rs.headRow}>
+            <th colSpan={2} style={print ? { textAlign: "left", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000" } : rs.th}>Team</th>
+            <th style={print ? { textAlign: "right", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000" } : rs.thRight}>Thru</th>
+            <th style={print ? { textAlign: "right", padding: "5px 8px", fontSize: 11, fontWeight: 700, borderBottom: "2px solid #000" } : rs.thRight}>Points</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <React.Fragment key={r.id}>
+              <tr style={print ? { borderBottom: "1px solid #999" } : rs.row(i)} onClick={() => !print && setOpenId(openId === r.id ? null : r.id)}>
+                <td style={print ? { padding: "6px 8px", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" } : rs.pos}>{r.sortValue !== null ? `${ordinal(r.pos)}${r.tied ? "=" : ""}` : "–"}</td>
+                <td style={print ? { padding: "6px 8px", fontSize: 13 } : { ...rs.name, whiteSpace: "normal" }}>
+                  {r.name}
+                  {!print && <div style={{ fontSize: 11, color: "#8A8774", fontWeight: 400 }}>{r.time} · {r.cardsIn} of {r.members} card{r.members === 1 ? "" : "s"} in{openId === r.id ? "" : " · tap for holes"}</div>}
+                </td>
+                <td className="mono" style={print ? { padding: "6px 8px", fontSize: 13, textAlign: "right" } : { ...rs.num, color: "#2B2B2B" }}>{r.played || "–"}</td>
+                <td className="mono" style={print ? { padding: "6px 8px", fontSize: 13, textAlign: "right", fontWeight: 800 } : rs.num}>{r.sortValue !== null ? r.total : "–"}</td>
+              </tr>
+              {!print && openId === r.id && (
+                <tr>
+                  <td colSpan={4} style={{ padding: "4px 10px 10px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 3 }}>
+                      {r.holePts.map((v, h) => (
+                        <div key={h} style={{ textAlign: "center" }}>
+                          <div className="mono" style={{ fontSize: 9, color: "#8A8774" }}>{h + 1}</div>
+                          <div className="mono" style={{ fontSize: 12, fontWeight: 700, background: v === null ? "#F5F3E9" : `${headerColor}14`, borderRadius: 4, padding: "3px 0", color: v === null ? "#C2BEA9" : headerColor }}>{v === null ? "–" : v}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // A card only counts towards any leaderboard once Admin has pressed
 // COMPLETE on it — until then the scores are saved (nothing is lost if
 // you're interrupted halfway through a card) but stay private to Admin.
@@ -550,8 +647,8 @@ function ownCardKey(code, roundId) {
 function readOwnCard(code, roundId) {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(ownCardKey(code, roundId)) || "null");
-    if (!parsed || !Array.isArray(parsed.scores) || parsed.scores.length !== 18) return { name: "", scores: Array(18).fill("") };
-    return { name: typeof parsed.name === "string" ? parsed.name : "", scores: parsed.scores };
+    if (!parsed || !Array.isArray(parsed.scores) || parsed.scores.length !== 18) return { name: "", scores: Array(18).fill(""), courseName: "", customCourse: null };
+    return { name: typeof parsed.name === "string" ? parsed.name : "", scores: parsed.scores, courseName: typeof parsed.courseName === "string" ? parsed.courseName : "", customCourse: isValidCourse(parsed.customCourse) ? parsed.customCourse : null };
   } catch {
     return { name: "", scores: Array(18).fill("") };
   }
@@ -579,6 +676,22 @@ function writeHandicapIdentity(code, name) {
 }
 function readHandicapIdentityAt(code) {
   try { return Number(window.localStorage.getItem(`${handicapIdentityKey(code)}-at`) || 0); } catch { return 0; }
+}
+
+// ---- My rounds: a player's own rounds kept on their phone ----
+// Any private card can be saved as a round: date, course and tee, the 18
+// scores, playing handicap, gross, nett and points. It lives on the phone
+// only (not per event), so it builds into a personal record over the
+// years; it can be shared as a CSV.
+const MY_ROUNDS_KEY = "golf-my-rounds-v1";
+function readMyRounds() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(MY_ROUNDS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function writeMyRounds(rounds) {
+  try { window.localStorage.setItem(MY_ROUNDS_KEY, JSON.stringify(rounds.slice(-500))); } catch { /* ignore */ }
 }
 
 // ---- Remembering the card being marked on this phone ----
@@ -940,9 +1053,11 @@ function emptyRound(label, course) {
     publicShowPoints: true,
     publicScoreEntry: false, // Admin switch — lets players open "Enter scores" for this day and help put cards in
     requireSignature: true, // ...and whether a card a player enters must then be signed by the player from their own phone
+    allowSelfMark: false, // one phone may enter every card in its group, its own included (team days, one scorer per 4-ball)
     publicShowDayBoard: true, // whether this day's own leaderboard is offered to players (Overall is always there)
     inOverall: true, // whether this day counts on the Overall (all days added together) leaderboard
     cardBack: "", // text printed on the reverse of this day's scorecards, under the club's logo
+    teamBest: 0, // team format: each tee-time group is a team; per hole the best N Stableford scores count (0 = off, 1–3)
     sideA: "", // team result: competition code of side A (e.g. "UK") — blank for no team result
     sideB: "", // ...and side B (e.g. "OS")
   };
@@ -992,10 +1107,12 @@ function sanitizeRound(r, fallbackLabel, legacyCompetitions) {
     publicShowPoints: r.publicShowPoints === false ? false : true,
     publicScoreEntry: r.publicScoreEntry === true,
     requireSignature: r.requireSignature === false ? false : true,
+    allowSelfMark: r.allowSelfMark === true,
     publicShowDayBoard: r.publicShowDayBoard === false ? false : true,
     inOverall: r.inOverall === false ? false : true,
     cardBack: typeof r.cardBack === "string" ? r.cardBack : "",
     sideA: typeof r.sideA === "string" ? r.sideA : "",
+    teamBest: [1, 2, 3].includes(Number(r.teamBest)) ? Number(r.teamBest) : 0,
     sideB: typeof r.sideB === "string" ? r.sideB : "",
   };
 }
@@ -1168,6 +1285,7 @@ const DEFAULT_STATE = {
   surnameFirst: false, // show names "Bailey, Will" everywhere (display only)
   handicapDevices: {}, // { deviceId: playerName } — phones tied to one player on Your Handicap; Admin can release
   handicapReleases: {}, // { normalised name: time } — Admin released this player: any phone tied to them before that time lets go
+  courseSuggestions: [], // courses set up by players on their own card and sent to the organiser: { id, name, course, by, at }
   handicapLog: [], // recent handicap changes from Your Handicap: { at, name, from, to, by } — by = the player the changing phone is tied to (or "organiser")
   societyRoster: [], // event-wide list of known members — [{ id, name, index, tee }] — a source to pick from when building a day's draw, rather than re-entering names each time
 };
@@ -1235,6 +1353,7 @@ function sanitizeState(parsed) {
     handicapDevices: parsed.handicapDevices && typeof parsed.handicapDevices === "object" && !Array.isArray(parsed.handicapDevices) ? parsed.handicapDevices : {},
     handicapReleases: parsed.handicapReleases && typeof parsed.handicapReleases === "object" && !Array.isArray(parsed.handicapReleases) ? parsed.handicapReleases : {},
     handicapLog: Array.isArray(parsed.handicapLog) ? parsed.handicapLog.slice(-300) : [],
+    courseSuggestions: Array.isArray(parsed.courseSuggestions) ? parsed.courseSuggestions.filter((c) => c && isValidCourse(c.course)).slice(-30) : [],
     societyRoster: Array.isArray(parsed.societyRoster)
       ? parsed.societyRoster
           .filter((m) => m && typeof m.name === "string" && m.name.trim())
@@ -1583,7 +1702,62 @@ function extractTeesFromDrawPaste(text, knownAbbreviations, courseTeeLabels) {
 
 }
 
-function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap }) {
+function MyRounds({ headerColor, accentColor, onBack }) {
+  const [list, setList] = useState(readMyRounds);
+  const [confirmId, setConfirmId] = useState(null);
+  const sorted = [...list].sort((a, b) => b.at - a.at);
+  const remove = (id) => { const next = list.filter((r) => r.id !== id); writeMyRounds(next); setList(next); setConfirmId(null); };
+  const exportCsv = () => {
+    const rows = [["Date", "Player", "Event", "Course", "Tee", "Playing HCP", "Par", "Holes", "Gross", "Nett", "Points", ...Array.from({ length: 18 }, (_, i) => `H${i + 1}`)]];
+    [...list].sort((a, b) => a.at - b.at).forEach((r) => rows.push([r.date, r.player, r.event, r.course, r.tee, r.ph, r.par, r.played, r.gross ?? "NR", r.net ?? "NR", r.points, ...r.scores]));
+    const text = "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+    const name = `my-rounds-${new Date().toISOString().slice(0, 10)}.csv`;
+    try {
+      if (navigator.canShare && typeof File !== "undefined") {
+        const file = new File([text], name, { type: "text/csv" });
+        if (navigator.canShare({ files: [file] })) { navigator.share({ files: [file], title: "My rounds" }); return; }
+      }
+    } catch { /* fall through */ }
+    downloadTextFile(name, text);
+  };
+  return (
+    <div style={{ padding: "14px 14px 40px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: headerColor, fontSize: 13, marginBottom: 10, padding: 0, fontWeight: 600 }}>← Back</button>
+      <div style={{ fontSize: 15, fontWeight: 800, color: headerColor }}>My rounds</div>
+      <div style={{ fontSize: 12, color: "#6B6B5F", margin: "4px 0 10px" }}>
+        Rounds saved from your own card. They live on this phone only — nobody else sees them, and they carry on from event to event.
+      </div>
+      {list.length > 0 && (
+        <button onClick={exportCsv} style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid ${headerColor}`, background: "#FFFFFF", color: headerColor, fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
+          Share / download as a spreadsheet (CSV)
+        </button>
+      )}
+      {sorted.length === 0 && <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>No rounds saved yet. Mark your own card, then tap "Save this round to My rounds".</div>}
+      {sorted.map((r) => (
+        <div key={r.id} style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: "10px 12px", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>{r.course}{r.tee ? ` · ${r.tee}` : ""}</div>
+            <div className="mono" style={{ fontSize: 11.5, color: "#8A8774", whiteSpace: "nowrap" }}>{formatDisplayDate(r.date)}</div>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6B6B5F" }}>{r.event}{r.player ? ` · ${dn(r.player)}` : ""} · playing {r.ph}</div>
+          <div className="mono" style={{ fontSize: 13, marginTop: 4 }}>
+            <strong>{r.points} pts</strong> · gross {r.gross ?? "NR"} · nett {r.net ?? "NR"} · {r.played}/18 holes
+          </div>
+          <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 3, wordBreak: "break-all" }}>{r.scores.map((v) => (v === "" ? "–" : v)).join(" ")}</div>
+          <div style={{ textAlign: "right", marginTop: 4 }}>
+            {confirmId === r.id ? (
+              <span style={{ fontSize: 11.5 }}>Delete this round? <button onClick={() => remove(r.id)} style={{ background: "none", border: "none", color: "#B5442E", fontWeight: 700, fontSize: 11.5 }}>Yes</button> <button onClick={() => setConfirmId(null)} style={{ background: "none", border: "none", color: "#9B9885", fontSize: 11.5 }}>No</button></span>
+            ) : (
+              <button onClick={() => setConfirmId(r.id)} style={{ background: "none", border: "none", color: "#B5442E", fontSize: 11.5, padding: 0 }}>Delete</button>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap, onSelectMyRounds }) {
   const sectionCard = (title, items) => (
     <div style={{ background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", marginBottom: 12, overflow: "hidden" }}>
       <div
@@ -1642,6 +1816,7 @@ function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectD
       {standaloneRow("Information", onSelectInfo)}
       {standaloneRow("Local Rules", onSelectRules)}
       {standaloneRow("Your Handicap", onSelectHandicap)}
+      {onSelectMyRounds && standaloneRow("My rounds (on this phone)", onSelectMyRounds)}
     </div>
   );
 }
@@ -3505,6 +3680,20 @@ function AppInner() {
     if (!card || isScoreComplete(card) || awaitingSignature(card)) { writeMarking(eventCode, activeRoundId, ""); return null; }
     return card;
   })();
+  // ...and the private own card, if one is part-way through on this phone.
+  const resumeOwn = (() => {
+    if (!eventCode || !activeRound.publicScoreEntry || isMatchPlay) return null;
+    const own = readOwnCard(eventCode, activeRoundId);
+    const entered = own.scores.filter((v) => v !== "" && v != null).length;
+    if (!own.name || entered === 0 || entered >= 18) return null;
+    return { name: own.name, entered };
+  })();
+  const resumeOwnCard = () => {
+    setEntryNotice("");
+    setShowCourseSetup(false);
+    setMode("entry");
+    setOwnOnly(true);
+  };
   const resumeScoring = () => {
     if (!resumeCard) return;
     setEntryNotice("");
@@ -3606,6 +3795,19 @@ function AppInner() {
           </div>
         )}
 
+        {resumeOwn && !resumeCard && !(mode === "entry" && ownOnly) && (
+          <button
+            onClick={resumeOwnCard}
+            style={{
+              marginTop: 12, width: "100%", padding: "12px 12px", borderRadius: 9, border: "2px dashed #F1EFE3",
+              background: "rgba(241,239,227,0.14)", color: "#F1EFE3", fontWeight: 800, fontSize: 14, textAlign: "left",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+            }}
+          >
+            <span>▶ Continue my own card — {resumeOwn.entered} of 18 holes in</span>
+            <ChevronRight size={16} />
+          </button>
+        )}
         {resumeCard && !(mode === "entry" && activeId === resumeCard.id) && (
           <button
             onClick={resumeScoring}
@@ -3745,6 +3947,7 @@ function AppInner() {
           onSelectRules={() => setMode("rules")}
           onSelectInfo={() => setMode("docs")}
           onSelectHandicap={handleHandicapTap}
+          onSelectMyRounds={() => setMode("myrounds")}
         />
       ) : mode === "board" ? (
         <Board rounds={rounds} tab={boardTab} competitions={allCompetitionsAcrossRounds()} headerColor={headerColor} accentColor={accentColor} activeRound={activeRound} />
@@ -3759,6 +3962,8 @@ function AppInner() {
       ) : mode === "docs" ? (
         // Public — a list of PDFs anyone can open, no PIN needed.
         <DocumentsView documents={documents} onOpen={openDocument} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "myrounds" ? (
+        <MyRounds headerColor={headerColor} accentColor={accentColor} onBack={() => setMode("menu")} />
       ) : mode === "handicap" && handicapUnlocked ? (
         <HandicapCheck
           players={allPlayersAcrossRounds()}
@@ -3795,9 +4000,12 @@ function AppInner() {
           <ScoreEntry
             publicMode
             ownOnly
+            library={library}
+            onSendCourse={(courseObj, by) => save((prev) => ({ courseSuggestions: [...(prev.courseSuggestions || []).filter((c) => c.name.trim().toLowerCase() !== courseObj.name.trim().toLowerCase() || c.by !== by), { id: crypto.randomUUID(), name: courseObj.name.trim(), course: courseObj, by, at: Date.now() }].slice(-30) }))}
             requireSignature={activeRound.requireSignature !== false}
             deviceId={deviceId}
             ownCardStore={{ code: eventCode, roundId: activeRoundId }}
+            eventLabel={`${eventCode} · ${activeRound.label}`}
             rosterPlayers={players}
             groupNames={[readOwnCard(eventCode, activeRoundId).name].filter(Boolean)}
             course={course}
@@ -3816,6 +4024,7 @@ function AppInner() {
             requireSignature={activeRound.requireSignature !== false}
             deviceId={deviceId}
             ownCardStore={{ code: eventCode, roundId: activeRoundId }}
+            eventLabel={`${eventCode} · ${activeRound.label}`}
             rosterPlayers={players}
             groupNames={(() => {
               // Who else is in this tee time, for the "I am…" picker on the
@@ -3855,6 +4064,7 @@ function AppInner() {
             }}
             onReview={(id) => { setEntryNotice(""); setActiveId(id); load(); }}
             onOwnCard={() => { setEntryNotice(""); setOwnOnly(true); }}
+            allowSelfMark={activeRound.allowSelfMark === true}
             ownName={readOwnCard(eventCode, activeRoundId).name}
             onSetOwnName={(name) => { const cur = readOwnCard(eventCode, activeRoundId); writeOwnCard(eventCode, activeRoundId, { ...cur, name }); setIdentityTick((n) => n + 1); }}
             draw={draw}
@@ -3916,6 +4126,7 @@ function AppInner() {
           publicShowPoints={activeRound.publicShowPoints}
           publicShowDayBoard={activeRound.publicShowDayBoard}
           inOverall={activeRound.inOverall !== false}
+          teamBest={activeRound.teamBest || 0}
           onUpdatePublicVis={updatePublicVis}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -4138,6 +4349,12 @@ function AppInner() {
           onRenameRound={renameRound}
           onRemoveRound={removeRound}
           onSetActiveRound={setActiveRound}
+          courseSuggestions={state.courseSuggestions || []}
+          onAcceptSuggestion={async (sug) => {
+            await importCoursesToLibrary([{ name: sug.name, course: sug.course }]);
+            save((prev) => ({ courseSuggestions: (prev.courseSuggestions || []).filter((c) => c.id !== sug.id) }));
+          }}
+          onDiscardSuggestion={(id) => save((prev) => ({ courseSuggestions: (prev.courseSuggestions || []).filter((c) => c.id !== id) }))}
         />
       ) : (
         <ScorerList
@@ -4170,6 +4387,8 @@ function AppInner() {
           onTogglePublicScoreEntry={() => updateRound((prevRound) => ({ publicScoreEntry: !prevRound.publicScoreEntry }))}
           requireSignature={activeRound.requireSignature !== false}
           onToggleRequireSignature={() => updateRound((prevRound) => ({ requireSignature: prevRound.requireSignature === false }))}
+          allowSelfMark={activeRound.allowSelfMark === true}
+          onToggleAllowSelfMark={() => updateRound((prevRound) => ({ allowSelfMark: !prevRound.allowSelfMark }))}
           roundLabel={activeRound.label}
           onHideAdmin={() => { setAdminDevice(eventCode, ""); rememberAdminPin(eventCode, ""); setAdminLevel(""); setScorerUnlocked(false); setMode("menu"); setActiveId(null); setShowCourseSetup(false); setShowDrawSetup(false); setShowMatchesSetup(false); setShowLocalRulesSetup(false); setShowDocumentsSetup(false); setShowCompetitionsSetup(false); setShowPrintLabels(false); setShowPrintCards(false); setShowPrintDraw(false); setShowPrintBoard(false); setShowBackup(false); setShowEnterScores(false); setShowSocietyRoster(false); }}
         />
@@ -4427,14 +4646,16 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
     ((tab === "singles" && activeRound.format !== "foursomes") || (tab === "foursomes" && activeRound.format === "foursomes"));
   // The day being viewed comes first; Overall (every day added together)
   // is a tap away. If Admin has hidden this day's board, only Overall shows.
-  const [view, setView] = useState("day");
+  const [view, setView] = useState(activeRound && activeRound.teamBest > 0 ? "teams" : "day");
   const showDay = todayAvailable && view === "day";
+  const teamDay = !!(activeRound && activeRound.teamBest > 0 && activeRound.format !== "matchplay");
+  const showTeams = teamDay && view === "teams";
 
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       {todayAvailable ? (
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {[["day", activeRound.label], ["overall", "Overall — all days"]].map(([k, label]) => (
+          {[...(teamDay ? [["teams", "Teams"]] : []), ["day", teamDay ? "Individuals" : activeRound.label], ["overall", "Overall — all days"]].map(([k, label]) => (
             <button
               key={k}
               onClick={() => setView(k)}
@@ -4458,7 +4679,9 @@ function Board({ rounds, tab, competitions, headerColor, accentColor, activeRoun
           Overall — {tab === "singles" ? "Singles" : "Foursomes"} days added together
         </div>
       )}
-      {showDay ? (
+      {showTeams ? (
+        <TeamBoard round={activeRound} headerColor={headerColor} accentColor={accentColor} />
+      ) : showDay ? (
         <SingleDayBoard round={activeRound} competitions={competitions} headerColor={headerColor} accentColor={accentColor} />
       ) : (
         <>
@@ -5154,7 +5377,7 @@ function DrawView({ draw, startingHole, drawNote, headerColor, accentColor, cour
   );
 }
 
-function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, onRemovePlayers, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, inOverall = true, onUpdatePublicVis }) {
+function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole, onBack, headerColor, accentColor, course, format, onUpdateFormat, scoring, onUpdateScoring, handicapAllowance, onUpdateHandicapAllowance, library, onLoadFromLibrary, drawStartTime, onUpdateDrawStartTime, drawInterval, onUpdateDrawInterval, drawNote, onUpdateDrawNote, roundLabel, onRenameRound, roundDate, onUpdateRoundDate, onUpdatePlayerIndex, onUpdatePlayerDetails, onAddPlayerQuick, onRemovePlayer, onRemovePlayers, competitions, onEnsureCompetitionsExist, onAddPeople, roundKey, societyRoster, onAddFromRoster, onBulkSetTee, onSetHandicapAdjustment, onBulkSetHandicapAdjustment, onWithdrawPlayer, publicShowIndex, publicShowCH, publicShowTee, publicShowComp, publicShowStartTee, publicShowGross, publicShowNet, publicShowPoints, publicShowDayBoard, inOverall = true, teamBest = 0, onUpdatePublicVis }) {
   const [tab, setTab] = useState("build"); // build | paste
   const [pasteText, setPasteText] = useState("");
   const [msg, setMsg] = useState("");
@@ -5411,6 +5634,28 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
           </>
         )}
 
+        {format !== "matchplay" && scoring === "stableford" && (
+          <>
+            <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 6 }}>Team score</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+              {[[0, "Off"], [1, "Best 1"], [2, "Best 2"], [3, "Best 3"]].map(([n, label]) => (
+                <button
+                  key={n}
+                  onClick={() => onUpdatePublicVis({ teamBest: n })}
+                  style={{
+                    flex: 1, padding: "8px 0", borderRadius: 7, border: `1px solid ${headerColor}`,
+                    background: (teamBest || 0) === n ? headerColor : "transparent", color: (teamBest || 0) === n ? "#FFFFFF" : headerColor, fontWeight: 600, fontSize: 12,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 12 }}>
+              Each tee time on the draw is a team; on every hole the best {teamBest || "N"} Stableford score{(teamBest || 2) === 1 ? "" : "s"} in the team count. Everyone's own card is still entered and ranked as usual — the Leaderboard gets a Teams view as well.
+            </div>
+          </>
+        )}
         <div style={{ fontSize: 11, color: "#8A8774", marginBottom: 3 }}>
           Handicap allowance <span style={{ textTransform: "none", letterSpacing: 0 }}>(% of course handicap — most comps use 100%)</span>
         </div>
@@ -7803,7 +8048,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
     background: active ? headerColor : "#FFFFFF", color: active ? "#FFFFFF" : headerColor,
   });
   const prizes = activeFilter === "__prizes__";
-  const nothingToPrint = isMatchPlay || (prizes ? prizeList.every((b) => b.rows.length === 0) : sections.length === 0);
+  const nothingToPrint = isMatchPlay || (view === "teams" ? false : prizes ? prizeList.every((b) => b.rows.length === 0) : sections.length === 0);
   const printedAt = new Date().toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   return (
@@ -7822,6 +8067,7 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
       </div>
       <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         <button onClick={() => setView("day")} style={pill(view === "day")}>{activeRound.label} only</button>
+        {activeRound.teamBest > 0 && <button onClick={() => setView("teams")} style={pill(view === "teams")}>Teams</button>}
         <button onClick={() => setView("overall")} style={pill(view === "overall")}>Overall ({sameFormatRounds.length} day{sameFormatRounds.length === 1 ? "" : "s"})</button>
       </div>
       {compsInUse.length > 0 && !(view === "overall" && isFoursomes) && (
@@ -7859,6 +8105,23 @@ function PrintLeaderboard({ rounds, activeRound, competitions, orgName, onBack, 
         </div>
       ) : nothingToPrint ? (
         <div style={{ padding: "30px 12px", textAlign: "center", color: "#6B6B5F", fontSize: 14 }}>No players to show yet.</div>
+      ) : view === "teams" ? (
+        <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
+          <div style={{ marginBottom: 10 }}>
+            {orgName && (
+              <div style={{ ...PRINT_ORG_NAME_STYLE, display: "flex", alignItems: "center", gap: 12 }}>
+                <SocietyLogo orgName={orgName} height={70} />
+                <span>{orgName}</span>
+              </div>
+            )}
+            <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>{activeRound.label} — Team result</div>
+            <div style={{ fontSize: 13, marginTop: 2 }}>
+              {[activeRound.course.name, formatDisplayDateLong(activeRound.date), `Best ${activeRound.teamBest} Stableford score${activeRound.teamBest === 1 ? "" : "s"} per hole from each team`].filter(Boolean).join("  ·  ")}
+            </div>
+          </div>
+          <TeamBoard round={activeRound} headerColor={headerColor} accentColor={headerColor} print />
+          <div style={{ fontSize: 10, marginTop: 8, color: "#444" }}>Level teams are separated by countback on the team's last 9, 6, 3 and 1 holes. Printed {printedAt}</div>
+        </div>
       ) : prizes ? (
         <div className="print-area" style={{ background: "#FFFFFF", color: "#000", padding: 14, borderRadius: 10, border: "1px solid #E4E0D0" }}>
           <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
@@ -9255,7 +9518,7 @@ function DocumentsSetup({ documents, onUpload, onRemove, onOpen, onMove, onRenam
   );
 }
 
-function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [], handicapLog = [] }) {
+function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, onOpenCourseSetup, onOpenDrawSetup, onOpenMatchesSetup, onOpenLocalRulesSetup, onOpenDocumentsSetup, onOpenCompetitionsSetup, onOpenSocietyRoster, onOpenPrintLabels, onOpenPrintCards, onOpenPrintDraw, onOpenPrintBoard, onOpenBackup, headerColor, accentColor, onLock, onHideAdmin, publicScoreEntry, onTogglePublicScoreEntry, requireSignature = true, onToggleRequireSignature, roundLabel, onReleaseHandicapPhone, tiedPhones = [], onReleasePlayer, onReleaseByName, allNames = [], handicapLog = [], allowSelfMark = false, onToggleAllowSelfMark }) {
   const [showLog, setShowLog] = useState(false);
   const [showTied, setShowTied] = useState(false);
   const [releaseSearch, setReleaseSearch] = useState("");
@@ -9311,6 +9574,27 @@ function ScorerList({ isOwner = true, course, isMatchPlay, onOpenEnterScores, on
                 }}
               >
                 {requireSignature ? "ON" : "OFF"}
+              </button>
+            </div>
+          )}
+          {publicScoreEntry && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEDE0" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: headerColor }}>One phone may score its whole group</div>
+                <div style={{ fontSize: 11, color: "#6B6B5F", marginTop: 2 }}>
+                  {allowSelfMark
+                    ? "ON — a scorer can enter every card in their tee time, their own included (one card at a time). Handy for 4-ball team days."
+                    : "Off — a player can only enter someone else's card; their own is marked by another phone."}
+                </div>
+              </div>
+              <button
+                onClick={onToggleAllowSelfMark}
+                style={{
+                  minWidth: 64, padding: "9px 0", borderRadius: 20, border: "none", fontWeight: 800, fontSize: 12.5,
+                  background: allowSelfMark ? accentColor : "#D8D4C0", color: "#FFFFFF",
+                }}
+              >
+                {allowSelfMark ? "ON" : "OFF"}
               </button>
             </div>
           )}
@@ -9957,7 +10241,7 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, onOwnCard, headerColor, accentColor, ownName = "", onSetOwnName, draw = [] }) {
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, onOwnCard, headerColor, accentColor, ownName = "", onSetOwnName, draw = [], allowSelfMark = false }) {
   // Three short steps: who are you → player or marker → the card.
   // "Who" is remembered on this phone for the day (it's the same name the
   // private own-card panel uses), so it's asked once.
@@ -9981,7 +10265,7 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
   const cards = [...ranked]
     .filter((p) => p.name)
     .map((p) => ({ ...p, label: label(p) }))
-    .filter((p) => !myCard || p.id !== myCard.id)
+    .filter((p) => allowSelfMark || !myCard || p.id !== myCard.id)
     .filter((p) => !groupFilterOn || (p.name && myGroup.has(normalizeName(p.name))) || (p.partnerName && myGroup.has(normalizeName(p.partnerName))))
     .filter((p) => !search.trim() || p.label.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -10054,7 +10338,7 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
       <div style={{ padding: "14px 12px 40px" }}>
         {header}
         <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 12px" }}>Are you the player or the marker?</div>
-        {bigBtn("I'm the MARKER — scoring someone else's card", () => { setRole("marker"); setStep("cards"); }, { sub: "Your opponent's / playing partner's card. You can keep your own scores alongside it." })}
+        {bigBtn(allowSelfMark ? "I'm the SCORER — entering the cards for my group" : "I'm the MARKER — scoring someone else's card", () => { setRole("marker"); setStep("cards"); }, { sub: allowSelfMark ? "One card at a time: enter it, SUBMIT CARD, then the next — your own included." : "Your opponent's / playing partner's card. You can keep your own scores alongside it." })}
         {bigBtn(waitingMine ? "I'm the PLAYER — my card is ready to sign" : "I'm the PLAYER — see my own card", () => {
           setRole("player");
           if (myCard && (awaitingSignature(myCard) || isScoreComplete(myCard))) onReview(myCard.id);
@@ -10104,7 +10388,9 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
     <div style={{ padding: "14px 12px 40px" }}>
       {header}
       <div style={{ background: headerColor, color: "#FFFFFF", borderRadius: 10, padding: "12px 14px", margin: "8px 0 10px", fontSize: 14, fontWeight: 800, lineHeight: 1.3 }}>
-        Select the card you will be scoring — your opponent's / playing partner's, not your own.
+        {allowSelfMark
+          ? "Select a card to score. Enter it, tap SUBMIT CARD, then come back for the next one — your own card is in the list too."
+          : "Select the card you will be scoring — your opponent's / playing partner's, not your own."}
       </div>
       <div style={{ fontSize: 12, color: "#6B6B5F", margin: "0 0 10px" }}>
         {groupFilterOn ? "The other cards in your tee time." : "Every card on the day."} {doneCount} of {totalCount} cards done.
@@ -10199,7 +10485,9 @@ function HandicapAdjuster({ value, onChange, headerColor }) {
   );
 }
 
-function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [], ownOnly = false }) {
+function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, isFoursomes, isMedal, handicapAllowance, publicMode = false, deviceId = "", requireSignature = true, ownCardStore = null, groupNames = [], rosterPlayers = [], ownOnly = false, library = [], onSendCourse, eventLabel = "" }) {
+  const [sentMsg, setSentMsg] = useState("");
+  const [savedRoundMsg, setSavedRoundMsg] = useState("");
   // The marker's own private card (see readOwnCard) — only in players' mode.
   const [ownCard, setOwnCard] = useState(() => (ownCardStore ? readOwnCard(ownCardStore.code, ownCardStore.roundId) : { name: "", scores: Array(18).fill("") }));
   const [showOwnCard, setShowOwnCard] = useState(true);
@@ -10247,7 +10535,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
     setOwnPadHole(ownNextOpen(idx));
   };
   const ownPad = (idx) => {
-    const par = Number(course.holes[idx].par) || 4;
+    const par = Number(ownCourse.holes[idx].par) || 4;
     const val = ownCard.scores[idx];
     const vals = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     const btn = (label, v, muted) => (
@@ -10299,14 +10587,42 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   };
   // The marker's own playing handicap for the day, so their private card
   // can show where THEY get a shot — from their own name, or a pair "A & B".
+  // The private card can be kept on a different course from the day's —
+  // a practice round, say — chosen from the saved-course library. The
+  // choice is remembered with the card. Shot holes and the running totals
+  // follow the course chosen; the tee is the first one of that course
+  // unless the player has that course's tee set on the day.
+  const ownCourse = (() => {
+    if (!ownOnly || !ownCard.courseName) return course;
+    if (ownCard.courseName === "__custom__") return isValidCourse(ownCard.customCourse) ? ownCard.customCourse : course;
+    const entry = (library || []).find((e) => e.name === ownCard.courseName);
+    return entry ? entry.course : course;
+  })();
+  // A course the app doesn't know: name, one tee (rating and slope), then
+  // par and stroke index for each hole. Kept on this phone with the card.
+  const blankCustom = () => ({ name: "", eventName: "", tees: [{ id: "own", label: "", cr: "", slope: "" }], holes: Array.from({ length: 18 }, (_, i) => ({ par: 4, si: i + 1 })) });
+  const custom = ownCard.customCourse || blankCustom();
+  const customTeeOk = !!(custom.tees[0].label || "").trim() && Number(custom.tees[0].cr) > 0 && Number(custom.tees[0].slope) > 0;
+  const setCustom = (patch) => updateOwnCard({ customCourse: { ...custom, ...patch } });
+  const setCustomHole = (i, field, v) => setCustom({ holes: custom.holes.map((h, idx) => (idx === i ? { ...h, [field]: v } : h)) });
+  const siProblems = (() => {
+    const seen = new Map();
+    custom.holes.forEach((h, i) => { const k = Number(h.si); if (!seen.has(k)) seen.set(k, []); seen.get(k).push(i + 1); });
+    const dupes = [...seen.entries()].filter(([k, hs]) => hs.length > 1).map(([k, hs]) => `S.I. ${k} on holes ${hs.join(", ")}`);
+    const missing = Array.from({ length: 18 }, (_, i) => i + 1).filter((n) => !seen.has(n));
+    return [...dupes, ...(missing.length ? [`S.I. ${missing.join(", ")} not used`] : [])];
+  })();
   const ownPh = (() => {
     if (!ownCard.name) return null;
     const parts = ownCard.name.split(" & ").map((n) => n.trim()).filter(Boolean);
-    if (parts.length === 2) return pairPH(course, rosterPlayers, handicapAllowance, parts[0], parts[1]);
+    if (parts.length === 2) return pairPH(ownCourse, rosterPlayers, handicapAllowance, parts[0], parts[1]);
     const me = findIndividualByName(rosterPlayers, ownCard.name);
-    return me && me.index !== "" && me.index != null ? individualPH(course, me, handicapAllowance) : null;
+    if (!me || me.index === "" || me.index == null) return null;
+    if (ownCourse !== course && !(Number((ownCourse.tees[0] || {}).cr) > 0 && Number((ownCourse.tees[0] || {}).slope) > 0)) return null;
+    const onThisCourse = ownCourse === course ? me : { ...me, tee: teeMismatch(ownCourse, me.tee) ? (ownCourse.tees[0] || {}).label : me.tee };
+    return individualPH(ownCourse, onThisCourse, handicapAllowance);
   })();
-  const ownShots = (idx) => (ownPh === null ? 0 : strokesOnHole(course, ownPh, idx));
+  const ownShots = (idx) => (ownPh === null ? 0 : strokesOnHole(ownCourse, ownPh, idx));
   // When reviewing a card that's mine, compare it with my private notes.
   const ownMatchesThisCard = !!(ownCardStore && ownCard.name && (() => {
     const own = normalizeName(ownCard.name);
@@ -10584,9 +10900,69 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
         <option value="">I am…</option>
         {[...new Set([ownCard.name, ...groupNames].filter(Boolean))].map((n) => <option key={n} value={n}>{dn(n)}</option>)}
       </select>
+      {ownOnly && (library || []).length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 11.5, color: "#6B6B5F", whiteSpace: "nowrap" }}>Course</span>
+          <select
+            value={ownCard.courseName || ""}
+            onChange={(e) => updateOwnCard({ courseName: e.target.value })}
+            style={{ flex: 1, fontSize: 13, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", minWidth: 0 }}
+          >
+            <option value="">Today's — {course.name}</option>
+            {(library || []).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+            <option value="__custom__">{ownCard.customCourse && ownCard.customCourse.name ? `My own: ${ownCard.customCourse.name}` : "A course not listed — set it up…"}</option>
+          </select>
+        </div>
+      )}
+      {ownOnly && ownCard.courseName === "__custom__" && (
+        <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #D8D4C0", padding: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: headerColor, marginBottom: 6 }}>Set up the course (kept on this phone)</div>
+          <input
+            value={custom.name}
+            onChange={(e) => setCustom({ name: e.target.value })}
+            placeholder="Course name"
+            style={{ width: "100%", fontSize: 13.5, fontWeight: 700, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", boxSizing: "border-box", marginBottom: 6, fontFamily: "inherit" }}
+          />
+          <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 4 }}>Which tee are you playing? Name it as the card does, with that tee's rating and slope:</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <label style={{ flex: 1, fontSize: 10.5, color: "#8A8774" }}>Tee<input value={custom.tees[0].label} onChange={(e) => setCustom({ tees: [{ ...custom.tees[0], label: e.target.value }] })} placeholder="e.g. Yellow" style={{ width: "100%", fontSize: 13, padding: "7px 8px", borderRadius: 6, border: `1px solid ${(custom.tees[0].label || "").trim() ? "#D8D4C0" : "#D9A400"}`, boxSizing: "border-box" }} /></label>
+            <label style={{ flex: 1, fontSize: 10.5, color: "#8A8774" }}>Course rating<input type="number" inputMode="decimal" placeholder="e.g. 70.4" value={custom.tees[0].cr} onChange={(e) => setCustom({ tees: [{ ...custom.tees[0], cr: e.target.value === "" ? "" : Number(e.target.value) }] })} className="mono" style={{ width: "100%", fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0", boxSizing: "border-box" }} /></label>
+            <label style={{ flex: 1, fontSize: 10.5, color: "#8A8774" }}>Slope<input type="number" inputMode="numeric" placeholder="e.g. 128" value={custom.tees[0].slope} onChange={(e) => setCustom({ tees: [{ ...custom.tees[0], slope: e.target.value === "" ? "" : Number(e.target.value) }] })} className="mono" style={{ width: "100%", fontSize: 13, padding: "7px 8px", borderRadius: 6, border: "1px solid #D8D4C0", boxSizing: "border-box" }} /></label>
+          </div>
+          <div style={{ fontSize: 10.5, color: "#8A8774", marginBottom: 4 }}>Par and stroke index for each hole (every S.I. from 1 to 18 used once):</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 4 }}>
+            {custom.holes.map((h, i) => (
+              <div key={i} style={{ textAlign: "center", border: "1px solid #EFEDE0", borderRadius: 6, padding: "3px 2px" }}>
+                <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor }}>{i + 1}</div>
+                <select value={h.par} onChange={(e) => setCustomHole(i, "par", Number(e.target.value))} style={{ width: "100%", fontSize: 12, padding: "3px 0", borderRadius: 5, border: "1px solid #D8D4C0", background: "#FFF" }}>
+                  {[3, 4, 5, 6].map((p) => <option key={p} value={p}>Par {p}</option>)}
+                </select>
+                <input type="number" inputMode="numeric" min={1} max={18} value={h.si} onChange={(e) => setCustomHole(i, "si", e.target.value === "" ? "" : Math.max(1, Math.min(18, Number(e.target.value))))} className="mono scoreInput" placeholder="SI" style={{ width: "100%", fontSize: 12, textAlign: "center", padding: "3px 0", borderRadius: 5, border: `1px solid ${siProblems.length ? "#D9A400" : "#D8D4C0"}`, marginTop: 2, boxSizing: "border-box" }} />
+              </div>
+            ))}
+          </div>
+          {siProblems.length > 0 && <div style={{ fontSize: 11, color: "#6B4E00", marginTop: 6 }}>Check the stroke indexes: {siProblems.join("; ")}.</div>}
+          <div className="mono" style={{ fontSize: 11, color: "#8A8774", marginTop: 6 }}>Par {custom.holes.reduce((n, h) => n + (Number(h.par) || 0), 0)}</div>
+          {onSendCourse && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #EFEDE0" }}>
+              <div style={{ fontSize: 11, color: "#6B6B5F", marginBottom: 6 }}>
+                This course lives on your phone only. Send it to the organiser and they can add it to the society's saved courses for everyone.
+              </div>
+              <button
+                disabled={!custom.name.trim() || !customTeeOk || siProblems.length > 0}
+                onClick={() => { onSendCourse(custom, ownCard.name || "a player"); setSentMsg(`Sent "${custom.name.trim()}" (${custom.tees[0].label} tee) to the organiser.`); }}
+                style={{ padding: "8px 12px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12, opacity: !custom.name.trim() || !customTeeOk || siProblems.length > 0 ? 0.5 : 1 }}
+              >
+                Send this course to the organiser
+              </button>
+              {sentMsg && <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginTop: 6 }}>{sentMsg}</div>}
+            </div>
+          )}
+        </div>
+      )}
       {ownCard.name && (
         <div className="mono" style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
-          {ownPh === null ? "No handicap found for that name — shot holes can't be marked." : `Playing ${ownPh} — shots on the holes marked *`}
+          {ownPh === null ? (ownCard.courseName === "__custom__" ? "Fill in the tee's rating and slope to get your shots." : "No handicap found for that name — shot holes can't be marked.") : `${ownCourse.name || "Course"}${ownCourse.tees[0] && ownCourse.tees[0].label ? ` (${ownCourse.tees[0].label} tee)` : ""} · Playing ${ownPh} — shots on the holes marked *`}
         </div>
       )}
       {[[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12], [13, 14, 15, 16, 17, 18]].map((holes, hi) => (
@@ -10596,7 +10972,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
               <div className="mono" style={{ fontSize: 11, fontWeight: 800, color: headerColor, lineHeight: 1.15 }}>
                 {h}{ownShots(h - 1) > 0 && <span style={{ color: "#C00000", fontSize: 12, marginLeft: 1 }}>{"*".repeat(ownShots(h - 1))}</span>}
               </div>
-              <div className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {course.holes[h - 1].par}</div>
+              <div className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: "#3F3F38", lineHeight: 1.2 }}>Par {ownCourse.holes[h - 1].par}</div>
               <input
                 ref={(el) => (ownRefs.current[h - 1] = el)}
                 className="mono scoreInput"
@@ -10619,6 +10995,72 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           {ownPadHole !== null && holes.includes(ownPadHole + 1) && ownPad(ownPadHole)}
         </div>
       ))}
+      {ownCard.scores.some((v) => v !== "") && ownPh !== null && (() => {
+        const sumFor = (holes) => {
+          let gross = 0, net = 0, points = 0, played = 0, nr = false;
+          holes.forEach((h) => {
+            const idx = h - 1;
+            const v = ownCard.scores[idx];
+            if (v === "" || v == null) return;
+            played += 1;
+            if (isPickedUp(v)) { nr = true; return; }
+            gross += Number(v);
+            net += Number(v) - strokesOnHole(ownCourse, ownPh, idx);
+            points += holePoints(ownCourse, v, idx, ownPh) || 0;
+          });
+          return { gross, net, points, played, nr };
+        };
+        const out = sumFor(OUT), inn = sumFor(IN);
+        const all = { gross: out.gross + inn.gross, net: out.net + inn.net, points: out.points + inn.points, played: out.played + inn.played, nr: out.nr || inn.nr };
+        const show = (part, field) => (part.played === 0 ? "–" : field !== "points" && part.nr ? "NR" : part[field]);
+        const cell = { textAlign: "right", padding: "6px 10px", fontSize: 13 };
+        const head = { textAlign: "right", padding: "5px 10px", fontSize: 10, color: "#8A8774", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+        return (
+          <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", margin: "6px 0 10px", overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: `${headerColor}12` }}>
+                  <th style={{ ...head, textAlign: "left" }}>{all.played === 18 ? "My card" : `My card · thru ${all.played}`}</th>
+                  <th style={head}>Out</th>
+                  <th style={head}>In</th>
+                  <th style={{ ...head, color: headerColor }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[["Gross", "gross"], ["Net", "net"], ["Points", "points"]].map(([label, field]) => (
+                  <tr key={field} style={{ borderTop: "1px solid #EFEDE0" }}>
+                    <td style={{ textAlign: "left", padding: "6px 10px", fontSize: 12.5, fontWeight: 700 }}>{label}</td>
+                    <td className="mono" style={cell}>{show(out, field)}</td>
+                    <td className="mono" style={cell}>{show(inn, field)}</td>
+                    <td className="mono" style={{ ...cell, fontWeight: 800, fontSize: 15, color: headerColor }}>{show(all, field)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+      {ownCard.scores.some((v) => v !== "") && ownPh !== null && (
+        <div style={{ margin: "0 0 10px" }}>
+          <button
+            onClick={() => {
+              const scores = ownCard.scores.map((v) => (v === "" || v == null ? "" : Number(v)));
+              const played = scores.filter((v) => v !== "").length;
+              const nr = scores.some((v) => v !== "" && isPickedUp(v)) || played < 18;
+              let gross = 0, net = 0, pts = 0;
+              scores.forEach((v, i) => { if (v === "") return; pts += holePoints(ownCourse, v, i, ownPh) || 0; if (!isPickedUp(v)) { gross += v; net += v - strokesOnHole(ownCourse, ownPh, i); } });
+              const tee = ownCourse.tees && ownCourse.tees[0] ? (ownCourse === course ? ((findIndividualByName(rosterPlayers, ownCard.name) || {}).tee || ownCourse.tees[0].label) : ownCourse.tees[0].label) : "";
+              const entry = { id: crypto.randomUUID(), at: Date.now(), date: new Date().toISOString().slice(0, 10), player: ownCard.name, event: eventLabel, course: ownCourse.name, tee, ph: ownPh, scores, played, gross: nr ? null : gross, net: nr ? null : net, points: pts, par: coursePar(ownCourse) };
+              writeMyRounds([...readMyRounds(), entry]);
+              setSavedRoundMsg(`Saved to My rounds on this phone (${played} holes, ${pts} pts).`);
+            }}
+            style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid ${headerColor}`, background: "#FFFFFF", color: headerColor, fontWeight: 700, fontSize: 13 }}
+          >
+            Save this round to My rounds
+          </button>
+          {savedRoundMsg && <div style={{ fontSize: 11.5, fontWeight: 600, color: headerColor, marginTop: 4 }}>{savedRoundMsg}</div>}
+        </div>
+      )}
       {ownCard.scores.some((v) => v !== "") && (
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
           <button
@@ -11139,7 +11581,7 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
   );
 }
 
-function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, onImportLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
+function CourseSetup({ courseSuggestions = [], onAcceptSuggestion, onDiscardSuggestion, canEditPins = true, orgName, onUpdateOrgName, accentColor, onUpdateAccentColor, headerColor, onUpdateHeaderColor, pin, onUpdatePin, handicapPin, onUpdateHandicapPin, course, onUpdate, onRenameTee, onBack, library, onSaveToLibrary, onLoadFromLibrary, onDeleteFromLibrary, onImportLibrary, rounds, activeRoundId, onAddRound, onRenameRound, onRemoveRound, onSetActiveRound }) {
   const [confirmLoadId, setConfirmLoadId] = useState(null);
   const [confirmRemoveRoundId, setConfirmRemoveRoundId] = useState(null);
   const [confirmOverwriteSave, setConfirmOverwriteSave] = useState(false);
@@ -11543,6 +11985,24 @@ function CourseSetup({ canEditPins = true, orgName, onUpdateOrgName, accentColor
         <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A8774", marginBottom: 8 }}>
           Saved courses
         </div>
+        {courseSuggestions.length > 0 && (
+          <div style={{ background: "#FFF6E0", border: "1px solid #D9A400", borderRadius: 8, padding: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B4E00", marginBottom: 4 }}>Courses sent in by players ({courseSuggestions.length})</div>
+            <div style={{ fontSize: 11, color: "#6B4E00", marginBottom: 6 }}>Set up on a player's own card. Check the figures, then add to the library or discard.</div>
+            {courseSuggestions.map((sug) => (
+              <div key={sug.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid #EAD9A0" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{sug.name}</div>
+                  <div className="mono" style={{ fontSize: 10.5, color: "#6B4E00" }}>
+                    {sug.course.tees[0].label} · CR {sug.course.tees[0].cr} · slope {sug.course.tees[0].slope} · par {coursePar(sug.course)} · from {dn(sug.by)}, {new Date(sug.at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                  </div>
+                </div>
+                <button onClick={() => onAcceptSuggestion && onAcceptSuggestion(sug)} style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF", background: headerColor, border: "none", borderRadius: 6, padding: "6px 9px" }}>Add to library</button>
+                <button onClick={() => onDiscardSuggestion && onDiscardSuggestion(sug.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: 4 }}><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 8 }}>
           Saves whatever's currently in the "Course / venue name" field above — <strong>{course.name}</strong> — as its own entry.
         </div>
