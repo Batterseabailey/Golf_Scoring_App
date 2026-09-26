@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 144";
+const APP_VERSION = "21 Sep 2026 · build 145";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -3700,9 +3700,22 @@ function AppInner() {
     };
     const { meetings, offline } = await readArchive(eventCode);
     if (offline) throw new Error("offline");
-    await writeArchive(eventCode, [...meetings, meeting]);
-    const check = await readArchive(eventCode);
-    if (!check.meetings.some((m) => m.id === meeting.id)) throw new Error("not saved");
+    // A second go after a save that looked like it failed but actually
+    // went through: those days are already in the Archive, so finish the
+    // job with that copy rather than add them twice.
+    const ids0 = new Set(ids);
+    const already = meetings.find((m) => (m.rounds || []).length === ids.length && (m.rounds || []).every((r) => ids0.has(r.id)));
+    if (already) {
+      meeting.id = already.id;
+      meeting.title = already.title;
+      meeting.archivedAt = already.archivedAt;
+      meeting.rounds = already.rounds;
+    } else {
+      // If the server takes the save, it's saved. (Reading it straight
+      // back could still show the old copy for a moment, which is what
+      // wrongly reported "didn't save" before.)
+      await writeArchive(eventCode, [...meetings, meeting]);
+    }
     const lastCourse = chosen[chosen.length - 1].course;
     const fresh = emptyRound("Day 1", lastCourse);
     const remainingNow = rounds.filter((r) => !ids.includes(r.id));
@@ -3713,7 +3726,7 @@ function AppInner() {
       return {
         rounds: next,
         activeRoundId: next.some((r) => r.id === prev.activeRoundId) ? prev.activeRoundId : next[0].id,
-        archiveIndex: [...(prev.archiveIndex || []), archiveIndexEntry(meeting)],
+        archiveIndex: [...(prev.archiveIndex || []).filter((x) => x.id !== meeting.id), archiveIndexEntry(meeting)],
       };
     });
     setLocalActiveRoundId(nextActive);
@@ -3728,6 +3741,14 @@ function AppInner() {
     await writeArchive(eventCode, next);
     save(() => ({ archiveIndex: next.map(archiveIndexEntry) }));
     return next;
+  };
+  // Makes the live event's short list match what's really in the Archive
+  // (e.g. a meeting that was saved when the app said it hadn't been).
+  const syncArchiveIndex = (meetings) => {
+    const want = meetings.map(archiveIndexEntry);
+    const have = state.archiveIndex || [];
+    const same = want.length === have.length && want.every((w, i) => have[i] && have[i].id === w.id && have[i].title === w.title);
+    if (!same) save(() => ({ archiveIndex: want }));
   };
   const [archiveOpenId, setArchiveOpenId] = useState(null);
   const [showArchiveSetup, setShowArchiveSetup] = useState(false);
@@ -4351,6 +4372,7 @@ function AppInner() {
           archiveIndex={state.archiveIndex || []}
           onArchive={archiveDays}
           onUpdateArchive={updateArchive}
+          onSyncIndex={syncArchiveIndex}
           eventCode={eventCode}
           onBack={() => setShowArchiveSetup(false)}
           onViewArchive={(id) => { setShowArchiveSetup(false); setArchiveOpenId(id); setMode("archive"); }}
@@ -11915,7 +11937,20 @@ function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", he
 }
 
 // Owner only (Admin → Archive a finished meeting).
-function ArchiveSetup({ rounds, archiveIndex = [], onArchive, onUpdateArchive, eventCode, onBack, onViewArchive, headerColor, accentColor }) {
+function ArchiveSetup({ rounds, archiveIndex: indexFromEvent = [], onArchive, onUpdateArchive, onSyncIndex, eventCode, onBack, onViewArchive, headerColor, accentColor }) {
+  // The list below comes from the Archive itself, not just the live
+  // event's short index — so anything that did get saved always shows
+  // here and can be renamed or deleted.
+  const [stored, setStored] = useState(null);
+  const refreshStored = async () => {
+    try {
+      const { meetings, offline } = await readArchive(eventCode);
+      setStored(meetings);
+      if (!offline && onSyncIndex) onSyncIndex(meetings);
+    } catch { /* keep showing the index */ }
+  };
+  useEffect(() => { refreshStored(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [eventCode]);
+  const archiveIndex = stored ? stored.map(archiveIndexEntry) : indexFromEvent;
   const [title, setTitle] = useState("");
   const [picked, setPicked] = useState(() => new Set(rounds.map((r) => r.id)));
   const [confirming, setConfirming] = useState(false);
@@ -11934,6 +11969,7 @@ function ArchiveSetup({ rounds, archiveIndex = [], onArchive, onUpdateArchive, e
       setMsg(`"${m.title}" is now in the Archive.${all ? " The live event has a fresh blank Day 1, ready for the next meeting." : ""}`);
       setTitle(""); setConfirming(false);
       setPicked(new Set());
+      refreshStored();
     } catch (e) { fail(e); setConfirming(false); }
     setBusy(false);
   };
@@ -11941,13 +11977,13 @@ function ArchiveSetup({ rounds, archiveIndex = [], onArchive, onUpdateArchive, e
     const t = window.prompt("New name for this meeting:", m.title);
     if (!t || !t.trim() || t.trim() === m.title) return;
     setBusy(true); setErr("");
-    try { await onUpdateArchive((ms) => ms.map((x) => (x.id === m.id ? { ...x, title: t.trim() } : x))); } catch (e) { fail(e); }
+    try { setStored(await onUpdateArchive((ms) => ms.map((x) => (x.id === m.id ? { ...x, title: t.trim() } : x)))); } catch (e) { fail(e); }
     setBusy(false);
   };
   const remove = async (m) => {
     if (!window.confirm(`Delete "${m.title}" from the Archive for good? Its draws and results can't be brought back (unless you've downloaded a copy).`)) return;
     setBusy(true); setErr("");
-    try { await onUpdateArchive((ms) => ms.filter((x) => x.id !== m.id)); } catch (e) { fail(e); }
+    try { setStored(await onUpdateArchive((ms) => ms.filter((x) => x.id !== m.id))); setMsg(`"${m.title}" has been deleted from the Archive.`); } catch (e) { fail(e); }
     setBusy(false);
   };
   const download = async () => {
