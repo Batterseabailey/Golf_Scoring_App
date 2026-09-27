@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 146";
+const APP_VERSION = "21 Sep 2026 · build 151";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -1801,7 +1801,7 @@ function MyRounds({ headerColor, accentColor, onBack }) {
   );
 }
 
-function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap, onSelectMyRounds, archiveIndex = [], onSelectArchive }) {
+function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectDay, onSelectLeaderboard, onSelectRules, onSelectInfo, onSelectHandicap, onSelectMyRounds, archiveIndex = [], onSelectArchive, onSelectFriendly }) {
   const sectionCard = (title, items) => (
     <div style={{ background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", marginBottom: 12, overflow: "hidden" }}>
       <div
@@ -1860,6 +1860,7 @@ function PlayerMenu({ rounds, activeRoundId, headerColor, accentColor, onSelectD
       {standaloneRow("Information", onSelectInfo)}
       {standaloneRow("Local Rules", onSelectRules)}
       {standaloneRow("Your Handicap", onSelectHandicap)}
+      {onSelectFriendly && standaloneRow("Private match (two players, on this phone)", onSelectFriendly)}
       {onSelectMyRounds && standaloneRow("My rounds (on this phone)", onSelectMyRounds)}
       {archiveIndex.length > 0 && onSelectArchive && sectionCard("Archive — past meetings", [...archiveIndex].reverse().map((m) => row(m.title, () => onSelectArchive(m.id), m.id, [archiveDateRange(m), `${m.days} ${m.days === 1 ? "day" : "days"}`].filter(Boolean).join(" · "), false)))}
     </div>
@@ -3135,26 +3136,52 @@ function AppInner() {
   // Brings a roster across from another event on this site (last year's
   // code), or from a roster file. Anyone already here (by name) is left as
   // they are; blank details are filled in from the incoming copy.
-  const mergeRosterMembers = (incoming) => {
+  // onlyExisting: nobody new is added — only people already on this
+  // roster get their blank details filled in (e.g. the Kenya tour roster
+  // taking handicaps from the main society event).
+  const mergeRosterMembers = (incoming, { onlyExisting = false } = {}) => {
     let added = 0, updated = 0;
     save((prev) => {
       const next = [...prev.societyRoster];
+      const filledIndex = new Map(); // normalised name -> handicap newly filled in
       (incoming || []).filter((m) => m && typeof m.name === "string" && m.name.trim()).forEach((m) => {
         const i = next.findIndex((x) => normalizeName(x.name) === normalizeName(m.name));
         if (i === -1) {
+          if (onlyExisting) return;
           next.push({ id: crypto.randomUUID(), name: m.name.trim(), index: m.index ?? "", tee: "", isLady: !!m.isLady, surname: m.surname || "" });
           added += 1;
         } else {
           const cur = next[i];
           const patched = { ...cur, index: cur.index || m.index || "", isLady: cur.isLady || !!m.isLady, surname: cur.surname || m.surname || "" };
           if (patched.index !== cur.index || patched.isLady !== cur.isLady || patched.surname !== cur.surname) { next[i] = patched; updated += 1; }
+          if (patched.index !== cur.index && patched.index !== "") filledIndex.set(normalizeName(cur.name), patched.index);
         }
       });
-      return { societyRoster: next };
+      if (!filledIndex.size) return { societyRoster: next };
+      // A handicap that was blank on the roster is also filled in on any
+      // day where that player's handicap is still blank and they haven't
+      // started playing — so the draw and cards pick it up straight away.
+      const blank = (v) => v === "" || v == null;
+      const played = (p) => (p.scores || []).some((v) => v !== "" && v != null);
+      return {
+        societyRoster: next,
+        rounds: prev.rounds.map((r) => ({
+          ...r,
+          players: r.players.map((p) => {
+            if (played(p)) return p;
+            let q = p;
+            const a = filledIndex.get(normalizeName(p.name));
+            if (a !== undefined && blank(p.index)) q = { ...q, index: a };
+            const b = p.partnerName ? filledIndex.get(normalizeName(p.partnerName)) : undefined;
+            if (b !== undefined && blank(p.partnerIndex)) q = { ...q, partnerIndex: b };
+            return q;
+          }),
+        })),
+      };
     });
     return { added, updated };
   };
-  const copyRosterFromEvent = async (rawCode) => {
+  const copyRosterFromEvent = async (rawCode, opts = {}) => {
     const { code } = splitAdminCode(rawCode);
     if (!code) return { ok: false, error: "Type the other event's code." };
     if (code === eventCodeRef.current) return { ok: false, error: "That's this event." };
@@ -3162,7 +3189,7 @@ function AppInner() {
       const res = await withTimeout(window.storage.get(storageKeyFor(code), true), 12000);
       const other = sanitizeState(JSON.parse(res.value));
       if (!other.societyRoster.length) return { ok: false, error: `${code} has no roster.` };
-      const r = mergeRosterMembers(other.societyRoster);
+      const r = mergeRosterMembers(other.societyRoster, opts);
       return { ok: true, ...r, total: other.societyRoster.length, code };
     } catch (err) {
       const msg = String(err).toLowerCase();
@@ -3751,6 +3778,7 @@ function AppInner() {
     if (!same) save(() => ({ archiveIndex: want }));
   };
   const [archiveOpenId, setArchiveOpenId] = useState(null);
+  const [friendlyFrom, setFriendlyFrom] = useState("menu");
   const [showArchiveSetup, setShowArchiveSetup] = useState(false);
 
   const handleScorerTap = () => {
@@ -4109,6 +4137,7 @@ function AppInner() {
           onSelectInfo={() => setMode("docs")}
           onSelectHandicap={handleHandicapTap}
           onSelectMyRounds={() => setMode("myrounds")}
+          onSelectFriendly={() => { setFriendlyFrom("menu"); setMode("friendly"); }}
           archiveIndex={state.archiveIndex || []}
           onSelectArchive={(id) => { setArchiveOpenId(id); setMode("archive"); }}
         />
@@ -4134,6 +4163,8 @@ function AppInner() {
       ) : mode === "docs" ? (
         // Public — a list of PDFs anyone can open, no PIN needed.
         <DocumentsView documents={documents} onOpen={openDocument} headerColor={headerColor} accentColor={accentColor} />
+      ) : mode === "friendly" ? (
+        <FriendlyMatch roster={state.societyRoster || []} library={library} currentCourse={course} headerColor={headerColor} accentColor={accentColor} onBack={() => setMode(friendlyFrom)} backLabel={friendlyFrom === "entry" ? "‹ Enter scores" : "‹ Menu"} />
       ) : mode === "myrounds" ? (
         <MyRounds headerColor={headerColor} accentColor={accentColor} onBack={() => setMode("menu")} />
       ) : mode === "handicap" && handicapUnlocked ? (
@@ -4237,6 +4268,7 @@ function AppInner() {
             }}
             onReview={(id) => { setEntryNotice(""); setActiveId(id); load(); }}
             onOwnCard={() => { setEntryNotice(""); setOwnOnly(true); }}
+            onPrivateMatch={() => { setFriendlyFrom("entry"); setMode("friendly"); }}
             allowSelfMark={activeRound.allowSelfMark === true}
             ownName={readOwnCard(eventCode, activeRoundId).name}
             onSetOwnName={(name) => { const cur = readOwnCard(eventCode, activeRoundId); writeOwnCard(eventCode, activeRoundId, { ...cur, name }); setIdentityTick((n) => n + 1); }}
@@ -8722,6 +8754,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
   const [copyCode, setCopyCode] = useState("");
   const [copyMsg, setCopyMsg] = useState("");
   const [copying, setCopying] = useState(false);
+  const [copyOnlyExisting, setCopyOnlyExisting] = useState(false);
   const rosterFileRef = useRef(null);
   const [picking, setPicking] = useState(false);          // ticking members for a partial roster file
   const [pickedIds, setPickedIds] = useState(new Set());
@@ -8852,9 +8885,11 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
               disabled={copying || !copyCode.trim()}
               onClick={async () => {
                 setCopying(true); setCopyMsg("");
-                const r = await onCopyFromEvent(copyCode.toUpperCase());
+                const r = await onCopyFromEvent(copyCode.toUpperCase(), { onlyExisting: copyOnlyExisting });
                 setCopying(false);
-                setCopyMsg(r.ok ? `Copied from ${r.code}: ${r.added} added${r.updated ? `, ${r.updated} filled in` : ""} (of ${r.total}).` : r.error);
+                setCopyMsg(!r.ok ? r.error : copyOnlyExisting
+                  ? `Checked against ${r.code}: ${r.updated ? `${r.updated} player${r.updated === 1 ? "" : "s"} filled in` : "nothing needed filling in"}. Nobody was added.`
+                  : `Copied from ${r.code}: ${r.added} added${r.updated ? `, ${r.updated} filled in` : ""} (of ${r.total}).`);
                 if (r.ok) setCopyCode("");
               }}
               style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: headerColor, color: "#FFFFFF", fontWeight: 700, fontSize: 12.5, opacity: copying || !copyCode.trim() ? 0.5 : 1 }}
@@ -8862,6 +8897,10 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
               {copying ? "Copying…" : "Copy roster"}
             </button>
           </div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "#1B1B1B", marginBottom: 10, lineHeight: 1.4 }}>
+            <input type="checkbox" checked={copyOnlyExisting} onChange={(e) => setCopyOnlyExisting(e.target.checked)} style={{ width: 18, height: 18, flexShrink: 0, marginTop: 1 }} />
+            <span>Only fill in details for players already on this roster — don't add anyone. (Blank handicaps, L marks and surnames are taken from the other event; anything already filled in stays.)</span>
+          </label>
           <div style={{ fontSize: 11.5, color: "#6B6B5F", marginBottom: 6 }}>
             Or as a file — to keep with the records, or to move a roster to the other site:
           </div>
@@ -8970,21 +9009,41 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
         {alphaSorted.map((m) => (
           <div
             key={m.id}
-            style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
+            style={{ marginBottom: 6, borderTop: "1px solid #EFEDE0", paddingTop: 8 }}
           >
-            {picking && <input type="checkbox" checked={pickedIds.has(m.id)} onChange={() => togglePick(m.id)} style={{ width: 18, height: 18, flexShrink: 0 }} />}
-            <RosterNameBox
-              name={m.name}
-              onChange={(v) => onUpdate(m.id, { name: v })}
-              style={{ flex: "1 1 100%", fontSize: 13, fontWeight: 600, padding: "7px 9px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0, boxSizing: "border-box" }}
-            />
+            {/* The name has a line of its own, full width, with the other
+                boxes underneath (on iPhones it was squeezed to two letters).
+                16pt text stops the iPhone zooming in when a box is tapped. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+              {picking && <input type="checkbox" checked={pickedIds.has(m.id)} onChange={() => togglePick(m.id)} style={{ width: 20, height: 20, flexShrink: 0 }} />}
+              <RosterNameBox
+                name={m.name}
+                onChange={(v) => onUpdate(m.id, { name: v })}
+                style={{ display: "block", width: "100%", flex: "1 1 auto", fontSize: 16, fontWeight: 600, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0, boxSizing: "border-box" }}
+              />
+            {confirmRemoveId === m.id ? (
+              <div style={{ display: "flex", gap: 2 }}>
+                <button onClick={() => { onRemove(m.id); setConfirmRemoveId(null); }} style={{ fontSize: 10.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px" }}>
+                  Yes
+                </button>
+                <button onClick={() => setConfirmRemoveId(null)} style={{ fontSize: 10.5, color: "#9B9885", background: "none", border: "none", padding: "4px" }}>
+                  No
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmRemoveId(m.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: "4px", flexShrink: 0 }}>
+                <X size={15} />
+              </button>
+            )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, width: "100%" }}>
             <input
               value={m.index}
               onChange={(e) => onUpdate(m.id, { index: e.target.value })}
               placeholder="HCP"
               inputMode="decimal"
               className="mono"
-              style={{ width: 56, fontSize: 13, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0" }}
+              style={{ width: 62, flex: "0 0 62px", fontSize: 16, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0", boxSizing: "border-box", minWidth: 0 }}
             />
             {NAME_STYLE.surnameFirst && (
               <input
@@ -8992,23 +9051,24 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
                 onChange={(e) => onUpdate(m.id, { surname: e.target.value })}
                 placeholder="Surname"
                 title="Only needed when the surname isn't the last word of the name"
-                style={{ width: 76, fontSize: 12, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0 }}
+                style={{ width: 0, flex: "1 1 0", fontSize: 16, padding: "7px 6px", borderRadius: 7, border: "1px solid #D8D4C0", minWidth: 0, boxSizing: "border-box" }}
               />
             )}
             <select
               value={m.tee}
               onChange={(e) => onUpdate(m.id, { tee: e.target.value })}
-              style={{ width: 76, fontSize: 12, padding: "7px 4px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF" }}
+              style={{ width: 84, flex: "0 0 84px", fontSize: 16, padding: "7px 4px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", boxSizing: "border-box", minWidth: 0 }}
             >
               {course.tees.map((t) => (
                 <option key={t.id} value={t.label}>{t.label}</option>
               ))}
             </select>
+            {!NAME_STYLE.surnameFirst && <span style={{ flex: 1 }} />}
             <button
               onClick={() => onUpdate(m.id, { isLady: !m.isLady })}
               title={m.isLady ? "Marked as a lady — tap to unmark" : "Tap to mark as a lady"}
               style={{
-                width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+                width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
                 border: `1px solid ${m.isLady ? accentColor : "#D8D4C0"}`,
                 background: m.isLady ? accentColor : "transparent",
                 color: m.isLady ? "#FFFFFF" : "#9B9885",
@@ -9020,7 +9080,7 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
             {roundPlayers.some((p) => normalizeName(p.name) === normalizeName(m.name)) ? (
               <span
                 title={`Already in ${roundLabel}`}
-                style={{ width: 30, textAlign: "center", color: accentColor, fontSize: 15 }}
+                style={{ width: 30, flexShrink: 0, textAlign: "center", color: accentColor, fontSize: 15 }}
               >
                 ✓
               </span>
@@ -9028,25 +9088,12 @@ function SocietyRosterSetup({ onClearAll, roster, onAdd, onUpdate, onRemove, onI
               <button
                 onClick={() => onAddToRound(m.id)}
                 title={`Add to ${roundLabel}`}
-                style={{ width: 30, background: "none", border: "none", color: headerColor, padding: "4px" }}
+                style={{ width: 30, flexShrink: 0, background: "none", border: "none", color: headerColor, padding: "4px" }}
               >
                 <Plus size={16} />
               </button>
             )}
-            {confirmRemoveId === m.id ? (
-              <div style={{ display: "flex", gap: 2 }}>
-                <button onClick={() => { onRemove(m.id); setConfirmRemoveId(null); }} style={{ fontSize: 10.5, fontWeight: 700, color: "#B5442E", background: "none", border: "none", padding: "4px" }}>
-                  Yes
-                </button>
-                <button onClick={() => setConfirmRemoveId(null)} style={{ fontSize: 10.5, color: "#9B9885", background: "none", border: "none", padding: "4px" }}>
-                  No
-                </button>
-              </div>
-            ) : (
-              <button onClick={() => setConfirmRemoveId(m.id)} style={{ background: "none", border: "none", color: "#B5442E", padding: "4px" }}>
-                <X size={15} />
-              </button>
-            )}
+            </div>
           </div>
         ))}
 
@@ -10458,7 +10505,7 @@ function handicapSummary(p, isFoursomes) {
 // searchable list of this day's cards. A finished card can't be reopened
 // from here (only Admin can), and one that's open on another phone is
 // greyed out until that phone finishes or lets go of it.
-function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, onOwnCard, headerColor, accentColor, ownName = "", onSetOwnName, draw = [], allowSelfMark = false }) {
+function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, onSelect, onReview, onOwnCard, onPrivateMatch, headerColor, accentColor, ownName = "", onSetOwnName, draw = [], allowSelfMark = false }) {
   // Three short steps: who are you → player or marker → the card.
   // "Who" is remembered on this phone for the day (it's the same name the
   // private own-card panel uses), so it's asked once.
@@ -10526,6 +10573,18 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
     return (
       <div style={{ padding: "14px 12px 40px" }}>
         {header}
+        {onPrivateMatch && (
+          <button
+            onClick={onPrivateMatch}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", margin: "8px 0 4px", borderRadius: 10, border: `1px dashed ${accentColor}`, background: "#FFFFFF", textAlign: "left" }}
+          >
+            <span>
+              <span style={{ display: "block", fontSize: 14.5, fontWeight: 800, color: accentColor }}>Private match</span>
+              <span style={{ fontSize: 11.5, color: "#6B6B5F" }}>Two players, not in the draw — kept on this phone</span>
+            </span>
+            <ChevronRight size={16} color="#9B9885" />
+          </button>
+        )}
         <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 4px" }}>Who are you?</div>
         <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>Tap your own name. This phone remembers it for the day.</div>
         <input
@@ -10554,6 +10613,18 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
     return (
       <div style={{ padding: "14px 12px 40px" }}>
         {header}
+        {onPrivateMatch && (
+          <button
+            onClick={onPrivateMatch}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", margin: "8px 0 4px", borderRadius: 10, border: `1px dashed ${accentColor}`, background: "#FFFFFF", textAlign: "left" }}
+          >
+            <span>
+              <span style={{ display: "block", fontSize: 14.5, fontWeight: 800, color: accentColor }}>Private match</span>
+              <span style={{ fontSize: 11.5, color: "#6B6B5F" }}>Two players, not in the draw — kept on this phone</span>
+            </span>
+            <ChevronRight size={16} color="#9B9885" />
+          </button>
+        )}
         <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 12px" }}>Are you the player or the marker?</div>
         {bigBtn(allowSelfMark ? "I'm the SCORER — entering the cards for my group" : "I'm the MARKER — scoring someone else's card", () => { setRole("marker"); setStep("cards"); }, { sub: allowSelfMark ? "One card at a time: enter it, SUBMIT CARD, then the next — your own included." : "Your opponent's / playing partner's card. You can keep your own scores alongside it." })}
         {bigBtn(waitingMine ? "I'm the PLAYER — my card is ready to sign" : "I'm the PLAYER — see my own card", () => {
@@ -11820,6 +11891,225 @@ function ScoreEntry({ course, player, onBack, onUpdate, onScore, headerColor, is
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Private match (on this phone only) ----
+// Two players, their handicaps and a course — then one page with both
+// cards side by side and the usual Gross / Net / Points totals box under
+// each player. Nothing goes to the event or the leaderboard.
+const FRIENDLY_KEY = "golf-friendly-match-v1";
+function blankFriendly() {
+  return { players: [{ name: "", index: "", tee: "", fromRoster: true }, { name: "", index: "", tee: "", fromRoster: true }], courseName: "", allowance: 95, scores: [Array(18).fill(""), Array(18).fill("")], started: false };
+}
+function readFriendly() {
+  try {
+    const m = JSON.parse(window.localStorage.getItem(FRIENDLY_KEY) || "null");
+    if (m && Array.isArray(m.players) && m.players.length === 2 && Array.isArray(m.scores) && m.scores.length === 2) return { ...blankFriendly(), ...m };
+  } catch { /* ignore */ }
+  return blankFriendly();
+}
+
+// The same Out / In / Total box as on a normal card.
+function PrivateTotalsBox({ course, scores, ph, name, headerColor }) {
+  const OUTH = [1, 2, 3, 4, 5, 6, 7, 8, 9], INH = [10, 11, 12, 13, 14, 15, 16, 17, 18];
+  const sumFor = (holes) => {
+    let gross = 0, net = 0, points = 0, played = 0, nr = false;
+    holes.forEach((h) => {
+      const idx = h - 1;
+      const v = scores[idx];
+      if (v === "" || v == null) return;
+      played += 1;
+      if (isPickedUp(v)) { nr = true; return; }
+      gross += Number(v);
+      net += Number(v) - strokesOnHole(course, ph, idx);
+      points += holePoints(course, v, idx, ph) || 0;
+    });
+    return { gross, net, points, played, nr };
+  };
+  const out = sumFor(OUTH), inn = sumFor(INH);
+  const all = { gross: out.gross + inn.gross, net: out.net + inn.net, points: out.points + inn.points, played: out.played + inn.played, nr: out.nr || inn.nr };
+  const show = (part, field) => (part.played === 0 ? "–" : field !== "points" && part.nr ? "NR" : part[field]);
+  const cell = { textAlign: "right", padding: "7px 10px", fontSize: 14 };
+  const head = { textAlign: "right", padding: "6px 10px", fontSize: 10.5, color: "#8A8774", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+  const rowLabel = { textAlign: "left", padding: "7px 10px", fontSize: 13, fontWeight: 700 };
+  return (
+    <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", marginTop: 10, overflow: "hidden" }}>
+      <div style={{ padding: "8px 10px 2px", fontSize: 14, fontWeight: 800, color: headerColor }}>{name} <span style={{ fontSize: 12, fontWeight: 600, color: "#6B6B5F" }}>· playing handicap {ph}</span></div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ background: `${headerColor}12` }}>
+            <th style={{ ...head, textAlign: "left" }}>{all.played === 18 ? "Card totals" : `Thru ${all.played} of 18`}</th>
+            <th style={head}>Out</th>
+            <th style={head}>In</th>
+            <th style={{ ...head, color: headerColor }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[{ label: "Gross", field: "gross" }, { label: "Net", field: "net" }, { label: "Points", field: "points" }].map((r) => (
+            <tr key={r.field} style={{ borderTop: "1px solid #EFEDE0" }}>
+              <td style={rowLabel}>{r.label}</td>
+              <td className="mono" style={cell}>{show(out, r.field)}</td>
+              <td className="mono" style={cell}>{show(inn, r.field)}</td>
+              <td className="mono" style={{ ...cell, fontWeight: 800, fontSize: 16, color: headerColor }}>{show(all, r.field)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FriendlyMatch({ roster = [], library = [], currentCourse, headerColor, accentColor, onBack, backLabel = "‹ Back" }) {
+  const [m, setM] = useState(readFriendly);
+  const [confirmNew, setConfirmNew] = useState(false);
+  const update = (patch) => setM((prev) => {
+    const next = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
+    try { window.localStorage.setItem(FRIENDLY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  });
+  const course = (() => {
+    if (!m.courseName) return currentCourse;
+    const e = (library || []).find((x) => x.name === m.courseName);
+    return e ? e.course : currentCourse;
+  })();
+  const teeFor = (p) => (p.tee && !teeMismatch(course, p.tee) ? p.tee : (course.tees[0] || {}).label);
+  const ph = m.players.map((p) => (p.name && p.index !== "" && !isNaN(Number(p.index)) ? allowedHandicap(playingHandicap(course, Number(p.index), teeFor(p)), m.allowance) : null));
+  const names = m.players.map((p, i) => (p.name ? dn(p.name) : `Player ${i + 1}`));
+  const sortedRoster = [...roster].filter((r) => r.name).sort((a, b) => dn(a.name).localeCompare(dn(b.name)));
+  const setPlayer = (k, patch) => update((prev) => ({ ...prev, players: prev.players.map((p, i) => (i === k ? { ...p, ...patch } : p)) }));
+  const pickFromRoster = (k, id) => {
+    if (id === "__other__") { setPlayer(k, { name: "", index: "", tee: "", fromRoster: false, rosterId: "" }); return; }
+    const r = sortedRoster.find((x) => x.id === id);
+    if (r) setPlayer(k, { name: r.name, index: r.index ?? "", tee: r.tee || "", fromRoster: true, rosterId: r.id });
+    else setPlayer(k, { name: "", index: "", tee: "", fromRoster: true, rosterId: "" });
+  };
+  const ready = ph[0] !== null && ph[1] !== null && m.players[0].name.trim() && m.players[1].name.trim();
+
+  const card = { background: "#FFFFFF", borderRadius: 12, border: "1px solid #E4E0D0", padding: 12, marginBottom: 12 };
+  const sel = { width: "100%", boxSizing: "border-box", fontSize: 16, padding: "8px 10px", borderRadius: 7, border: "1px solid #D8D4C0", background: "#FFF", minWidth: 0 };
+  const back = <button onClick={onBack} style={{ background: "none", border: "none", padding: 0, color: accentColor, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{backLabel}</button>;
+
+  // ---------- Players and course ----------
+  if (!m.started) {
+    return (
+      <div style={{ padding: "14px 14px 40px" }}>
+        {back}
+        <div style={{ fontSize: 18, fontWeight: 800, color: headerColor }}>Private match</div>
+        <div style={{ fontSize: 12.5, color: "#6B6B5F", marginBottom: 12, lineHeight: 1.45 }}>Two players, their handicaps and the course. Kept on this phone only — nothing goes on the leaderboard.</div>
+        {[0, 1].map((k) => {
+          const p = m.players[k];
+          return (
+            <div key={k} style={card}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: headerColor, marginBottom: 6 }}>Player {k + 1}</div>
+              <select value={p.fromRoster ? (p.rosterId || "") : "__other__"} onChange={(e) => pickFromRoster(k, e.target.value)} style={{ ...sel, marginBottom: 8, fontWeight: 600 }}>
+                <option value="">Choose from the roster…</option>
+                {sortedRoster.map((r) => <option key={r.id} value={r.id}>{dn(r.name)}{r.index !== "" && r.index != null ? ` (${r.index})` : ""}</option>)}
+                <option value="__other__">Someone not on the roster…</option>
+              </select>
+              {!p.fromRoster && <input value={p.name} onChange={(e) => setPlayer(k, { name: e.target.value })} placeholder="Name" style={{ ...sel, marginBottom: 8 }} />}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "#6B6B5F" }}>Handicap</span>
+                <input value={p.index} onChange={(e) => setPlayer(k, { index: e.target.value })} inputMode="decimal" placeholder="Index" className="mono" style={{ ...sel, width: 76, flex: "0 0 76px" }} />
+                <select value={teeFor(p)} onChange={(e) => setPlayer(k, { tee: e.target.value })} style={{ ...sel, flex: 1, width: "auto" }}>
+                  {course.tees.map((t) => <option key={t.id} value={t.label}>{t.label}</option>)}
+                </select>
+              </div>
+            </div>
+          );
+        })}
+        <div style={card}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: headerColor, marginBottom: 6 }}>Course</div>
+          <select value={m.courseName} onChange={(e) => update({ courseName: e.target.value })} style={{ ...sel, fontWeight: 600 }}>
+            <option value="">Today's — {currentCourse.name}</option>
+            {(library || []).filter((e) => e.name !== currentCourse.name).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+          </select>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <span style={{ fontSize: 12, color: "#6B6B5F", flex: 1 }}>Handicap allowance</span>
+            <select value={m.allowance} onChange={(e) => update({ allowance: Number(e.target.value) })} style={{ ...sel, width: 100, flex: "0 0 100px" }}>
+              {[100, 95, 90, 85, 75].map((a) => <option key={a} value={a}>{a}%</option>)}
+            </select>
+          </div>
+        </div>
+        <button disabled={!ready} onClick={() => update({ started: true })} style={{ width: "100%", padding: "13px 0", borderRadius: 9, border: "none", background: ready ? accentColor : "#C9C5B2", color: "#FFFFFF", fontWeight: 800, fontSize: 15 }}>
+          {m.scores.some((s) => s.some((v) => v !== "")) ? "Back to the scores" : "Start scoring"}
+        </button>
+        {!ready && <div style={{ fontSize: 11.5, color: "#8A8774", marginTop: 6, textAlign: "center" }}>Both players need a name and a handicap.</div>}
+      </div>
+    );
+  }
+
+  // ---------- One page: both cards ----------
+  const setScore = (k, i, raw) => {
+    const t = String(raw).trim().toUpperCase();
+    const v = t === "" ? "" : t === "NR" || t === "-" || t === "0" ? 0 : Math.max(1, Math.min(15, Number(t) || 0)) || "";
+    update((prev) => ({ ...prev, scores: prev.scores.map((row, r) => (r === k ? row.map((x, j) => (j === i ? v : x)) : row)) }));
+  };
+  const first = (k) => names[k].split(/[ ,]/)[0];
+  const th = { padding: "6px 4px", fontSize: 11, color: "#8A8774", fontWeight: 700, textAlign: "center" };
+  const scoreCell = (k, i) => {
+    const v = m.scores[k][i];
+    const shots = strokesOnHole(course, ph[k], i);
+    const p = v === "" || v == null ? null : holePoints(course, v, i, ph[k]);
+    return (
+      <td style={{ padding: "3px 4px", textAlign: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+          <input
+            value={v === "" || v == null ? "" : isPickedUp(v) ? "NR" : v}
+            onChange={(e) => setScore(k, i, e.target.value)}
+            inputMode="numeric"
+            aria-label={`${names[k]} hole ${i + 1}`}
+            className="mono"
+            style={{ width: 44, fontSize: 16, fontWeight: 700, textAlign: "center", padding: "6px 0", borderRadius: 6, border: `1px solid ${shots > 0 ? accentColor : "#D8D4C0"}`, boxSizing: "border-box" }}
+          />
+          <span className="mono" style={{ width: 18, fontSize: 11, color: "#6B6B5F", textAlign: "left" }}>{p === null ? (shots > 0 ? "•".repeat(shots) : "") : p}</span>
+        </div>
+      </td>
+    );
+  };
+  return (
+    <div style={{ padding: "14px 10px 40px" }}>
+      {back}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: headerColor }}>{names[0]} v {names[1]}</div>
+        <div style={{ fontSize: 11.5, color: "#8A8774" }}>{course.name}</div>
+      </div>
+      <div style={{ background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: `${headerColor}12` }}>
+              <th style={{ ...th, textAlign: "left", paddingLeft: 8 }}>Hole</th>
+              <th style={th}>Par</th>
+              <th style={th}>S.I.</th>
+              <th style={{ ...th, color: headerColor }}>{first(0)}</th>
+              <th style={{ ...th, color: headerColor }}>{first(1)}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {course.holes.map((ho, i) => (
+              <tr key={i} style={{ borderTop: i === 9 ? `2px solid ${headerColor}` : "1px solid #EFEDE0" }}>
+                <td style={{ padding: "4px 8px", fontWeight: 800, fontSize: 14 }}>{i + 1}</td>
+                <td className="mono" style={{ textAlign: "center", fontSize: 13 }}>{ho.par}</td>
+                <td className="mono" style={{ textAlign: "center", fontSize: 12, color: "#8A8774" }}>{ho.si}</td>
+                {scoreCell(0, i)}
+                {scoreCell(1, i)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: "#8A8774", margin: "6px 2px 0" }}>Type each gross score; the small figure beside it is the Stableford points. • = a shot received. Type 0 or NR for a pick-up.</div>
+      <PrivateTotalsBox course={course} scores={m.scores[0]} ph={ph[0]} name={names[0]} headerColor={headerColor} />
+      <PrivateTotalsBox course={course} scores={m.scores[1]} ph={ph[1]} name={names[1]} headerColor={headerColor} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button onClick={() => update({ started: false })} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "1px solid #D8D4C0", background: "#FFFFFF", fontWeight: 600, fontSize: 13, color: headerColor }}>Players &amp; course</button>
+        {!confirmNew ? (
+          <button onClick={() => setConfirmNew(true)} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "1px solid #B5442E", background: "#FFFFFF", fontWeight: 600, fontSize: 13, color: "#B5442E" }}>New match</button>
+        ) : (
+          <button onClick={() => { update(blankFriendly()); setConfirmNew(false); }} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: "#B5442E", fontWeight: 800, fontSize: 13, color: "#FFFFFF" }}>Yes — clear it</button>
+        )}
+      </div>
     </div>
   );
 }
