@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 151";
+const APP_VERSION = "21 Sep 2026 · build 153";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -862,6 +862,21 @@ function removeComp(str, abbr) {
 function inSeparateComp(str, competitions) {
   const seps = new Set((competitions || []).filter((c) => c.separate).map((c) => (c.abbreviation || "").toUpperCase()).filter(Boolean));
   return compTags(str).some((t) => seps.has(t));
+}
+// Competition tags only mean something on a day that has that competition
+// set up. A tag left on a player from another day (e.g. the players copied
+// from the morning singles into the afternoon foursomes) is ignored on
+// labels, cards, the draw and CSV for a day that doesn't run it.
+function dayTagsOnly(str, competitions) {
+  const known = new Set((competitions || []).map((c) => (c.abbreviation || "").trim().toUpperCase()).filter(Boolean));
+  return compTags(str).filter((t) => known.has(t)).join(", ");
+}
+function stripUnknownComps(players, competitions) {
+  return (players || []).map((p) => ({
+    ...p,
+    competition: dayTagsOnly(p.competition, competitions),
+    ...(p.partnerCompetition != null ? { partnerCompetition: dayTagsOnly(p.partnerCompetition, competitions) } : {}),
+  }));
 }
 function compNames(str, competitions) {
   return compTags(str).map((t) => { const c = (competitions || []).find((x) => (x.abbreviation || "").toUpperCase() === t); return c ? c.fullName || c.abbreviation : t; });
@@ -3080,7 +3095,14 @@ function AppInner() {
   };
 
   const removeCompetition = (id) => {
-    updateRound((prevRound) => ({ competitions: prevRound.competitions.filter((c) => c.id !== id) }));
+    updateRound((prevRound) => {
+      const gone = prevRound.competitions.find((c) => c.id === id);
+      const abbr = gone && gone.abbreviation ? gone.abbreviation : "";
+      return {
+        competitions: prevRound.competitions.filter((c) => c.id !== id),
+        players: abbr ? prevRound.players.map((p) => ({ ...p, competition: removeComp(p.competition, abbr), ...(p.partnerCompetition != null ? { partnerCompetition: removeComp(p.partnerCompetition, abbr) } : {}) })) : prevRound.players,
+      };
+    });
   };
 
   // ---- Society roster: a persistent list of known members, separate from
@@ -4156,7 +4178,7 @@ function AppInner() {
         // Public, like the leaderboard — no PIN needed just to see the draw.
         isMatchPlay
           ? <MatchResultsView matches={matches} players={players} course={course} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} />
-          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={players} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} publicShowIndex={activeRound.publicShowIndex} publicShowCH={activeRound.publicShowCH} publicShowTee={activeRound.publicShowTee} publicShowComp={activeRound.publicShowComp} publicShowStartTee={activeRound.publicShowStartTee} />
+          : <DrawView draw={draw} startingHole={startingHole} drawNote={activeRound.drawNote} headerColor={headerColor} accentColor={accentColor} course={course} players={stripUnknownComps(players, competitions)} handicapAllowance={handicapAllowance} isFoursomes={isFoursomes} publicShowIndex={activeRound.publicShowIndex} publicShowCH={activeRound.publicShowCH} publicShowTee={activeRound.publicShowTee} publicShowComp={activeRound.publicShowComp} publicShowStartTee={activeRound.publicShowStartTee} />
       ) : mode === "rules" ? (
         // Public too — anyone can read the local rules without a PIN.
         <LocalRulesView text={localRules} headerColor={headerColor} accentColor={accentColor} />
@@ -4440,7 +4462,7 @@ function AppInner() {
       ) : showPrintDraw ? (
         <PrintDraw
           draw={draw}
-          players={players}
+          players={stripUnknownComps(players, competitions)}
           course={course}
           handicapAllowance={handicapAllowance}
           isFoursomes={isFoursomes}
@@ -4463,7 +4485,7 @@ function AppInner() {
         <PrintScorecards
           orgName={state.orgName}
           course={course}
-          players={players}
+          players={stripUnknownComps(players, competitions)}
           draw={draw}
           roundDateDisplay={formatDisplayDateLong(activeRound.date)}
           eventName={course.eventName}
@@ -4483,7 +4505,7 @@ function AppInner() {
         <PrintLabels
           societyRoster={societyRoster}
           course={course}
-          players={players}
+          players={stripUnknownComps(players, competitions)}
           draw={draw}
           roundDateDisplay={formatDisplayDateLong(activeRound.date)}
           drawNote={activeRound.drawNote}
@@ -6084,7 +6106,7 @@ function DrawSetup({ draw, players, onUpdate, startingHole, onUpdateStartingHole
                   )}
                   <div style={{ flex: 1, fontSize: 12.5 }}>
                     {entry.players && entry.players.length > 0
-                      ? formatGroupLines(entry.players, course, players, handicapAllowance, format === "foursomes", visOpts).map((line, i) => (
+                      ? formatGroupLines(entry.players, course, stripUnknownComps(players, competitions), handicapAllowance, format === "foursomes", visOpts).map((line, i) => (
                           <div key={i} style={{ marginBottom: i < entry.players.length - 1 ? 2 : 0 }}>{withBoldFigures(line)}</div>
                         ))
                       : entry.group || "—"}
@@ -7028,7 +7050,7 @@ function DrawBuilder({ onRemovePlayers, draw, players, onUpdate, headerColor, ac
           </div>
           {row.slots.some(Boolean) && (
             <div style={{ fontSize: 12.5, color: "#1B1B1B", marginTop: 8, lineHeight: 1.5 }}>
-              {formatGroupLines(isFoursomes ? row.slots.map((n) => n || "") : row.slots.filter(Boolean), course, players, handicapAllowance, isFoursomes, visOpts).map((line, i) => (
+              {formatGroupLines(isFoursomes ? row.slots.map((n) => n || "") : row.slots.filter(Boolean), course, stripUnknownComps(players, competitions), handicapAllowance, isFoursomes, visOpts).map((line, i) => (
                 <div key={i}>{withBoldFigures(line)}</div>
               ))}
             </div>
@@ -7657,6 +7679,22 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
     });
 
   const sheets = Math.ceil(cards.length / 18);
+  // One name size and layout for the whole print run, so every label
+  // matches: pairs always go on two lines, and every name uses the size
+  // that fits the longest name on any label.
+  const sheetFit = (() => {
+    const lists = cards.map((c) => c.title.split(" & "));
+    const anyPair = lists.some((l) => l.length > 1);
+    const sizes = lists.map((l) => {
+      const f = fitLabelName(l);
+      if (l.length > 1 && !f.stack) {
+        const longest = Math.max(...l.map((n, i) => n.length + (i < l.length - 1 ? 2 : 0)));
+        return Math.max(Math.floor(Math.min(15.5, 212 / (0.66 * Math.max(longest, 1))) * 10) / 10, 9);
+      }
+      return f.size;
+    });
+    return { stack: anyPair, size: sizes.length ? Math.min(...sizes) : 16 };
+  })();
   const ladyNames = new Set(societyRoster.filter((m) => m.isLady).map((m) => normalizeName(m.name)));
   const isLadyName = (name) => ladyNames.has(normalizeName(name));
   // One block per physical sheet of 18, so each sheet is laid out (and
@@ -7763,10 +7801,10 @@ function PrintLabels({ societyRoster = [], course, players, draw, roundDateDispl
               <div className="label-meta">
                 {roundDateDisplay}{roundDateDisplay && c.time ? " – " : ""}{c.time}{c.startTee ? ` – ${c.startTee}` : ""}
               </div>
-              <div className="label-name" style={{ "--label-name-size": `${fitLabelName(c.title.split(" & ")).size}px`, whiteSpace: "nowrap" }}>
+              <div className="label-name" style={{ "--label-name-size": `${sheetFit.size}px`, whiteSpace: "nowrap" }}>
                 {c.title.split(" & ").map((name, i, all) => (
                   <React.Fragment key={i}>
-                    {i > 0 ? (fitLabelName(all).stack ? <> &amp;<br /></> : " & ") : ""}
+                    {i > 0 ? (sheetFit.stack ? <> &amp;<br /></> : " & ") : ""}
                     {/* Ladies (marked "L" in the Society roster) print in red and
                         the men in dark blue, both bold, so the cards are easy
                         to sort at a glance. */}
@@ -7927,7 +7965,7 @@ function buildResultsCsv(state) {
     const isF = round.format === "foursomes";
     const isM = round.scoring === "medal";
     const comps = round.competitions || [];
-    const compName = (a) => compNames(a, comps).join("; ");
+    const compName = (a) => compNames(dayTagsOnly(a, comps), comps).join("; ");
     const drawInfo = (name) => {
       const target = normalizeName(name);
       for (const e of round.draw || []) if ((e.players || []).some((n) => normalizeName(n) === target)) return { time: e.time || "", startTee: e.startTee || "" };
@@ -10585,8 +10623,17 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
             <ChevronRight size={16} color="#9B9885" />
           </button>
         )}
-        <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "10px 0 4px" }}>Who are you?</div>
-        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>Tap your own name. This phone remembers it for the day.</div>
+        {people.length === 0 ? (
+          // Nobody in today's draw: there are no cards to mark, so don't
+          // show an empty "Who are you?" list — point at Private match.
+          <div style={{ marginTop: 14, background: "#FFFFFF", borderRadius: 10, border: "1px solid #E4E0D0", padding: "16px 14px", textAlign: "center" }}>
+            <div style={{ fontSize: 14.5, fontWeight: 800, color: headerColor, marginBottom: 4 }}>No draw for {roundLabel || "today"} yet</div>
+            <div style={{ fontSize: 12.5, color: "#6B6B5F", lineHeight: 1.45 }}>Only players in the day's draw can mark cards here.{onPrivateMatch ? " For a match between two players, tap Private match above — it uses the whole society roster." : ""}</div>
+          </div>
+        ) : (
+        <>
+        <div style={{ fontSize: 17, fontWeight: 800, color: headerColor, margin: "14px 0 4px" }}>Or — who are you in today's draw?</div>
+        <div style={{ fontSize: 12, color: "#6B6B5F", marginBottom: 10 }}>Tap your own name to mark a card for {roundLabel || "the day"}. Only players in the draw are listed; this phone remembers you for the day.</div>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -10603,6 +10650,8 @@ function PublicScoreList({ ranked, isFoursomes, deviceId, notice, roundLabel, on
           </button>
         ))}
         {shown.length === 0 && <div style={{ padding: "24px 12px", textAlign: "center", color: "#9B9885", fontSize: 13 }}>No name matching that.</div>}
+        </>
+        )}
       </div>
     );
   }
@@ -12233,7 +12282,7 @@ function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", he
             ) : tab === "results" ? (
               <Board key={day.id} rounds={days} tab={isFs ? "foursomes" : "singles"} competitions={competitions} headerColor={headerColor} accentColor={accentColor} activeRound={{ ...day, publicShowDayBoard: true }} />
             ) : (
-              <DrawView key={day.id} draw={day.draw || []} startingHole={day.startingHole} drawNote={day.drawNote} headerColor={headerColor} accentColor={accentColor} course={day.course} players={day.players || []} handicapAllowance={day.handicapAllowance} isFoursomes={isFs} publicShowIndex={day.publicShowIndex} publicShowCH={day.publicShowCH} publicShowTee={day.publicShowTee} publicShowComp={day.publicShowComp} publicShowStartTee={day.publicShowStartTee} />
+              <DrawView key={day.id} draw={day.draw || []} startingHole={day.startingHole} drawNote={day.drawNote} headerColor={headerColor} accentColor={accentColor} course={day.course} players={stripUnknownComps(day.players || [], day.competitions || [])} handicapAllowance={day.handicapAllowance} isFoursomes={isFs} publicShowIndex={day.publicShowIndex} publicShowCH={day.publicShowCH} publicShowTee={day.publicShowTee} publicShowComp={day.publicShowComp} publicShowStartTee={day.publicShowStartTee} />
             )}
           </div>
         </>
