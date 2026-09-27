@@ -21,7 +21,7 @@ const DEFAULT_COURSE = {
 
 // Shown at the bottom of the Admin screen, so it's always possible to
 // confirm which version of the app a phone or laptop is really running.
-const APP_VERSION = "21 Sep 2026 · build 157";
+const APP_VERSION = "21 Sep 2026 · build 158";
 
 const DEFAULT_ORG_NAME_FALLBACK = "Your Golf Society";
 
@@ -4193,6 +4193,8 @@ function AppInner() {
           key={archiveOpenId || "list"}
           eventCode={eventCode}
           initialMeetingId={archiveOpenId}
+          canPrint={isOwner || adminLevel === "helper"}
+          orgName={state.orgName}
           indexVersion={(state.archiveIndex || []).map((m) => m.id + m.title).join("|")}
           headerColor={headerColor}
           accentColor={accentColor}
@@ -7521,6 +7523,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
           <textarea
             value={cardBack}
             onChange={(e) => onUpdateCardBack && onUpdateCardBack(e.target.value)}
+            readOnly={!onUpdateCardBack}
             placeholder={"e.g. local rules in brief, dinner 7.30 pm, the club's address…"}
             rows={5}
             style={{ width: "100%", fontSize: 13, padding: 8, borderRadius: 7, border: "1px solid #D8D4C0", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
@@ -7534,6 +7537,7 @@ function PrintScorecards({ orgName, course, players, draw, roundDateDisplay, eve
           <input
             value={drawNote || ""}
             onChange={(e) => onUpdateDrawNote && onUpdateDrawNote(e.target.value)}
+            readOnly={!onUpdateDrawNote}
             placeholder="e.g. Preferred lies on all fairways"
             style={{ width: "100%", fontSize: 13, padding: "8px 9px", borderRadius: 7, border: "1px solid #D8D4C0", fontFamily: "inherit", boxSizing: "border-box" }}
           />
@@ -12234,7 +12238,8 @@ function FriendlyMatch({ roster = [], library = [], currentCourse, headerColor, 
 // ---- Archive: past meetings, view only ----
 // Anyone can open it (like the Draw and Leaderboard). Pick a meeting, then
 // a day, then Results or Draw. Nothing in here can be changed by players.
-function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", headerColor, accentColor }) {
+function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", headerColor, accentColor, canPrint = false, orgName = "" }) {
+  const [printing, setPrinting] = useState(false);
   const [meetings, setMeetings] = useState(null);
   const [error, setError] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -12308,6 +12313,31 @@ function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", he
   const isMP = day && day.format === "matchplay";
   const isFs = day && day.format === "foursomes";
 
+  // Organisers can print any player's filled-in card from an archived day,
+  // exactly as on a live day (tick the players, then Print).
+  if (printing && day && canPrint) {
+    const dayComps = day.competitions || [];
+    return (
+      <PrintScorecards
+        orgName={orgName}
+        course={day.course}
+        players={stripUnknownComps(day.players || [], dayComps)}
+        draw={day.draw || []}
+        roundDateDisplay={formatDisplayDateLong(day.date)}
+        eventName={day.course && day.course.eventName}
+        drawNote={day.drawNote}
+        competitions={dayComps}
+        handicapAllowance={day.handicapAllowance}
+        isFoursomes={isFs}
+        scoring={day.scoring}
+        roundLabel={`${day.label} — ${meeting.title}`}
+        cardBack={day.cardBack || ""}
+        onBack={() => setPrinting(false)}
+        headerColor={headerColor}
+      />
+    );
+  }
+
   return (
     <div style={{ padding: "14px 12px 40px" }}>
       <button onClick={() => setMeetingId(null)} style={{ background: "none", border: "none", padding: 0, color: accentColor, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>‹ All past meetings</button>
@@ -12344,6 +12374,11 @@ function ArchiveView({ eventCode, initialMeetingId = null, indexVersion = "", he
               </button>
             ))}
           </div>
+          {canPrint && !isMP && (
+            <button onClick={() => setPrinting(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 0", margin: "4px 0 6px", borderRadius: 7, border: `1px dashed ${headerColor}`, background: "#FFFFFF", color: headerColor, fontSize: 13, fontWeight: 700 }}>
+              <Printer size={14} /> Print scorecards for this day
+            </button>
+          )}
           <div style={{ margin: "0 -12px" }}>
             {isMP ? (
               <MatchResultsView key={day.id} matches={day.matches || []} players={day.players || []} course={day.course} drawNote={day.drawNote} headerColor={headerColor} accentColor={accentColor} />
